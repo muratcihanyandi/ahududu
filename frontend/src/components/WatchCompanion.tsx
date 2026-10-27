@@ -107,7 +107,7 @@ export const WatchCompanion: React.FC<WatchCompanionProps> = ({
               )}
               {activeAnimation === 'hug' && (
                 <>
-                  <span className="text-5xl animate-bounce mb-2">🤗</span>
+                  <span className="text-5xl animate-pulse mb-2">🤗</span>
                   <span className="font-serif text-sm font-bold text-pink-100">
                     Sımsıkı Sarılma Geldi!
                   </span>

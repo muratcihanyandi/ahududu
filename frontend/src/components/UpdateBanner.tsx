@@ -37,7 +37,7 @@ export const UpdateBanner: React.FC = () => {
   if (!hasUpdate || isDismissed) return null;
 
   return (
-    <div className="fixed top-3 inset-x-3 z-50 max-w-md mx-auto bg-gradient-to-r from-berry-600 via-rose-600 to-pink-600 text-white rounded-2xl p-3.5 shadow-xl shadow-berry-900/20 border border-white/20 flex items-center justify-between animate-bounce">
+    <div className="fixed top-3 inset-x-3 z-50 max-w-md mx-auto bg-gradient-to-r from-berry-600 via-rose-600 to-pink-600 text-white rounded-2xl p-3.5 shadow-xl shadow-berry-900/20 border border-white/20 flex items-center justify-between animate-pulse">
       <div className="flex items-center gap-2.5 min-w-0">
         <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
           <Sparkles className="w-4 h-4 text-amber-200" />

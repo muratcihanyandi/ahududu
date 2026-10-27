@@ -94,7 +94,7 @@ export const NudgeButton: React.FC<NudgeButtonProps> = ({
 
       {/* Confirmation feedback toast */}
       {lastSentText && (
-        <div className="mt-3 px-4 py-1.5 rounded-full bg-berry-100/90 text-berry-800 text-xs font-semibold shadow-xs animate-bounce">
+        <div className="mt-3 px-4 py-1.5 rounded-full bg-berry-100/90 text-berry-800 text-xs font-semibold shadow-xs animate-pulse">
           {lastSentText}
         </div>
       )}

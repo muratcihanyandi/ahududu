@@ -183,7 +183,7 @@ export const SharedNotes: React.FC<SharedNotesProps> = ({ currentUserId }) => {
       {/* Notes List */}
       {notes.length === 0 ? (
         <div className="flex flex-col items-center justify-center p-12 bg-white/60 rounded-3xl border border-rose-100 text-center opacity-60">
-          <BookOpen className="w-10 h-10 text-berry-400 mb-2 animate-bounce" />
+          <BookOpen className="w-10 h-10 text-berry-400 mb-2 animate-float" />
           <p className="font-serif text-sm font-semibold text-berry-900">
             Henüz not eklenmemiş
           </p>

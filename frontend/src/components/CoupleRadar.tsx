@@ -138,7 +138,7 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
           {/* Dotted love line */}
           <div className="flex-1 flex flex-col items-center mx-2">
             <div className="w-full border-t-2 border-dashed border-rose-300 relative">
-              <Heart className="w-5 h-5 fill-berry-500 text-berry-600 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-bounce" />
+              <Heart className="w-5 h-5 fill-berry-500 text-berry-600 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-pulse" />
             </div>
           </div>
 

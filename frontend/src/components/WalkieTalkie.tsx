@@ -138,7 +138,7 @@ export const WalkieTalkie: React.FC<WalkieTalkieProps> = ({
         <span className="text-[11px] font-medium text-stone-500">
           {isPlayingIncoming ? (
             <span className="text-berry-600 flex items-center gap-1 font-semibold">
-              <Volume2 className="w-3.5 h-3.5 animate-bounce" />
+              <Volume2 className="w-3.5 h-3.5 animate-pulse" />
               Ses Çalıyor...
             </span>
           ) : (
@@ -159,7 +159,7 @@ export const WalkieTalkie: React.FC<WalkieTalkieProps> = ({
               : 'bg-gradient-to-r from-berry-500 to-rose-500 hover:from-berry-600 hover:to-rose-600 active:scale-95'
           }`}
         >
-          <Mic className={`w-5 h-5 ${isRecording ? 'animate-bounce' : ''}`} />
+          <Mic className={`w-5 h-5 ${isRecording ? 'animate-pulse' : ''}`} />
           <span>{isRecording ? 'Dinleniyor... Bırak Gönder' : 'Basılı Tut & Konuş (Telsiz)'}</span>
         </button>
       </div>

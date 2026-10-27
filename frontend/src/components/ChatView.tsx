@@ -136,7 +136,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ currentUserId, partnerName }
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center opacity-60">
-            <Heart className="w-10 h-10 text-berry-400 mb-2 animate-bounce" />
+            <Heart className="w-10 h-10 text-berry-400 mb-2 animate-float" />
             <p className="font-serif text-sm text-stone-600">
               Henüz mesaj yok, sevgiline güzel bir şeyler yaz ❤️
             </p>
