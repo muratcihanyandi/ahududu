@@ -3,19 +3,20 @@ import { Sparkles, RefreshCw, X } from 'lucide-react';
 import { api } from '../services/api';
 import { playHaptic } from '../services/haptics';
 
-const CURRENT_CLIENT_VERSION = '1.0.0';
-
 export const UpdateBanner: React.FC = () => {
   const [hasUpdate, setHasUpdate] = useState(false);
-  const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [isDismissed, setIsDismissed] = useState(false);
 
   useEffect(() => {
+    let currentBuildId: string | null = null;
+
     const checkVersion = async () => {
       try {
         const res = await api.getSystemVersion();
-        if (res.version && res.version !== CURRENT_CLIENT_VERSION) {
-          setServerVersion(res.version);
+        const serverBuildId = res.build_id || res.version;
+        if (!currentBuildId) {
+          currentBuildId = serverBuildId;
+        } else if (serverBuildId && serverBuildId !== currentBuildId) {
           setHasUpdate(true);
         }
       } catch (e) {
@@ -24,8 +25,19 @@ export const UpdateBanner: React.FC = () => {
     };
 
     checkVersion();
-    const interval = setInterval(checkVersion, 60000); // Check every minute
-    return () => clearInterval(interval);
+    const interval = setInterval(checkVersion, 15000); // Check every 15 seconds
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        checkVersion();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, []);
 
   const handleApplyUpdate = () => {
@@ -55,9 +67,10 @@ export const UpdateBanner: React.FC = () => {
       <div className="flex items-center gap-1.5 shrink-0 ml-2">
         <button
           onClick={handleApplyUpdate}
-          className="px-3 py-1.5 rounded-xl bg-white text-berry-700 text-xs font-bold shadow-xs hover:bg-pink-50 transition-all active:scale-95"
+          className="px-3 py-1.5 rounded-xl bg-white text-berry-700 text-xs font-bold shadow-xs hover:bg-pink-50 transition-all active:scale-95 flex items-center gap-1"
         >
-          Yenile
+          <RefreshCw className="w-3 h-3 text-berry-600" />
+          <span>Yenile</span>
         </button>
         <button
           onClick={() => setIsDismissed(true)}

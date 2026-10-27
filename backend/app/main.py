@@ -53,9 +53,12 @@ app.include_router(media.router)
 # Version check endpoint for zero-reinstall instant updates
 @app.get("/api/system/version")
 async def get_system_version():
+    index_file = os.path.join(settings.STATIC_DIR, "index.html")
+    build_id = str(int(os.path.getmtime(index_file))) if os.path.exists(index_file) else settings.APP_VERSION
     return {
         "app_name": settings.APP_NAME,
         "version": settings.APP_VERSION,
+        "build_id": build_id,
         "env": settings.ENV,
         "features": [
             "spen_canvas", "letters_wax_seal", "nudge_button",
@@ -116,8 +119,14 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         logger.error(f"WS error: {e}")
         ws_manager.disconnect(websocket, user_id)
 
-# Serve Frontend static assets if available
+# Serve Frontend static assets with strict no-cache for index.html to guarantee instant updates
 static_path = settings.STATIC_DIR
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0"
+}
+
 if os.path.exists(static_path):
     app.mount("/assets", StaticFiles(directory=os.path.join(static_path, "assets")), name="assets")
     
@@ -125,10 +134,12 @@ if os.path.exists(static_path):
     async def serve_frontend(full_path: str):
         requested_file = os.path.join(static_path, full_path)
         if full_path and os.path.exists(requested_file) and not os.path.isdir(requested_file):
-            return FileResponse(requested_file)
+            if full_path.startswith("assets/"):
+                return FileResponse(requested_file, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+            return FileResponse(requested_file, headers=NO_CACHE_HEADERS)
         index_file = os.path.join(static_path, "index.html")
         if os.path.exists(index_file):
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers=NO_CACHE_HEADERS)
         return JSONResponse({"status": "Ahududu API is running. Frontend build not found yet."})
 
 if __name__ == "__main__":

@@ -241,8 +241,8 @@ export const api = {
   },
 
   // System Version
-  async getSystemVersion(): Promise<{ app_name: string; version: string }> {
-    const res = await fetch(`${BASE_URL}/api/system/version`);
+  async getSystemVersion(): Promise<{ app_name: string; version: string; build_id?: string }> {
+    const res = await fetch(`${BASE_URL}/api/system/version?t=${Date.now()}`);
     return res.json();
   }
 };
