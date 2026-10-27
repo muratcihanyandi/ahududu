@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Güncelleme APK'sı uygulama özel dizininden paylaşılır. -->
+<paths>
+    <files-path name="updates" path="updates/" />
+    <cache-path name="cache" path="." />
+</paths>

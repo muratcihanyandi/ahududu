@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Device Owner politikası: ek politika talep edilmez.
+  Yalnızca PackageInstaller üzerinden sessiz güncelleme yetkisi için kullanılır.
+  testOnly="true" → `adb shell dpm remove-active-admin ...` ile geri alınabilir.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android"
+    android:testOnly="true">
+    <uses-policies />
+</device-admin>

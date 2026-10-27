@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Ahududu" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#FAF3EE</item>
+        <item name="android:navigationBarColor">#FAF3EE</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

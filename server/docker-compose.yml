@@ -1,0 +1,25 @@
+# Ahududu — Raspberry Pi 5 (CasaOS) dağıtımı
+# GHCR üzerinden yayınlanır ve CasaOS tarafından çalıştırılır.
+services:
+  ahududu-server:
+    image: ghcr.io/muratcihanyandi/ahududu-server:latest
+    build: .
+    container_name: ahududu-server
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - MEDIA_DIR=/app/media
+    volumes:
+      - ${MEDIA_HOST_DIR:-/DATA/AppData/ahududu/media}:/app/media
+      # APK yayınları media kökünün kardeşi: sunucu `mediaDir/../releases` okur.
+      - ${RELEASES_HOST_DIR:-/DATA/AppData/ahududu/releases}:/app/releases
+    mem_limit: 512m
+    cpus: 1.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
