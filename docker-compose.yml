@@ -1,0 +1,36 @@
+name: ahududu
+services:
+  app:
+    container_name: ahududu-app
+    image: ghcr.io/muratcihanyandi/ahududu:latest
+    platform: linux/arm64
+    restart: unless-stopped
+    ports:
+      - "33470:33470"
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://muratcihanyandi:Can-10u3557@192.168.2.170:5432/ahududu
+      UPLOAD_DIR: /data/uploads
+      STATIC_DIR: /app/backend/static
+      PORT: "33470"
+    volumes:
+      - /DATA/AppData/ahududu/uploads:/data/uploads
+    labels:
+      icon: "https://raw.githubusercontent.com/muratcihanyandi/ahududu/main/logo/ahududu_logo.png"
+
+x-casaos:
+  appstore:
+    icon: https://raw.githubusercontent.com/muratcihanyandi/ahududu/main/logo/ahududu_logo.png
+    port_map: "33470"
+    title: Ahududu
+  author: Murat
+  category: Personal
+  hostname: 192.168.2.170
+  icon: https://raw.githubusercontent.com/muratcihanyandi/ahududu/main/logo/ahududu_logo.png
+  index: ""
+  is_uncontrolled: false
+  port_map: "33470"
+  scheme: http
+  store_app_id: ahududu
+  title:
+    custom: Ahududu ❤️

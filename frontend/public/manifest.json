@@ -1,0 +1,16 @@
+{
+  "short_name": "Ahududu",
+  "name": "Ahududu — Bizim Dünyamız",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "type": "image/png",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#fdf2f8",
+  "theme_color": "#be185d",
+  "display": "standalone",
+  "orientation": "portrait"
+}
