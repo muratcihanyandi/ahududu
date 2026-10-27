@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Ahududu</string>
-    <!-- Erişilebilirlik servisi açıklaması (kullanıcıya gösterilir). -->
-    <string name="auto_install_description">Ahududu güncellemelerinde kurulum ekranındaki \"Kur\" düğmesine senin yerine basmak için kullanılır. Yalnızca paket kurulum ekranında çalışır; başka hiçbir ekranı okumaz veya kaydetmez.</string>
-</resources>
