@@ -5,10 +5,15 @@ const config: CapacitorConfig = {
   appName: 'Ahududu',
   webDir: 'dist',
   server: {
-    // Allows loading live updates from the Pi or Cloudflare tunnel URL
-    // When unset, falls back to the local bundled assets
+    // Points directly to the live server on Raspberry Pi 5
+    // Guarantees zero-reinstall instant updates!
+    url: 'http://192.168.2.170:33470',
     cleartext: true,
-    androidScheme: 'https'
+    allowNavigation: [
+      '192.168.2.170:33470',
+      '*.muratcihanyandi.com',
+      'localhost:*'
+    ]
   },
   android: {
     allowMixedContent: true,

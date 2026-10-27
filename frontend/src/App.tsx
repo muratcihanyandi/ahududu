@@ -17,6 +17,7 @@ import { WatchCompanion } from './components/WatchCompanion';
 import { WatchInstallModal } from './components/WatchInstallModal';
 import { UpdateBanner } from './components/UpdateBanner';
 import { playHaptic } from './services/haptics';
+import { getRealBatteryStatus, subscribeToBatteryChanges, BatteryStatus } from './services/battery';
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<UserId | null>(() => {
@@ -31,9 +32,24 @@ export const App: React.FC = () => {
   const [selectedLetter, setSelectedLetter] = useState<LoveLetter | null>(null);
   const [isWatchModalOpen, setIsWatchModalOpen] = useState(false);
   const [memorySubTab, setMemorySubTab] = useState<'gallery' | 'notes'>('gallery');
+  const [myBattery, setMyBattery] = useState<BatteryStatus | undefined>(undefined);
 
   const partnerId: UserId = currentUser === 'murat' ? 'sevgilim' : 'murat';
   const partnerName = currentUser === 'murat' ? 'Sevgilim' : 'Murat';
+
+  // Sync real hardware battery with server
+  const syncBattery = async (userId: UserId) => {
+    try {
+      const b = await getRealBatteryStatus();
+      setMyBattery(b);
+      await api.updateProfile(userId, {
+        battery_level: b.level,
+        is_charging: b.isCharging,
+      });
+    } catch (e) {
+      console.warn('Battery sync error:', e);
+    }
+  };
 
   useEffect(() => {
     if (!currentUser) return;
@@ -42,16 +58,42 @@ export const App: React.FC = () => {
 
     // Initial data load
     loadInitialData();
+    syncBattery(currentUser);
+
+    // Subscribe to live battery changes (charging plugged/unplugged, percentage drop)
+    const unsubBattery = subscribeToBatteryChanges((status) => {
+      setMyBattery(status);
+      api.updateProfile(currentUser, {
+        battery_level: status.level,
+        is_charging: status.isCharging,
+      }).catch(() => {});
+    });
+
+    // Periodic battery update every 30 seconds
+    const batteryInterval = setInterval(() => {
+      syncBattery(currentUser);
+    }, 30000);
 
     // WS Listeners
     const unsubLetter = wsClient.on('new_letter', () => loadLetters());
     const unsubStatus = wsClient.on('partner_location_update', (d: any) => {
       setDistanceKm(d.distance_km);
     });
+    const unsubProfile = wsClient.on('partner_profile_updated', (d: any) => {
+      if (d.profile) {
+        setPartnerProfile((prev) => ({
+          ...(prev as UserProfile),
+          ...d.profile,
+        }));
+      }
+    });
 
     return () => {
+      clearInterval(batteryInterval);
+      unsubBattery();
       unsubLetter();
       unsubStatus();
+      unsubProfile();
     };
   }, [currentUser]);
 
@@ -222,7 +264,9 @@ export const App: React.FC = () => {
             <LiveStatusWidget
               partnerProfile={partnerProfile}
               partnerBiometrics={partnerBiometrics}
+              myBattery={myBattery}
               distanceKm={distanceKm}
+              partnerName={partnerName}
             />
 
             {/* Giant Attention Nudge Button */}

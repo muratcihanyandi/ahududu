@@ -5,6 +5,8 @@ import { api } from '../services/api';
 import { wsClient } from '../services/websocket';
 import { playHaptic, HAPTIC_PATTERNS } from '../services/haptics';
 
+import { getRealBatteryStatus } from '../services/battery';
+
 interface CoupleRadarProps {
   currentUserId: UserId;
   partnerName: string;
@@ -59,12 +61,13 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         try {
+          const batteryInfo = await getRealBatteryStatus();
           const res = await api.updateLocation({
             user_id: currentUserId,
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
             accuracy: pos.coords.accuracy,
-            battery: 90,
+            battery: batteryInfo.level,
             place_name: 'Canlı Konum Alındı 📍',
           });
           setIsUpdating(false);

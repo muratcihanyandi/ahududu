@@ -3,7 +3,20 @@ import {
   SharedNote, WatchBiometrics, CoupleStatus, UserId
 } from '../types';
 
-const BASE_URL = '';
+export const getServerBaseUrl = (): string => {
+  if (typeof window === 'undefined') return 'http://192.168.2.170:33470';
+  
+  // If running inside Capacitor Native Android App (where origin is https://localhost)
+  if (window.location.hostname === 'localhost' && window.location.port !== '33470' && window.location.port !== '5173') {
+    const saved = localStorage.getItem('ahududu_server_url');
+    return saved || 'http://192.168.2.170:33470';
+  }
+  
+  // Normal browser or PWA loaded from Pi or Cloudflare
+  return '';
+};
+
+const BASE_URL = getServerBaseUrl();
 
 export const api = {
   // Profiles

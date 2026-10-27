@@ -18,9 +18,19 @@ class WebSocketClient {
     this.isExplicitlyClosed = false;
 
     // Determine WS URL
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/ws/${userId}`;
+    let wsHost = window.location.host;
+    let wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+    // If running in Capacitor Android Native App (where host is localhost)
+    if (window.location.hostname === 'localhost' && window.location.port !== '33470' && window.location.port !== '5173') {
+      const serverUrl = localStorage.getItem('ahududu_server_url') || 'http://192.168.2.170:33470';
+      const cleanHost = serverUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const isHttps = serverUrl.startsWith('https');
+      wsProtocol = isHttps ? 'wss:' : 'ws:';
+      wsHost = cleanHost;
+    }
+
+    const wsUrl = `${wsProtocol}//${wsHost}/ws/${userId}`;
 
     try {
       this.ws = new WebSocket(wsUrl);

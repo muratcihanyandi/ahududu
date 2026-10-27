@@ -67,3 +67,4 @@ frontend/android/.gradle/
 frontend/android/build/
 frontend/android/captures/
 frontend/android/local.properties
+*.apk
