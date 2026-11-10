@@ -9,7 +9,7 @@ services:
       - "33470:33470"
     environment:
       APP_ENV: production
-      DATABASE_URL: postgresql+asyncpg://muratcihanyandi:Can-10u3557@192.168.2.170:5432/ahududu
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL tanimli degil. .env dosyasina ekleyin}
       UPLOAD_DIR: /data/uploads
       STATIC_DIR: /app/backend/static
       PORT: "33470"
