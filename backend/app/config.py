@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     # Default to Pi's Postgres or container network
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL", 
-        "postgresql+asyncpg://muratcihanyandi:Can-10u3557@192.168.2.170:5432/ahududu"
+"postgresql+asyncpg://kullanici:sifre@localhost:5432/ahududu"  # .env ile degistirin
     )
     
     # Storage
