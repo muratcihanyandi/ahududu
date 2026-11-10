@@ -1,62 +1,131 @@
-# 🍓 Ahududu — Bizim Dünyamız
+# Ahududu — Çift Uygulaması
 
-Murat ve Sevgilisi için özel olarak geliştirilmiş, romantik, samimi ve teknik karmaşıklıktan tamamen arındırılmış çift uygulaması.
+İki telefon, bir saat ve tek bir sunucu. Murat ve Selin için yazılmış, kendi
+kendine barındırılan bir çift uygulaması.
 
----
+> Bu proje bir ürün değil, gerçek kullanıcısı olan bir yazılım. İki kişi her gün
+> kullanıyor: balmumu mühürlü el yazısı mektuplar, bas-konuş telsiz, canlı konum,
+> Galaxy Watch 7 / Watch Ultra entegrasyonu ve S-Pen basınç hassasiyetli çizim.
 
-## 📱 Cihaz Desteği
-- **Samsung Galaxy S24 Ultra:** S-Pen donanımı ile gerçekçi el yazısı ve çizim desteği, aşk mektupları tuvali, basınç hassasiyeti.
-- **Samsung Galaxy S23:** Canlı konum, ilgi çağırma, çift sohbeti, sesli telsiz, ortak galeri ve notlar.
-- **Samsung Galaxy Watch 7 & Samsung Watch Ultra:** Dairesel Wear OS ekranına özel arayüz, gerçek zamanlı nabız (BPM), adım ve stres takibi, uzaktan kalp atışı titreşimi, saate özel aşk animasyonları.
-
----
-
-## ✨ Öne Çıkan Özellikler
-
-### 1. 💌 Balmumu Mühürlü Romantik Mektuplar & S-Pen Tuvali
-- **S-Pen El Yazısı:** Sevgilinizin S-Pen kalemi veya parmağıyla doğrudan kağıda çizebileceği, basınç hassasiyetli tuval.
-- **Daktilo Yazısı:** Özel romantik fontlarla dökülen kalpten hisler.
-- **Nostaljik Kağıt Temaları:** Parşömen kağıdı, Gül pembesi, Gece göğü, Lavanta.
-- **3D Balmumu Mühür:** Mektup gönderilirken balmumu ile mühürlenir. Karşı taraf açtığında mühür kırılır ve konfeti efekti ile açılır!
-
-### 2. 💖 "Beni Sev!" / İlgi İsteme Butonu
-- Ana ekranda dev, sevimli, zıplayan interaktif ilgi butonu.
-- Dokunulduğunda sevgilinizin telefonunda ve saatinde özel kalp atışı titreşimleri üretir (`[120, 100, 180, 800, 120, 100, 180]`).
-- Hızlı yanıtlar: "Hemen geliyorum!", "Kocaman sarıldım", "Canım benim".
-
-### 3. 📻 Bas-Konuş Telsiz (Walkie-Talkie) & Çift Sohbeti
-- Butona basılı tutarak konuşulduğunda, sevgilinizin telefonunda anında şirin bir telsiz sesiyle ("Bip!") otomatik çalar.
-- Fotoğraf ve yüksek kaliteli video paylaşımı.
-
-### 4. 🧭 Çift Radarı & Mesafe Takibi
-- Aranızdaki gerçek mesafeyi kilometre cinsinden gösterir ("Aramızda 3.2 km var 💕").
-- Her iki telefonun pil durumu ve şarj bilgisi.
-- "Yanına Yol Tarifi Al" tek tık Google Maps bağlantısı.
-- "Telefonunu Titret" uzaktan titreşim tetikleyici.
-
-### 5. ⌚ Galaxy Watch (Watch 7 & Watch Ultra) Entegrasyonu
-- Dairesel Wear OS ekranlarına tam uyumlu arayüz (`/watch` rotası).
-- Canlı nabız (BPM), adım sayısı ve stres seviyesi senkronizasyonu.
-- Saatten saate kalp atışı titreşimi ve aşk animasyonları (sarılma, öpücük).
-- **"Saate Kur"** butonu: Tek tıkla saatin tarayıcısından ekleme veya Galaxy Wearable üzerinden otomatik eşleşme.
-
-### 6. 🔄 Sıfır Yeniden Kurulum Prensibi (Live OTA Update)
-- APK telefonlara ve saate sadece **BİR DEFA** kurulur.
-- Yeni bir özellik eklendiğinde, sunucu güncellendiği anda sevgilinizin telefonuna otomatik yansır. Sevgilinize tekrar tekrar APK gönderme zahmeti tamamen tarihe karışmıştır.
+```
+Android (Capacitor)  ──┐
+Wear OS tarayıcı     ──┼──►  FastAPI (:33470)  ──►  PostgreSQL
+Web arayüzü          ──┘        WebSocket + REST
+```
 
 ---
 
-## 🏗️ Altyapı ve Dağıtım
+## Neden teknik olarak ilginç
 
-### Raspberry Pi 5 & CasaOS
-- **Port:** `33470` (API, WebSocket ve Web arayüzü tek porttan sunulur).
-- **Veritabanı:** Raspberry Pi 5 üzerindeki yerel PostgreSQL (`ahududu` veritabanı).
-- **Docker İmajı:** `ghcr.io/muratcihanyandi/ahududu:latest` (ARM64 native).
+Bu bir "aşk temalı CRUD uygulaması" değil. İçinde çözülmesi gereken gerçek
+problemler var:
 
-### Cloudflare Tunnel Kurulumu (Dış Erişim İçin)
-1. CasaOS arayüzünde çalışan Cloudflare paneline (veya Cloudflare Zero Trust paneline) gidin.
-2. **Public Hostnames** kısmına yeni hostname ekleyin:
-   - **Subdomain:** `ahududu`
-   - **Domain:** `muratcihanyandi.com` (veya kendi alan adınız)
-   - **Service:** `HTTP` -> `localhost:33470`
-3. Kaydettiğinizde `https://ahududu.muratcihanyandi.com` üzerinden güvenli ve şifreli HTTPS bağlantınız tüm dünyaya hazır hale gelir!
+| Problem | Çözüm |
+|---|---|
+| **S-Pen basınç hassasiyeti** | Pointer Events `pressure` alanı doğrudan kullanılır; çizgi kalınlığı basınca göre değişir. Parmağın ürettiği sabit değer ayrı ele alınır. |
+| **Saatte dairesel ekran** | `/watch` rotası ayrı bir düzen: `border-radius: 50%` kırpması, güvenli alan içinde dairesel yerleşim, dokunma hedefleri 44 px üstü. |
+| **Uzaktan titreşim deseni** | Telefon ve saat aynı desen dizisini (`[120, 100, 180, 800, 120, 100, 180]`) Vibration API ile çalar; WebSocket olayı ile tetiklenir. |
+| **Sıfır yeniden kurulum** | APK bir kez kurulur; arayüz ve iş mantığı sunucudan güncellenir. Yeni özellik için karşı tarafa yeni APK göndermek gerekmez. |
+| **Pil/şarj durumu paylaşımı** | Battery Status API + WebSocket; karşı tarafın bataryası ana ekranda canlı görünür. |
+| **Konum ve mesafe** | İki cihazın koordinatlarından haversine mesafe hesabı ("Aramızda 3.2 km var 💕"), pil bilgisiyle birlikte tek yayında. |
+
+---
+
+## Özellikler
+
+**Mektuplar**
+- S-Pen veya parmakla basınç hassasiyetli el yazısı tuvali
+- Daktilo efektiyle yazılan metin, nostaljik kağıt temaları (parşömen, gül pembesi, gece göğü, lavanta)
+- **3D balmumu mühür**: mektup mühürlenerek gönderilir, alıcı açtığında mühür kırılır ve konfeti patlar
+
+**İletişim**
+- Bas-konuş telsiz: butona basılı tut, karşı tarafta telsiz bip'i ile otomatik çalar
+- Çift sohbeti, fotoğraf ve yüksek kaliteli video paylaşımı
+- "Beni Sev!" butonu — dokununca karşı telefon ve saatte kalp atışı titreşimi, hızlı yanıtlar
+
+**Radar**
+- Gerçek mesafe (km), iki tarafın pil/şarj durumu
+- Tek tıkla Google Maps yol tarifi
+- Uzaktan "telefonunu titret"
+
+**Galaxy Watch**
+- Watch 7 / Watch Ultra dairesel Wear OS arayüzü
+- Canlı nabız (BPM), adım, stres seviyesi senkronizasyonu
+- Saatten saate titreşim ve aşk animasyonları (sarılma, öpücük)
+- "Saate Kur" butonu ile tek tıkla eşleştirme
+
+---
+
+## Mimari
+
+| Katman | Teknoloji |
+|---|---|
+| Backend | FastAPI + SQLAlchemy |
+| Gerçek zamanlı | WebSocket (tek port) |
+| Veritabanı | PostgreSQL |
+| Mobil | Capacitor (Android) |
+| Web | React + Vite |
+| Saat | Wear OS tarayıcı (`/watch`) |
+| Dağıtım | Docker (ARM64 native), CasaOS, Cloudflare Tunnel |
+
+```
+backend/app/
+  main.py           # FastAPI uygulaması, WebSocket hub
+  models.py         # kullanıcı, mektup, mesaj, medya, konum
+  routes/
+    auth.py  chat.py  gallery.py  letters.py
+    location.py  media.py  …
+frontend/src/
+  services/
+    api.ts          # REST istemcisi
+    websocket.ts    # yeniden bağlanmalı WS
+    haptics.ts      # titreşim desenleri
+    battery.ts      # pil durumu
+    galaxyWatch.ts  # saat entegrasyonu
+deploy/deploy_pi.py # Pi'ye tek komutla dağıtım
+```
+
+---
+
+## Kurulum
+
+### Docker ile (önerilen)
+
+```bash
+git clone https://github.com/muratcihanyandi/ahududu.git
+cd ahududu
+cp .env.example .env      # DATABASE_URL, JWT_SECRET
+docker compose up -d
+```
+
+Uygulama tek porttan (`33470`) API, WebSocket ve web arayüzünü sunar:
+`http://<pi-ip>:33470`
+
+İmaj: `ghcr.io/muratcihanyandi/ahududu:latest` (ARM64 native)
+
+### Dış erişim
+
+Cloudflare Tunnel ile — ayrıntılar [`CLOUDFLARE_GUIDE.md`](CLOUDFLARE_GUIDE.md).
+Public hostname → `HTTP → localhost:33470`.
+
+### Android / saat
+
+APK derleme ve saat eşleştirme adımları için [`PRODUCT.md`](PRODUCT.md) ve
+[`DESIGN.md`](DESIGN.md).
+
+---
+
+## Belgeler
+
+| Dosya | İçerik |
+|---|---|
+| [`PRODUCT.md`](PRODUCT.md) | Ürün tanımı, kullanıcı akışları |
+| [`DESIGN.md`](DESIGN.md) | Tasarım sistemi, renk, tipografi |
+| [`CLOUDFLARE_GUIDE.md`](CLOUDFLARE_GUIDE.md) | Dış erişim kurulumu |
+| [`verify_all.py`](verify_all.py) | Uçtan uca doğrulama betiği |
+
+---
+
+## Lisans
+
+Kişisel proje.
