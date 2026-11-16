@@ -535,16 +535,33 @@ const PosterCard: React.FC<{
 const AUTO_ENTER_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 /** Oynatma süresi bilinmiyorsa "film bitti mi?" hesabında kullanılan varsayılan. */
 const DEFAULT_FILM_SECONDS = 2.5 * 60 * 60;
-/** Konum bu kadar ilerlediyse (ya da süre bittiyse) film bitmiş sayılır. */
+/** Süre bilinmiyorsa: bu kadar ilerlediyse film bitmiş sayılır (2.5 sa − 45 sn). */
 const END_TOLERANCE_SECONDS = 45;
+/**
+ * Partnerin kalp atışı ile bildirdiği saniye bizden bu kadar ileriyse ona
+ * yetişiriz (geç katılan tarafın gecikmesini kapatır). Daha küçük farklarda
+ * dokunmuyoruz: kalp atışı 2 saniyede bir geldiği için küçük farklar zaten
+ * senkron motorunun toleransı içinde.
+ */
+const HEARTBEAT_CATCHUP_SECONDS = 1.5;
 
-/** Film bitti mi? (Süre bilinmese bile yeterince ilerlediyse bitmiş sayılır.) */
+/**
+ * Film bitti mi?
+ *
+ * Süre GERÇEKTEN biliniyorsa bitişe çok az kalmış olmalı (son 1 saniye).
+ * Yoksa 1 dakikalık bir video 15. saniyede "bitti" sayılıp salon kapanıyordu.
+ * Süre bilinmiyorsa 2.5 saatlik varsayıma göre 45 saniyelik pay kullanılır.
+ */
 const isFilmFinished = (next: Partial<PlaybackState>, durationGuess?: number): boolean => {
   const position = next.position ?? 0;
-  const duration = next.duration && next.duration > 0
+  const knownDuration = next.duration && next.duration > 0
     ? next.duration
-    : (durationGuess && durationGuess > 0 ? durationGuess : DEFAULT_FILM_SECONDS);
-  return position >= duration - END_TOLERANCE_SECONDS;
+    : (durationGuess && durationGuess > 0 ? durationGuess : 0);
+  if (knownDuration > 0) {
+    const tail = Math.min(END_TOLERANCE_SECONDS, Math.max(1, knownDuration * 0.02));
+    return position >= knownDuration - tail;
+  }
+  return position >= DEFAULT_FILM_SECONDS - END_TOLERANCE_SECONDS;
 };
 
 interface CinemaSalonProps {
@@ -775,8 +792,32 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     });
 
     const unsubHeartbeat = wsClient.on('cinema_heartbeat', (data: any) => {
+      if (data?.user_id !== partnerId) return;
       // Partner oynatıyor: "salonda" rozetini tazele.
-      if (data?.user_id === partnerId) setPartnerWatching(true);
+      setPartnerWatching(true);
+
+      // ---- Geç katılan tarafın gecikmesini kapat ----
+      // Partner her 2 saniyede o anki saniyesini bildirir. Biz belirgin şekilde
+      // GERİDEYSEK (salona sonradan girdiğimiz için sunucudaki konum eskiydi)
+      // onun saniyesine yetişiriz. İLERİDEYSEK hiç dokunmayız: yoksa iki taraf
+      // birbirini geriye çeker ve senkron hiç oturmaz.
+      const room = roomRef.current;
+      if (!room || room.id !== data.room_id) return;
+      if (!data.is_playing || data.position == null) return;
+      const partnerPosition =
+        Number(data.position) + latencyMsRef.current / 2 / 1000;
+      if (!Number.isFinite(partnerPosition)) return;
+
+      setPlayback((prev) => {
+        if (!prev.isPlaying) return prev;
+        const ours = expectedPosition(prev);
+        if (partnerPosition - ours <= HEARTBEAT_CATCHUP_SECONDS) return prev;
+        return {
+          ...prev,
+          position: partnerPosition,
+          anchorMs: Date.now(),
+        };
+      });
     });
 
     return () => {
@@ -813,8 +854,10 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
       position: basePosition,
       isPlaying: state?.is_playing ?? room.is_playing ?? false,
       duration: state?.duration ?? room.duration ?? 0,
-      // anchorMs: oynatmanın hangi anda "başladığı"
-      anchorMs: Date.now() - basePosition * 1000,
+      // anchorMs = "bu saniye hangi anda geçerliydi". Sunucudaki konum güncel
+      // sayılır; aradaki 2 saniyelik kalp atışı gecikmesi, partnerden gelen
+      // `cinema_heartbeat` ile kendiliğinden kapatılır.
+      anchorMs: Date.now(),
     });
     setCurtainOpen(false);
     window.setTimeout(() => setCurtainOpen(true), 60);
@@ -945,7 +988,8 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
       wsClient.send({
         type: 'cinema_heartbeat',
         room_id: room.id,
-        position: playbackRef.current.position,
+        // Sunucuya, o an gerçekten görünen saniyeyi bildir (taban konum değil).
+        position: expectedPosition(playbackRef.current),
         is_playing: playbackRef.current.isPlaying,
       });
     }, 2000);
@@ -985,7 +1029,10 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
           return;
         }
         if (Math.abs(next.position - playback.position) > 1.2) {
-          setPlayback((prev) => ({ ...prev, position: next.position! }));
+          // Anchor'ı da tazele: `expectedPosition` "hangi andan itibaren
+          // ilerliyoruz" bilgisini anchorMs'ten alır. Anchor eskide kalırsa
+          // geçen süre iki kez sayılır.
+          setPlayback((prev) => ({ ...prev, position: next.position!, anchorMs: Date.now() }));
         }
       }
     },
@@ -1160,9 +1207,6 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
               <p className="font-serif text-sm font-bold text-white truncate">
                 {nameOf(partnerSession.by)} "{partnerSession.title}" izliyor
               </p>
-              <p className="text-[10px] text-white/60 mt-0.5">
-                Katılırsan aynı saniyeden devam edersin
-              </p>
             </div>
             <div className="flex flex-col gap-1 shrink-0">
               <button
@@ -1265,7 +1309,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
             value={linkInput}
             onChange={(e) => setLinkInput(e.target.value)}
             rows={2}
-            placeholder="Film sayfasının adresi (örn: film sitesi veya YouTube)"
+            placeholder="Film bağlantısı"
             className="w-full px-3 py-2 rounded-xl border border-amber-200 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-amber-400"
           />
           <input

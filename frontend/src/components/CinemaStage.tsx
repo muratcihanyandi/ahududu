@@ -144,6 +144,8 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       }
       adapter = created;
       engine.attach(created);
+      // Teşhis kancası: sahne sahibi oynatıcıya erişebilsin (test/geliştirme).
+      (window as any).__ahududuCinemaPlayer = created;
       if (created.isReady()) engine.markReady();
     };
 
@@ -175,6 +177,9 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       destroyed = true;
       engine.detach();
       adapter?.destroy?.();
+      if ((window as any).__ahududuCinemaPlayer === adapter) {
+        (window as any).__ahududuCinemaPlayer = null;
+      }
       if (engineRef.current === engine) engineRef.current = null;
       setReady(false);
       setError(null);

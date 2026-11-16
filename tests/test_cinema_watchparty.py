@@ -59,10 +59,35 @@ def shot(page, name):
 
 
 def upload_fixture():
-    if not os.path.exists(FIXTURE):
+    """Test filmini yükler. 5 dakikalık sentetik video üretmeyi dener (ffmpeg);
+    olmazsa mevcut 60 sn'lik fixture'a düşer. Uzun video şart: salon, sürenin
+    son 45 saniyesinde "film bitti" sayıp kendini kapatıyor."""
+    import subprocess
+    import tempfile
+
+    candidate = os.path.join(tempfile.gettempdir(), "ahududu_cinema_long.mp4")
+    if not os.path.exists(candidate):
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-v", "error",
+                    "-f", "lavfi", "-i", "testsrc=size=320x180:rate=15:duration=300",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=300",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "64k", "-shortest", candidate,
+                ],
+                check=True,
+                timeout=120,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] uzun test videosu üretilemedi: {exc}")
+
+    path = candidate if os.path.exists(candidate) else FIXTURE
+    if not os.path.exists(path):
         return None
+
     boundary = "----AhududuWatchpartyTest"
-    with open(FIXTURE, "rb") as f:
+    with open(path, "rb") as f:
         video_bytes = f.read()
     head = (
         f"--{boundary}\r\n"

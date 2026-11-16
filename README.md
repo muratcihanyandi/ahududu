@@ -68,6 +68,8 @@ Murat ve Sevgilisi için özel olarak geliştirilmiş, romantik, samimi ve tekni
   Katılırsan aynı saniyeden devam edersin.
 - **Senkron izleme:** Oynat / duraklat / 10 sn ileri-geri / sarma anında karşı tarafa yansır.
   Sunucu konumu kaydeder; iki taraf arasındaki ağ gecikmesi ölçülüp telafi edilir.
+- **Geç katılan yetişir:** Salona sonradan giren taraf, partnerin her 2 saniyede
+  bildirdiği saniyeye kendiliğinden yetişir; fark 1 saniyenin altına iner.
 - **YouTube ve Vimeo da senkron:** YouTube IFrame oynatıcı API'si ile gömülü videolar da
   oynat/duraklat/sarma komutlarını iki tarafta aynı saniyede uygular. (watchparty/WatchSync
   yaklaşımı: kademeli düzeltme, sarma bekleme süresi, kendi komutunun yankısını yutma.)
@@ -111,6 +113,10 @@ Sohbet sekmesinde alt bar mesaj yazma alanının hemen altına yapışır.
 - Bildirime dokununca uygulama açılır ve doğrudan sohbet gelir.
 - Uygulama ekrandayken gereksiz bildirim gösterilmez.
 - Telefon yeniden başladığında servis kendiliğinden geri gelir.
+- **Kalıcı bildirim notu:** Android, arka planda çalışan bir servisin görünür bildirim
+  göstermesini zorunlu tutar (yoksa servis kısa sürede öldürülür ve bildirimler gelmez).
+  Bu yüzden uygulama kapalıyken tepside adında sessiz, en düşük öncelikli bir satır durur;
+  ses çıkarmaz, rozet bırakmaz, kilit ekranında görünmez. Uygulama ekrandayken tamamen gizlenir.
 
 ### 10. 🧭 Neredeyiz? — Mesafe Takibi
 - Aranızdaki gerçek mesafeyi kilometre cinsinden gösterir ("Aramızda 3.2 km var 💕").

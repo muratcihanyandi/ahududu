@@ -107,6 +107,8 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         AhududuNotifyService.appForeground = true;
+        // Uygulama ekrandayken kalıcı "bağlıyız" bildirimi gizlenir.
+        AhududuNotifyService.setAppVisible(this, true);
         if (getBridge() != null && getBridge().getWebView() != null) {
             getBridge().getWebView().getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
         }
@@ -136,6 +138,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onPause() {
         AhududuNotifyService.appForeground = false;
+        // Uygulama arkaya geçti: Android arka plandaki ön plan servisine görünür
+        // bildirim zorunlu kılar. Sessiz/önemsiz hâliyle geri getirilir.
+        AhududuNotifyService.setAppVisible(this, false);
         super.onPause();
     }
 

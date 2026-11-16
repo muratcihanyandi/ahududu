@@ -60,6 +60,9 @@ public class AhududuNotifyService extends Service {
     static final String KEY_RUNNING = "service_running";
     static final String KEY_PENDING_CHAT = "pending_open_chat";
     static final String KEY_SEEN_IDS = "seen_ids";
+    /** Uygulama ekranda mı? (MainActivity bu bilgiyi servise yollar) */
+    static final String ACTION_SET_APP_VISIBLE = "com.ahududu.app.SET_APP_VISIBLE";
+    static final String EXTRA_VISIBLE = "visible";
 
     /* --- Kanallar --- */
     static final String SERVICE_CHANNEL_ID = "ahududu_service";
@@ -85,6 +88,9 @@ public class AhududuNotifyService extends Service {
     /** Uygulama ön planda mı? MainActivity günceller. */
     static volatile boolean appForeground = false;
 
+    /** Çalışan servis örneği (görünürlük güncellemesini doğrudan yapmak için). */
+    private static volatile AhududuNotifyService currentInstance = null;
+
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
@@ -94,6 +100,7 @@ public class AhududuNotifyService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        currentInstance = this;
         handler = new Handler(Looper.getMainLooper());
         createChannels();
         loadSeenIds();
@@ -108,6 +115,21 @@ public class AhududuNotifyService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent != null ? intent.getAction() : null;
+        if (ACTION_SET_APP_VISIBLE.equals(action)) {
+            // Uygulama ekranda: kalıcı bildirimi gizle (servis çalışmaya devam eder).
+            // Uygulama arkaya geçti: bağlantıyı sürdürmek için bildirimi geri getir.
+            boolean visible = intent.getBooleanExtra(EXTRA_VISIBLE, false);
+            appForeground = visible;
+            if (visible) {
+                hideServiceNotification();
+            } else {
+                startForegroundSafely();
+            }
+            ensureConnected();
+            return START_STICKY;
+        }
+
         startForegroundSafely();
         getPrefs().edit().putBoolean(KEY_RUNNING, true).apply();
         ensureConnected();
@@ -117,6 +139,7 @@ public class AhududuNotifyService extends Service {
 
     @Override
     public void onDestroy() {
+        if (currentInstance == this) currentInstance = null;
         destroyed = true;
         handler.removeCallbacksAndMessages(null);
         unregisterNetworkCallback();
@@ -142,6 +165,54 @@ public class AhududuNotifyService extends Service {
             }
         } catch (Exception e) {
             Log.w(TAG, "Servis başlatılamadı: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Uygulama ön planda/arkada değiştiğinde çağrılır.
+     *
+     * Android, arka planda çalışan bir ön plan servisi için görünür bir
+     * bildirim ZORUNLU kılar. Bu yüzden:
+     *   - Uygulama ekrandayken kalıcı bildirim GİZLENİR (tamamen kaybolur),
+     *   - uygulama arkaya geçince yalnızca bağlantıyı ayakta tutmak için
+     *     sessiz, en düşük öncelikli, kilit ekranında görünmeyen bir bildirim
+     *     geri gelir.
+     */
+    static void setAppVisible(Context context, boolean visible) {
+        // Statik alan aynı süreçte anında görünür: servis başlarken de bu
+        // bilgiye göre karar verebilsin.
+        appForeground = visible;
+
+        // Servis zaten ayaktaysa doğrudan onun üzerinde çalış: arka plandan
+        // startService çağırmak Android 12+ kısıtlarına takılabilir.
+        AhududuNotifyService running = currentInstance;
+        if (running != null) {
+            try {
+                if (visible) {
+                    running.hideServiceNotification();
+                } else {
+                    running.startForegroundSafely();
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Görünürlük güncellenemedi: " + e.getMessage());
+            }
+            return;
+        }
+
+        if (visible) return; // servis yok, gizlenecek bir şey de yok
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            if (!prefs.getBoolean(KEY_RUNNING, false)) return; // servis hiç kurulmadı
+            Intent intent = new Intent(context, AhududuNotifyService.class);
+            intent.setAction(ACTION_SET_APP_VISIBLE);
+            intent.putExtra(EXTRA_VISIBLE, false);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent);
+            } else {
+                context.startService(intent);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Görünürlük güncellenemedi: " + e.getMessage());
         }
     }
 
@@ -174,8 +245,24 @@ public class AhududuNotifyService extends Service {
             } else {
                 startForeground(SERVICE_NOTIFICATION_ID, notification);
             }
+            // Android "startForeground" çağrısını zorunlu tutar; uygulama zaten
+            // ekrandaysa bildirimi hemen ardından gizleriz (kullanıcı görmez).
+            if (appForeground) hideServiceNotification();
         } catch (Exception e) {
             Log.w(TAG, "Ön plan bildirimi gösterilemedi: " + e.getMessage());
+        }
+    }
+
+    /** Uygulama ekrandayken kalıcı bildirimi tepsiden kaldırır (servis sürer). */
+    private void hideServiceNotification() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            } else {
+                stopForeground(true);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Kalıcı bildirim gizlenemedi: " + e.getMessage());
         }
     }
 
@@ -188,11 +275,15 @@ public class AhududuNotifyService extends Service {
 
         return new NotificationCompat.Builder(this, SERVICE_CHANNEL_ID)
                 .setContentTitle("Ahududu")
-                .setContentText("Bağlıyız 💞")
+                .setContentText("Bildirimler açık")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
+                .setSilent(true)
                 .setShowWhen(false)
+                .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_MIN)
+                // Kilit ekranında hiç görünmesin, tepsideyse en altta sessiz dursun.
+                .setVisibility(NotificationCompat.VISIBILITY_SECRET)
                 .setContentIntent(pending)
                 .build();
     }
@@ -207,6 +298,9 @@ public class AhududuNotifyService extends Service {
                 SERVICE_CHANNEL_ID, "Bağlı kal", NotificationManager.IMPORTANCE_MIN);
         serviceChannel.setDescription("Sen uygulamada değilken de seni haberdar eder");
         serviceChannel.setShowBadge(false);
+        serviceChannel.setSound(null, null);
+        serviceChannel.enableVibration(false);
+        serviceChannel.setLockscreenVisibility(NotificationCompat.VISIBILITY_SECRET);
         manager.createNotificationChannel(serviceChannel);
 
         NotificationChannel messageChannel = new NotificationChannel(
