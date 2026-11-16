@@ -133,6 +133,16 @@ Sohbet sekmesinde alt bar mesaj yazma alanının hemen altına yapışır.
 
 ### 12. 🏗️ Altyapı ve Dağıtım
 
+### Telefona Yeni APK Kurma (sadece native değişiklikte gerekir)
+Telefonda **Kablosuz hata ayıklama** açıkken, aynı Wi-Fi ağında:
+`ash
+python deploy/install_apk.py                      # kayıtlı adresi dener
+python deploy/install_apk.py --serial 192.168.2.x:PORT   # port değiştiyse
+`
+Script cihazı bulur, Ahududu.apk dosyasını kurar ve uygulamayı açar.
+Cihaz bağlanamazsa ekrandaki IP:port ile tekrar çalıştırılır (port her
+yeniden bağlanmada değişebilir).
+
 ### Raspberry Pi 5 & CasaOS
 - **Port:** `33470` (API, WebSocket ve Web arayüzü tek porttan sunulur).
 - **Veritabanı:** Raspberry Pi 5 üzerindeki yerel PostgreSQL (`ahududu` veritabanı).
