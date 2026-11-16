@@ -196,3 +196,51 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* ------------------------------------------------------------------
+   Sohbet (WhatsApp benzeri tam ekran düzen)
+   ------------------------------------------------------------------ */
+
+/* Mesaj listesi zemini: kremsi romantik tuval + çok hafif nokta dokusu */
+.chat-canvas {
+  background-color: #fffbfd;
+  background-image:
+    radial-gradient(rgba(190, 24, 93, 0.045) 1px, transparent 1px),
+    radial-gradient(ellipse at 90% 0%, rgba(251, 207, 232, 0.35), transparent 55%),
+    radial-gradient(ellipse at 5% 100%, rgba(253, 242, 248, 0.9), transparent 60%);
+  background-size: 18px 18px, 100% 100%, 100% 100%;
+}
+
+/* Kayıt sırasında oynayan dalga çubukları */
+@keyframes chatWave {
+  0%, 100% { transform: scaleY(0.55); opacity: 0.75; }
+  50% { transform: scaleY(1.25); opacity: 1; }
+}
+.chat-wave__bar {
+  transform-origin: center bottom;
+  animation-name: chatWave;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+/* Kayıt noktası: yumuşak nefes alan kırmızı ışık */
+@keyframes chatRecPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.82); }
+}
+.chat-rec-dot {
+  animation: chatRecPulse 1.05s ease-in-out infinite;
+}
+
+/* Dokunmatik yüzeyde jest kaybolmasın (mikrofon basılı tutma) */
+.touch-none-xy {
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-wave__bar,
+  .chat-rec-dot {
+    animation: none;
+  }
+}

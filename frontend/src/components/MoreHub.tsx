@@ -67,31 +67,14 @@ export const MoreHub: React.FC<MoreHubProps> = ({ currentUserId, onOpenCinema, o
             </div>
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-[9px] font-bold tracking-[0.28em] text-amber-300/80 uppercase">
-              Büyük Güncelleme
-            </p>
             <h3 className="font-serif text-base font-bold text-white leading-tight">
               Sinema Salonumuz 🎬
             </h3>
-            <p className="text-[11px] text-white/70 mt-0.5 leading-snug">
-              Her siteden video · telefon yatay · ikiniz birlikte, aynı saniyede
-            </p>
           </div>
           <div className="shrink-0 flex flex-col items-center gap-1 text-amber-200">
             <Clapperboard className="w-5 h-5" />
             <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </div>
-        </div>
-
-        <div className="relative flex items-center gap-1.5 mt-2 ml-[68px]">
-          {['🎟️ Bilet al', '📱 Yatay mod', '💞 Karakterlerin'].map((t) => (
-            <span
-              key={t}
-              className="text-[9px] font-semibold px-2 py-0.5 rounded-full bg-white/10 text-white/75"
-            >
-              {t}
-            </span>
-          ))}
         </div>
       </button>
 
@@ -135,10 +118,10 @@ export const MoreHub: React.FC<MoreHubProps> = ({ currentUserId, onOpenCinema, o
             <MapPin className="w-5 h-5 text-berry-500 shrink-0" />
             <span className="min-w-0 text-left">
               <span className="block font-serif text-sm font-bold text-berry-950">
-                Çift Radarı
+                Neredeyiz?
               </span>
               <span className="block text-[10px] text-stone-500 truncate">
-                Aradaki mesafe, konum ve pil durumu
+                Aramızdaki mesafe ve son konumumuz
               </span>
             </span>
           </span>

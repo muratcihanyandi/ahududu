@@ -29,7 +29,9 @@ Ahududu, standart şablon veya yapay zeka jeneriği (AI-slop) arayüzlerden tama
 ## 5. İkonografi ve Mikro Etkileşimler
 - Lucide Icons (özel yuvarlatılmış ve pembe-ahududu tonlarında renklendirilmiş)
 - Canlı mühür kırma, uçuşan minik kalpler, S-Pen basınç eğrisi yumuşatması
-- Yüzen navigasyon çubuğu (Pill bar): Biz, Mektuplar, **Anlar**, Sohbet, Radar + sağ üstte 🎬 Sinema kısayolu
+- Yüzen navigasyon çubuğu (Pill bar): Ana sayfa, Mektuplar, Sohbet, Bahçe, Anılar.
+  Sohbet ekranında bar yüzen değil, mesaj yazma alanına **yapışık** tam genişlik bar olur.
+- Bildirimler: uygulama kapalıyken de gelen mesajlar için native arka plan servisi.
 
 ## 6. Yeni Modüllerin Görsel Dili
 

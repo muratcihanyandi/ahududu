@@ -740,11 +740,6 @@ const ShowtimeDetail: React.FC<{
                   <Ticket className="w-3.5 h-3.5" />
                   Biletler
                 </div>
-                {show.ticket_code && (
-                  <span className="text-[9px] font-mono font-bold text-amber-200 bg-black/40 px-1.5 py-0.5 rounded border border-amber-400/20">
-                    {show.ticket_code}
-                  </span>
-                )}
               </div>
               <div className="flex items-center gap-2 mt-2">
                 {[USERS[currentUserId], USERS[partnerId]].map((u, i) => {
@@ -892,18 +887,15 @@ const ShowtimeComposer: React.FC<{
 
           <div>
             <label className="text-[11px] font-semibold text-amber-100/70 flex items-center gap-1">
-              <Link2 className="w-3 h-3" /> Video bağlantısı (site)
+              <Link2 className="w-3 h-3" /> Video bağlantısı
             </label>
             <textarea
               value={videoUrl}
               onChange={(e) => setVideoUrl(e.target.value)}
               rows={2}
-              placeholder="Film sayfasının adresi (YouTube, film siteleri...)"
+              placeholder="Film bağlantısı"
               className="w-full px-3 py-2 mt-1 rounded-xl bg-black/40 border border-amber-400/25 text-xs text-amber-50 placeholder:text-amber-100/30 resize-none focus:outline-none focus:ring-2 focus:ring-amber-400"
             />
-            <p className="text-[10px] text-amber-100/40 mt-1">
-              Film sitesinden link yapıştır, filmi biz bulup perdeye koyalım
-            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-2">

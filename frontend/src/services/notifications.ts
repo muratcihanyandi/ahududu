@@ -1,14 +1,19 @@
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor } from '@capacitor/core';
+import { nativeNotificationsActive } from './nativeNotify';
 
 /**
  * Bildirim servisi
  * ----------------
- * Uygulama ön plandayken mesajlar WebSocket'ten gelir ve sohbet ekranı
- * kendini günceller. Sorun, uygulama ARKA PLANDA ya da ekran kapalıyken:
- * Android WebView'in WS bağlantısını öldürür, dolayısıyla mesaj gelince
- * hiçbir bildirim çıkmaz. Bu servis yerel bildirim kanalını kurar ve
- * gelen her mesajı sistem bildirimi olarak gösterir.
+ * İki yol var:
+ *
+ *  1. NATIVE (Android kabuğu): `AhududuNotifyService` arka planda kendi
+ *     WebSocket'ini açık tutar ve mesaj geldiğinde sistem bildirimini gösterir.
+ *     Uygulama kapalıyken de çalışır. Bu yüzden native'de burada AYRICA yerel
+ *     bildirim göstermiyoruz — yoksa aynı mesaj iki kez bildirilir.
+ *
+ *  2. WEB (tarayıcı): Uygulama arka plandayken WebSocket ölür; bu yüzden
+ *     tarayıcının kendi Notification API'si kullanılır (izin varsa).
  */
 
 /** Android 8+ zorunlu: bildirim kanalı (önem derecesi burada belirlenir). */
@@ -24,9 +29,30 @@ const isNative = (): boolean => {
   }
 };
 
-/** Bir kez çalışır: izin ister ve bildirim kanalını oluşturur. */
-export async function initNotifications(): Promise<boolean> {
-  if (!isNative() || ready) return ready;
+/**
+ * Bir kez çalışır: izin ister ve bildirim kanalını oluşturur.
+ *
+ * NATIVE NOT: Bu fonksiyon native bildirim servisini BAŞLATMAZ; servis
+ * App.tsx içinde ayrıca `startNativeNotifications(userId)` ile başlatılır.
+ * Burada yalnızca yerel bildirim izni/kanalı hazırlanır. Native servis zaten
+ * ayaktaysa bildirimi O gösterir; o durumda yerel kanal şart değildir.
+ */
+export async function initNotifications(userId?: string): Promise<boolean> {
+  // `userId` geriye dönük uyumluluk için duruyor; servisi App.tsx başlatıyor.
+  void userId;
+  if (!isNative()) return ready;
+
+  // Native ön plan servisi çalışıyorsa bildirim sorumluluğu tamamen serviste.
+  try {
+    if (await nativeNotificationsActive()) {
+      ready = true;
+      return true;
+    }
+  } catch {
+    /* yok say */
+  }
+
+  if (ready) return true;
   try {
     const perm = await LocalNotifications.checkPermissions();
     let granted = perm.display === 'granted';
@@ -82,6 +108,15 @@ export async function notifyMessage(opts: {
       /* yok say */
     }
     return;
+  }
+
+  // Native bildirim servisi çalışıyorsa bildirimi O gösterir (çift bildirim yok).
+  try {
+    if (await nativeNotificationsActive()) {
+      return;
+    }
+  } catch {
+    /* yok say */
   }
 
   try {

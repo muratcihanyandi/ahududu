@@ -1,5 +1,7 @@
 package com.ahududu.app;
 
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -14,10 +16,16 @@ import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+
+    /** Bildirime dokunularak açıldıysa web tarafına "sohbeti aç" bilgisini taşır. */
+    public static final String EXTRA_OPEN_CHAT = "ahududu_open_chat";
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // Sinema Salonu'nun yatay modu ve tam ekran desteği için kendi eklentimiz.
         registerPlugin(OrientationPlugin.class);
+        // Uygulama kapalıyken bildirim: native servis köprüsü.
+        registerPlugin(NotificationsBridgePlugin.class);
         super.onCreate(savedInstanceState);
 
         // Configure WebView to ensure zero-reinstall instant updates
@@ -32,6 +40,8 @@ public class MainActivity extends BridgeActivity {
             settings.setMediaPlaybackRequiresUserGesture(false);
         }
 
+        handleNotificationIntent(getIntent());
+
         // ------------------------------------------------------------------
         // Geri tuşu: uygulamadan çıkmasın.
         // Açık bir pencere (mektup, sinema, sohbet...) varsa önce onu kapat,
@@ -43,6 +53,30 @@ public class MainActivity extends BridgeActivity {
                 handleBackNavigation();
             }
         });
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleNotificationIntent(intent);
+    }
+
+    /**
+     * Bildirime dokunulduysa "bekleyen sohbet isteği" bayrağını yazar.
+     * Web tarafı uygulama görünür olunca bu bayrağı okuyup sohbeti açar.
+     */
+    private void handleNotificationIntent(Intent intent) {
+        if (intent == null) return;
+        if (!intent.getBooleanExtra(EXTRA_OPEN_CHAT, false)) return;
+        try {
+            SharedPreferences prefs = getSharedPreferences(
+                    AhududuNotifyService.PREFS, MODE_PRIVATE);
+            prefs.edit().putBoolean(AhududuNotifyService.KEY_PENDING_CHAT, true).apply();
+        } catch (Exception ignored) {
+            // yok say
+        }
+        intent.removeExtra(EXTRA_OPEN_CHAT);
     }
 
     /** Web tarafındaki navigasyon köprüsüne geri tuşu bilgisini iletir. */
@@ -72,8 +106,49 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        AhududuNotifyService.appForeground = true;
         if (getBridge() != null && getBridge().getWebView() != null) {
             getBridge().getWebView().getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
+        }
+        // Bildirim servisi ayakta kalsın (kullanıcı daha önce giriş yaptıysa).
+        try {
+            SharedPreferences prefs = getSharedPreferences(
+                    AhududuNotifyService.PREFS, MODE_PRIVATE);
+            String userId = prefs.getString(AhududuNotifyService.KEY_USER_ID, null);
+            if (userId != null && !userId.isEmpty()) {
+                AhududuNotifyService.start(this);
+            }
+        } catch (Exception ignored) {
+            // yok say
+        }
+        // Bekleyen bildirim dokunuşu varsa web tarafına hatırlat.
+        try {
+            SharedPreferences prefs = getSharedPreferences(
+                    AhududuNotifyService.PREFS, MODE_PRIVATE);
+            if (prefs.getBoolean(AhududuNotifyService.KEY_PENDING_CHAT, false)) {
+                notifyWebOpenChat();
+            }
+        } catch (Exception ignored) {
+            // yok say
+        }
+    }
+
+    @Override
+    public void onPause() {
+        AhududuNotifyService.appForeground = false;
+        super.onPause();
+    }
+
+    /** Web tarafında bekleyen "sohbeti aç" isteğini işaret eder. */
+    private void notifyWebOpenChat() {
+        try {
+            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+            if (webView == null) return;
+            webView.evaluateJavascript(
+                    "try{window.dispatchEvent(new Event('ahududu:open-chat'));}catch(e){}",
+                    null);
+        } catch (Exception ignored) {
+            // yok say
         }
     }
 

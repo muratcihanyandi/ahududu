@@ -67,7 +67,10 @@ Murat ve Sevgilisi için özel olarak geliştirilmiş, romantik, samimi ve tekni
 - **Zorla giriş yok:** Partner film başlattığında karşı taraf otomatik salona **sokulmaz**; "Katıl" daveti görünür.
   Katılırsan aynı saniyeden devam edersin.
 - **Senkron izleme:** Oynat / duraklat / 10 sn ileri-geri / sarma anında karşı tarafa yansır.
-  Sunucu konumu 2 saniyede bir kaydeder; ölçülen fark ~0.16 sn.
+  Sunucu konumu kaydeder; iki taraf arasındaki ağ gecikmesi ölçülüp telafi edilir.
+- **YouTube ve Vimeo da senkron:** YouTube IFrame oynatıcı API'si ile gömülü videolar da
+  oynat/duraklat/sarma komutlarını iki tarafta aynı saniyede uygular. (watchparty/WatchSync
+  yaklaşımı: kademeli düzeltme, sarma bekleme süresi, kendi komutunun yankısını yutma.)
 - **Fullscreen:** Salonda "⤢ Tam ekran" ile perde tüm ekranı kaplar; telefon otomatik yataya döner.
 - **Salona giriş bildirimi:** Partnerin sinemaya girdiğinde anında bildirim alırsın; Ahududu durumu otomatik
   **"Sinemada 🍿"** olur, çıkınca eski durumuna döner.
@@ -84,20 +87,36 @@ My Bibi uygulamasından ilham alınan çift ritüelleri — hepsi **DEMO** etike
 
 ### 8. 🧭 Navigasyon
 Alt bar **her zaman 5 tuş**: **Ana sayfa · Mektuplar · Sohbet · Bahçe · Anılar**.
-Sinema ve Çift Radarı ana sayfadaki hızlı erişim kartlarından ve "Anılar" sekmesinden açılır.
+Sinema ve **Neredeyiz?** ana sayfadaki hızlı erişim kartlarından ve "Anılar" sekmesinden açılır.
+Sohbet sekmesinde alt bar mesaj yazma alanının hemen altına yapışır.
 
-### 9. 💬 Çift Sohbeti
+### 9. 💬 Çift Sohbeti (tam ekran, WhatsApp düzeni)
+- **Kart değil, tam ekran:** Konuşma alanı uygulamanın tamamını kaplar. Başlık en üstte
+  Ahududu başlığına, mesaj yazma alanı en altta navigasyon barına **yapışıktır**;
+  yalnızca mesaj listesi kayar.
 - Anlık mesajlaşma, fotoğraf, video ve sesli mesaj paylaşımı.
-- Sohbet ekranı sabittir: başlık ve mesaj yazma alanı oynamaz, yalnızca mesajlar kayar.
-- **Bildirimler:** Uygulama başka bir sekmedeyken/arka plandayken gelen her mesaj sistem
-  bildirimi olarak düşer; alt barda **Sohbet** sayacı görünür.
-- **Sesli mesaj:** Yazı yokken mikrofon düğmesi, yazmaya başlayınca Gönder düğmesine dönüşür (WhatsApp gibi).
-- **En altta açılır:** Sohbet her açıldığında doğrudan son mesajla açılır.
+- **Sesli mesaj (iki mod):**
+  - **Basılı tut → bırak:** WhatsApp gibi kayıt alınır, bırakınca kendiliğinden gönderilir.
+  - **Tek dokunuş:** Kayıt başlar; süre sayacı, çöp (iptal) ve gönder düğmesi çıkar.
+  - Kayıt sırasında sola sürükleyip bırakırsan kayıt iptal edilir.
+- **Bildirimler:** Uygulama kapalıyken/arka plandayken gelen her mesaj telefona sistem
+  bildirimi olarak düşer (aşağıdaki bildirim bölümüne bak). Sohbet açıkken bildirim çıkmaz.
+- **En altta açılır:** Sohbet her açıldığında doğrudan son mesajla açılır; kısa konuşmalar
+  da konuşma alanının altına yaslanır.
 
-### 10. 🧭 Çift Radarı & Mesafe Takibi
+### 9b. 🔔 Uygulama Kapalıyken Bildirim
+- Telefonda arka planda çalışan küçük bir bildirim servisi vardır; bağlantıyı açık tutar.
+- **Uygulama tamamen kapalıyken bile** gelen mesaj, mektup, an, sinema daveti, bilet,
+  ilgi çağrısı ve bahçe olayları telefonun bildirim tepsisine düşer.
+- Bildirime dokununca uygulama açılır ve doğrudan sohbet gelir.
+- Uygulama ekrandayken gereksiz bildirim gösterilmez.
+- Telefon yeniden başladığında servis kendiliğinden geri gelir.
+
+### 10. 🧭 Neredeyiz? — Mesafe Takibi
 - Aranızdaki gerçek mesafeyi kilometre cinsinden gösterir ("Aramızda 3.2 km var 💕").
 - Her iki telefonun pil durumu ve şarj bilgisi.
 - "Yanına Yol Tarifi Al" tek tık Google Maps bağlantısı.
+- (Eski adı "Çift Radarı" idi; uygulamada artık **Neredeyiz?** olarak görünür.)
 - "Telefonunu Titret" uzaktan titreşim tetikleyici.
 
 ### 11. 🔄 Sıfır Yeniden Kurulum (Otomatik Güncelleme)

@@ -12,16 +12,6 @@ interface GardenViewProps {
   currentUserId: UserId;
 }
 
-/** "demo" etiketi — My Bibi'den ilham alınan yeni ritüeller */
-const DemoBadge: React.FC<{ title?: string }> = ({ title }) => (
-  <span
-    title={title || 'Bu özellik demo sürümündedir, geliştirmeye açık.'}
-    className="shrink-0 text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white shadow-xs"
-  >
-    DEMO
-  </span>
-);
-
 type MoodKey = 'sunny' | 'cloudy' | 'rainy' | 'storm' | 'night';
 
 const MOOD_OPTIONS: { id: MoodKey; emoji: string; label: string; color: string }[] = [
@@ -157,11 +147,7 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
             <div className="flex items-center gap-2">
               <Flower2 className="w-5 h-5 text-emerald-200" />
               <h2 className="font-serif text-lg font-bold">Anı Bahçemiz</h2>
-              <DemoBadge title="My Bibi ilhamıyla eklenen yeni ritüeller — demo sürüm" />
             </div>
-            <p className="text-[11px] text-white/80 mt-0.5">
-              Her gün bir soru, bir hatıra, bir şarkı… yavaş yavaş büyüyen bahçe
-            </p>
           </div>
         </div>
 
@@ -189,7 +175,6 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
             <Sparkles className="w-4 h-4 text-amber-500" />
             Günün Sorusu
           </h3>
-          <DemoBadge />
         </div>
 
         {question ? (
@@ -271,7 +256,6 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
             <Sun className="w-4 h-4 text-amber-500" />
             Bugünkü Havam
           </h3>
-          <DemoBadge />
         </div>
         <p className="text-[10px] text-stone-500 mb-2">
           Bugün içindeki hava nasıl? {partnerMoodEmoji ? `${nameOf(partnerId)}: ${partnerMoodEmoji}` : ''}
@@ -317,7 +301,6 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
             Zaman Kapsülleri
           </h3>
           <div className="flex items-center gap-1.5">
-            <DemoBadge />
             <button
               onClick={() => {
                 setCapsuleComposer(true);
@@ -391,7 +374,6 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
             Bizim Şarkılarımız
           </h3>
           <div className="flex items-center gap-1.5">
-            <DemoBadge />
             <button
               onClick={() => {
                 setSongComposer(true);
@@ -449,7 +431,6 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
             <Clock className="w-4 h-4 text-sky-500" />
             Yıllar Önce Bugün
           </h3>
-          <DemoBadge />
         </div>
 
         {!onThisDay || onThisDay.count === 0 ? (
@@ -613,7 +594,6 @@ const CapsuleComposer: React.FC<{
           <div className="flex items-center gap-2">
             <Lock className="w-5 h-5" />
             <h3 className="font-serif text-base font-bold">Zaman Kapsülü Mühürle</h3>
-            <DemoBadge />
           </div>
           <button onClick={onClose} className="p-1.5 rounded-full hover:bg-white/20">
             <X className="w-5 h-5" />
@@ -701,7 +681,6 @@ const SongComposer: React.FC<{
           <div className="flex items-center gap-2">
             <Music className="w-5 h-5" />
             <h3 className="font-serif text-base font-bold">Şarkı Ekle</h3>
-            <DemoBadge />
           </div>
           <button onClick={onClose} className="p-1.5 rounded-full hover:bg-white/20">
             <X className="w-5 h-5" />

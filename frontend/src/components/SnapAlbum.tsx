@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Camera, X, Send, Trash2, Eye, Sparkles, Clock, Play, Pause,
-  ChevronLeft, ChevronRight, Heart, RefreshCw,
+  ChevronLeft, ChevronRight, Heart, RefreshCw, Loader2, ImagePlus,
 } from 'lucide-react';
 import { SnapStory, SnapFeed, UserId, USERS, partnerOf, nameOf } from '../types';
 import { api, mediaUrl } from '../services/api';
@@ -60,10 +60,68 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
   const [viewerList, setViewerList] = useState<SnapStory[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [reactionBurst, setReactionBurst] = useState<{ key: number; emoji: string } | null>(null);
+  const [isQuickPosting, setIsQuickPosting] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
 
   const showToast = useCallback((text: string) => {
     setToast(text);
     window.setTimeout(() => setToast(null), 2600);
+  }, []);
+
+  /** Kameradan/galeriden gelen anı beklemeden, doğrudan paylaş. */
+  const quickShare = useCallback(
+    async (file: File) => {
+      setIsQuickPosting(true);
+      playHaptic(HAPTIC_PATTERNS.attention);
+      try {
+        const upload = await api.uploadMedia(file, 'snaps');
+        const created = await api.createSnap({
+          sender: currentUserId,
+          media_url: upload.url,
+          media_type: file.type.startsWith('video') ? 'video' : 'image',
+          mood: 'mutlu',
+          duration: 5,
+        });
+        setSnaps((prev) => [created, ...prev.filter((s) => s.id !== created.id)]);
+        soundEngine.playLoveChime();
+        playHaptic(HAPTIC_PATTERNS.butterfly);
+        showToast('Anın paylaşıldı 💌');
+        api.getSnapFeed(currentUserId).then(setFeed).catch(() => {});
+      } catch (e) {
+        console.error(e);
+        showToast('Anı paylaşamadık, tekrar dener misin?');
+      } finally {
+        setIsQuickPosting(false);
+      }
+    },
+    [currentUserId, showToast]
+  );
+
+  const handleQuickPick = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      e.target.value = '';
+      // Kamera iptal edildiyse hiçbir uyarı gösterme.
+      if (!f) return;
+      quickShare(f);
+    },
+    [quickShare]
+  );
+
+  const openCamera = useCallback(() => {
+    playHaptic(25);
+    cameraInputRef.current?.click();
+  }, []);
+
+  const openGallery = useCallback(() => {
+    playHaptic(20);
+    galleryInputRef.current?.click();
+  }, []);
+
+  const openDressUp = useCallback(() => {
+    playHaptic(25);
+    setShowComposer(true);
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -155,6 +213,23 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
 
   return (
     <div className="flex flex-col space-y-4">
+      {/* Kamera birincil: dokununca doğrudan açılır, çekilen an hemen paylaşılır */}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleQuickPick}
+        className="hidden"
+      />
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*,video/*"
+        onChange={handleQuickPick}
+        className="hidden"
+      />
+
       {/* Canlı özet kartı */}
       <div className="relative overflow-hidden rounded-3xl p-4 bg-gradient-to-br from-berry-600 via-rose-500 to-amber-400 shadow-lg shadow-berry-500/20 text-white">
         <div className="absolute -top-10 -right-8 w-32 h-32 rounded-full bg-white/15 blur-xl" />
@@ -168,14 +243,16 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
             </p>
           </div>
           <button
-            onClick={() => {
-              setShowComposer(true);
-              playHaptic(25);
-            }}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-white/95 text-berry-700 text-xs font-bold shadow-md active:scale-95 transition-all"
+            onClick={openCamera}
+            disabled={isQuickPosting}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-white/95 text-berry-700 text-xs font-bold shadow-md active:scale-95 transition-all disabled:opacity-70"
           >
-            <Camera className="w-4 h-4" />
-            An Paylaş
+            {isQuickPosting ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Camera className="w-4 h-4" />
+            )}
+            {isQuickPosting ? 'Paylaşılıyor…' : 'An Paylaş'}
           </button>
         </div>
 
@@ -212,6 +289,27 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
         </div>
       </div>
 
+      {/* İkincil seçenekler: galeri ve süsleme (kamera her zaman birincil) */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={openGallery}
+          disabled={isQuickPosting}
+          title="Galeriden seç, anında paylaş"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/85 backdrop-blur-md border border-rose-100 text-berry-800 text-[11px] font-semibold shadow-xs active:scale-95 disabled:opacity-60"
+        >
+          <ImagePlus className="w-3.5 h-3.5" />
+          Galeriden
+        </button>
+        <button
+          onClick={openDressUp}
+          title="Filtre ve duygu ekle"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/85 backdrop-blur-md border border-rose-100 text-berry-800 text-[11px] font-semibold shadow-xs active:scale-95"
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          Süsle
+        </button>
+      </div>
+
       {/* Halkalar: kimin anları */}
       <div className="flex items-center gap-3 overflow-x-auto pb-1">
         <SnapRing
@@ -220,7 +318,8 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
           count={mySnaps.length}
           hasNew={mySnaps.some((s) => !s.is_seen)}
           isMine
-          onClick={() => openViewer(mySnaps)}
+          onClick={openCamera}
+          onLongPress={() => openViewer(mySnaps)}
         />
         <SnapRing
           label={nameOf(partnerId)}
@@ -332,7 +431,7 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
       </div>
 
       {toast && (
-        <div className="fixed left-1/2 -translate-x-1/2 top-20 z-[70] px-4 py-2 rounded-2xl bg-berry-900/90 text-white text-xs font-semibold shadow-xl animate-[fadeIn_0.25s_ease-out]">
+        <div className="fixed left-1/2 -translate-x-1/2 top-24 z-[80] max-w-[90%] px-4 py-2 rounded-2xl bg-berry-900/95 text-white text-xs font-semibold shadow-xl text-center animate-[fadeIn_0.25s_ease-out]">
           {toast}
         </div>
       )}
@@ -396,12 +495,52 @@ const SnapRing: React.FC<{
   hasNew: boolean;
   isMine?: boolean;
   onClick: () => void;
-}> = ({ label, avatar, count, hasNew, isMine, onClick }) => (
-  <button
-    onClick={onClick}
-    aria-label={`${label} anları`}
-    className="flex flex-col items-center gap-1.5 shrink-0 active:scale-95 transition-transform"
-  >
+  /** Uzun basış: kendi anlarını gör (kamera yerine) */
+  onLongPress?: () => void;
+}> = ({ label, avatar, count, hasNew, isMine, onClick, onLongPress }) => {
+  const longPressTimer = useRef<number | null>(null);
+  const longPressFired = useRef(false);
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimer.current !== null) {
+      window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => cancelLongPress, [cancelLongPress]);
+
+  const handlePointerDown = () => {
+    if (!onLongPress) return;
+    longPressFired.current = false;
+    cancelLongPress();
+    longPressTimer.current = window.setTimeout(() => {
+      longPressFired.current = true;
+      playHaptic(35);
+      onLongPress();
+    }, 550);
+  };
+
+  const handleClick = () => {
+    // Uzun basış zaten işini yaptıysa art arda kamera açma.
+    if (longPressFired.current) {
+      longPressFired.current = false;
+      return;
+    }
+    onClick();
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      onPointerDown={handlePointerDown}
+      onPointerUp={cancelLongPress}
+      onPointerLeave={cancelLongPress}
+      onPointerCancel={cancelLongPress}
+      onContextMenu={(e) => e.preventDefault()}
+      aria-label={isMine ? 'Sen, kamerayı aç' : `${label} anları`}
+      className="flex flex-col items-center gap-1.5 shrink-0 active:scale-95 transition-transform"
+    >
     <div
       className={`relative w-16 h-16 rounded-full p-[3px] ${
         hasNew
@@ -426,8 +565,9 @@ const SnapRing: React.FC<{
       )}
     </div>
     <span className="text-[10px] font-semibold text-berry-900">{label}</span>
-  </button>
-);
+    </button>
+  );
+};
 
 /* ------------------------------------------------------------------ */
 /* Paylaşım ekranı                                                     */

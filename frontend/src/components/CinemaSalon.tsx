@@ -12,13 +12,14 @@ import { wsClient } from '../services/websocket';
 import { updates } from '../services/updates';
 import { playHaptic, soundEngine, HAPTIC_PATTERNS } from '../services/haptics';
 import { CinemaCalendar } from './CinemaCalendar';
+import { CinemaStage } from './CinemaStage';
 import {
   PlaybackState, SyncMessage, expectedPosition, clampPosition,
-  shouldCorrect, formatTime,
+  shouldCorrect, formatTime, LatencyProbe,
 } from '../services/cinemaSync';
 
 /* ------------------------------------------------------------------ */
-/* Yatay mod eklentisi                                                 */
+/* Yon (yatay) kilidi eklentisi                                       */
 /* ------------------------------------------------------------------ */
 
 interface OrientationPlugin {
@@ -36,7 +37,7 @@ const enterCinemaFullscreen = async (): Promise<boolean> => {
       await NativeOrientation.lockLandscape();
     }
   } catch (e) {
-    console.warn('Yatay mod kilidi uygulanamadı', e);
+    console.warn('Yön kilidi uygulanamadı', e);
   }
 
   // Chrome / WebView tam ekran API'si
@@ -70,7 +71,7 @@ const exitCinemaFullscreen = async () => {
       await NativeOrientation.unlock();
     }
   } catch (e) {
-    console.warn('Yatay mod serbest bırakılamadı', e);
+    console.warn('Yön kilidi kaldırılamadı', e);
   }
 };
 
@@ -591,6 +592,8 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     isPlaying: false,
     duration: 0,
   });
+  /** Ağ gecikmesi (ms): ping/pong turuyla ölçülür, senkron telafisinde kullanılır. */
+  const latencyMsRef = useRef(120);
 
   const lastSyncRef = useRef<number>(0);
   const roomRef = useRef<CinemaRoom | null>(null);
@@ -663,6 +666,21 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
       })
       .catch(() => {});
   }, [loadRooms, currentUserId]);
+
+  /* ---------------- Ağ gecikmesi ölçümü (RTT/2 telafisi) ---------------- */
+  useEffect(() => {
+    const probe = new LatencyProbe((message) => wsClient.send(message));
+    const offPong = wsClient.on('pong', () => {
+      const rtt = probe.pong();
+      if (rtt !== null) latencyMsRef.current = probe.latencyMs;
+    });
+    probe.ping();
+    const timer = window.setInterval(() => probe.ping(), 15000);
+    return () => {
+      window.clearInterval(timer);
+      offPong();
+    };
+  }, []);
 
   /* ---------------- WebSocket senkronizasyonu ---------------- */
   useEffect(() => {
@@ -801,7 +819,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     setCurtainOpen(false);
     window.setTimeout(() => setCurtainOpen(true), 60);
 
-    // Yatay + tam ekran
+    // Yön + tam ekran
     await enterCinemaFullscreen();
     try {
       if (Capacitor.isNativePlatform()) {
@@ -1093,6 +1111,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
           broadcastPlayback({ position: playback.position, isPlaying: shouldPlay }, shouldPlay ? 'play' : 'pause')
         }
         onUserSeek={(position) => broadcastPlayback({ position, isPlaying: playback.isPlaying }, 'seek')}
+        latencyMs={latencyMsRef.current}
         onReady={(duration) => {
           setPlayback((prev) => ({ ...prev, duration: duration || prev.duration }));
         }}
@@ -1228,10 +1247,6 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
             {partnerWatching ? '●' : '○'} {nameOf(partnerId)} {partnerWatching ? 'salonda' : 'salonda değil'}
           </span>
         </div>
-        <p className="text-[10px] text-stone-500 mt-1.5">
-          Takvimden bir filme bilet al, seans saatinde salona gir. Telefon otomatik yatay
-          döner; oynat/duraklat her iki tarafta aynı saniyede ilerler.
-        </p>
       </div>
 
       {/* ---- Hızlı link ile izleme (takvimde olmayan video) ---- */}
@@ -1701,6 +1716,8 @@ const CinemaTheater: React.FC<{
   onUserPlayPause: (shouldPlay: boolean) => void;
   onUserSeek: (position: number) => void;
   onReady: (duration: number) => void;
+  /** Ağ gecikmesi (ms) — senkron motoru RTT/2 telafisi için kullanır. */
+  latencyMs?: number;
   onReaction: (emoji: string) => void;
   onLeave: () => void;
   onEnterFullscreen: () => void;
@@ -1718,12 +1735,11 @@ const CinemaTheater: React.FC<{
   onUserPlayPause,
   onUserSeek,
   onReady,
+  latencyMs = 120,
   onReaction,
   onLeave,
   onEnterFullscreen,
 }) => {
-  const isEmbed = room.kind === 'embed' || Boolean(room.embed_url);
-
   /* Geri tuşu / Android geri = salonu kapat */
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -1755,25 +1771,15 @@ const CinemaTheater: React.FC<{
           background: '#050505',
         }}
       >
-        {isEmbed ? (
-          <CinemaEmbed
-            room={room}
-            currentUserId={currentUserId}
-            partnerWatching={partnerWatching}
-            onEnterFullscreen={onEnterFullscreen}
-          />
-        ) : (
-          <CinemaVideo
-            url={room.video_url}
-            roomId={room.id}
-            currentUserId={currentUserId}
-            state={playback}
-            onStateChange={onVideoState}
-            onUserPlayPause={onUserPlayPause}
-            onUserSeek={onUserSeek}
-            onReady={onReady}
-          />
-        )}
+        <CinemaStage
+          room={room}
+          state={playback}
+          onStateChange={onVideoState}
+          onUserPlayPause={onUserPlayPause}
+          onUserSeek={onUserSeek}
+          onReady={onReady}
+          latencyMs={latencyMs}
+        />
 
         {/* Kayan yıldız animasyonu (film başlarken) */}
         {!curtainOpen && <div className="absolute inset-0 bg-black" />}
@@ -1848,12 +1854,6 @@ const CinemaTheater: React.FC<{
         </div>
       )}
 
-      {/* Yatay değilse ipucu */}
-      {!isLandscape && (
-        <div className="absolute left-1/2 -translate-x-1/2 bottom-[12%] z-[14] px-4 py-2 rounded-2xl bg-amber-400/95 text-cinema-950 text-[11px] font-bold shadow-xl animate-pulse">
-          📱 Telefonunu yatay çevir, salon genişlesin
-        </div>
-      )}
 
       {/* Uçan tepkiler */}
       <div className="pointer-events-none absolute inset-0 z-[15] overflow-hidden">

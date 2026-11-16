@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MapPin, Navigation2, Battery, RefreshCw, Vibrate, ExternalLink, Heart } from 'lucide-react';
 import { CoupleStatus, UserId, USERS, partnerOf } from '../types';
 import { api } from '../services/api';
@@ -15,6 +15,17 @@ interface CoupleRadarProps {
 export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partnerName }) => {
   const [status, setStatus] = useState<CoupleStatus | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Panel, "Neredeyiz?" kısayoluna dokununca açılıyor; hemen görünür alana gel.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const timer = window.setTimeout(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     loadStatus();
@@ -100,7 +111,7 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
   };
 
   return (
-    <div className="flex flex-col h-full space-y-4">
+    <div ref={rootRef} className="flex flex-col h-full space-y-4">
       {/* Distance Hero Banner */}
       <div className="bg-gradient-to-r from-berry-600 via-rose-500 to-pink-500 rounded-3xl p-6 text-white text-center shadow-lg shadow-berry-500/20 relative overflow-hidden">
         <div className="absolute top-0 right-0 -mr-6 -mt-6 w-32 h-32 rounded-full bg-white/10 blur-xl pointer-events-none" />
@@ -116,9 +127,9 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
         )}
       </div>
 
-      {/* Radar Map Graphic Card */}
+      {/* Mesafe kartı */}
       <div className="relative bg-white/80 backdrop-blur-md rounded-3xl p-6 border border-rose-100 shadow-sm flex flex-col items-center justify-center min-h-[260px] overflow-hidden">
-        {/* Radar Rings */}
+        {/* Halkalar */}
         <div className="absolute w-56 h-56 rounded-full border border-rose-200/50 animate-ping opacity-25 pointer-events-none" />
         <div className="absolute w-44 h-44 rounded-full border border-rose-200/80 pointer-events-none" />
         <div className="absolute w-28 h-28 rounded-full border border-rose-200/80 pointer-events-none" />

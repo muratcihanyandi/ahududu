@@ -6,6 +6,9 @@ import { wsClient } from './services/websocket';
 import {
   initNotifications, clearAllNotifications, onNotificationTap,
 } from './services/notifications';
+import {
+  startNativeNotifications, consumeOpenChat, clearPendingOpenChat,
+} from './services/nativeNotify';
 import { Navigation, TabType } from './components/Navigation';
 import { LiveStatusWidget } from './components/LiveStatusWidget';
 import { NudgeButton } from './components/NudgeButton';
@@ -138,13 +141,49 @@ export const App: React.FC = () => {
     wsClient.connect(currentUser);
 
     // Bildirim iznini al, kanali kur (yalnizca native kabukta etkili).
-    void initNotifications();
+    // Native servis calisirsa bildirimleri o gosterir (uygulama kapaliyken de).
+    void initNotifications(currentUser);
+    // Uygulama kapaliyken/arka plandayken bildirim: native servis kendi
+    // WebSocket'ini acik tutar, boylece mesaj kacmaz.
+    void startNativeNotifications(currentUser);
+
+    /** Bildirime dokunulduysa sohbeti ac. */
+    const openChatFromNotification = async () => {
+      try {
+        const pending = await consumeOpenChat();
+        if (pending) {
+          setActiveTab('chat');
+          setUnreadChat(0);
+          await clearPendingOpenChat();
+          void clearAllNotifications();
+        }
+      } catch {
+        /* yok say */
+      }
+    };
+    void openChatFromNotification();
+
+    // Uygulama on plana dondugunde bekleyen "sohbeti ac" istegini isle.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void openChatFromNotification();
+    };
+    // Native taraftan (MainActivity) gelen bildirim dokunusu sinyali.
+    const onNativeOpenChat = () => {
+      void openChatFromNotification();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('ahududu:open-chat', onNativeOpenChat);
+
     const offTap = onNotificationTap(() => {
       setActiveTab('chat');
       setUnreadChat(0);
       void clearAllNotifications();
     });
-    return () => offTap();
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('ahududu:open-chat', onNativeOpenChat);
+      offTap();
+    };
   }, [currentUser]);
 
   useEffect(() => {
@@ -439,16 +478,33 @@ export const App: React.FC = () => {
     (l) => !l.is_opened && l.sender !== currentUser
   );
 
+  /**
+   * Sohbet ekranı tam ekran bir dünyadır (WhatsApp gibi):
+   * başlık en üstte, mesaj listesi ortada kayar, yazma alanı en altta
+   * navigasyon barına yapışır. Diğer sekmeler kaydırılabilir sayfa olarak kalır.
+   */
+  const isChatTab = activeTab === 'chat';
+
   return (
     <div
-      className="min-h-screen font-sans select-none"
-      style={{ paddingBottom: 'calc(6rem + var(--safe-bottom, 0px))' }}
+      className={`font-sans select-none ${
+        isChatTab ? 'h-[100dvh] overflow-hidden flex flex-col' : 'min-h-screen'
+      }`}
+      style={
+        isChatTab
+          ? undefined
+          : { paddingBottom: 'calc(6rem + var(--safe-bottom, 0px))' }
+      }
     >
       {/* Live Zero-Reinstall OTA Update Banner */}
       <UpdateBanner />
 
       {/* App Bar / Header */}
-      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-rose-100/80 px-4">
+      <header
+        className={`z-30 shrink-0 bg-white/80 backdrop-blur-md border-b border-rose-100/80 px-4 ${
+          isChatTab ? 'relative' : 'sticky top-0'
+        }`}
+      >
         <div
           className="max-w-md mx-auto flex items-center justify-between py-3"
           style={{ paddingTop: 'calc(var(--safe-top, 0px) + 0.75rem)' }}
@@ -467,7 +523,13 @@ export const App: React.FC = () => {
       </header>
 
       {/* Main Content Body */}
-      <main className="max-w-md mx-auto p-4">
+      <main
+        className={
+          isChatTab
+            ? 'flex-1 min-h-0 w-full max-w-md mx-auto flex flex-col overflow-hidden'
+            : 'max-w-md mx-auto p-4 w-full'
+        }
+      >
         {/* Home Tab */}
         {activeTab === 'home' && (
           <div className="flex flex-col space-y-4">
@@ -551,13 +613,13 @@ export const App: React.FC = () => {
                         ? `${partnerName} sinemada! 🎬`
                         : `Bu akşam: ${tonightCinema?.show_time ?? ''} ${tonightCinema?.title ?? ''}`}
                     </p>
-                    <p className="text-[10px] text-white/65 mt-0.5">
-                      {cinemaPartnerStatus.watching
-                        ? cinemaPartnerStatus.title
+                    {cinemaPartnerStatus.watching && (
+                      <p className="text-[10px] text-white/65 mt-0.5">
+                        {cinemaPartnerStatus.title
                           ? `Şu an izliyor: ${cinemaPartnerStatus.title}`
-                          : 'Sen de katıl, aynı saniyeden başla'
-                        : 'Biletini al, salonu aç'}
-                    </p>
+                          : 'Hazır olduğunda katıl'}
+                      </p>
+                    )}
                   </div>
                   <span className="shrink-0 text-amber-200 text-lg">›</span>
                 </div>
@@ -603,9 +665,6 @@ export const App: React.FC = () => {
                 <span className="block font-serif text-sm font-bold text-berry-950">
                   Bahçede bugün
                 </span>
-                <span className="block text-[10px] text-stone-500 truncate">
-                  Günün sorusu, kapsüller ve şarkılarınız
-                </span>
               </span>
               <ChevronRight className="w-4 h-4 text-stone-400 shrink-0" />
             </button>
@@ -620,9 +679,6 @@ export const App: React.FC = () => {
                 <h2 className="font-serif text-lg font-bold text-berry-950">
                   Mektup Kutumuz 💌
                 </h2>
-                <p className="text-xs text-stone-500">
-                  Kalpten yazılan mektuplar ve el çizimleri
-                </p>
               </div>
 
               <button
@@ -857,7 +913,7 @@ export const App: React.FC = () => {
             {showRadar && (
               <div className="animate-[fadeIn_0.25s_ease-out]">
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-serif text-sm font-bold text-berry-950">Çift Radarı</h3>
+                  <h3 className="font-serif text-sm font-bold text-berry-950">Neredeyiz?</h3>
                   <button
                     onClick={() => setShowRadar(false)}
                     className="text-[11px] font-semibold text-stone-500 px-2.5 py-1 rounded-full bg-white/80 border border-rose-100"
@@ -872,9 +928,11 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {/* Floating Bottom Navigation Bar — her zaman 5 tuş */}
+      {/* Bottom Navigation Bar — her zaman 5 tuş.
+          Sohbette mesaj yazma alanının altına YAPIŞIK, diğer sekmelerde yüzen bar. */}
       <Navigation
         activeTab={activeTab}
+        variant={isChatTab ? 'attached' : 'floating'}
         onChangeTab={(tab) => {
           setActiveTab(tab);
           if (tab === 'chat') setUnreadChat(0);

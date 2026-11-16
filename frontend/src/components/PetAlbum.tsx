@@ -294,7 +294,8 @@ export const PetAlbum: React.FC<PetAlbumProps> = ({ currentUserId }) => {
                       <h4 className="font-serif text-sm font-bold text-white truncate">{pet.name}</h4>
                     </div>
                     <p className="text-[10px] text-white/75 truncate">
-                      {pet.breed || pet.age || (pet.owner === 'bizim' ? 'Bizim dostumuz' : nameOf(pet.owner as UserId))}
+                      💞 Bizim dostumuz
+                      {pet.breed ? ` · ${pet.breed}` : pet.age ? ` · ${pet.age}` : ''}
                     </p>
                   </div>
                 </div>
@@ -485,7 +486,7 @@ const PetDetail: React.FC<{
             {/* Bilgiler */}
             <div className="flex flex-wrap gap-1.5">
               <span className="px-2.5 py-1 rounded-full bg-teal-50 border border-teal-100 text-[10px] font-semibold text-teal-800">
-                {pet.owner === 'bizim' ? '💞 Bizim dostumuz' : `${USERS[pet.owner as UserId]?.emoji} ${nameOf(pet.owner as UserId)}'in dostu`}
+                💞 Bizim dostumuz
               </span>
               {pet.is_favorite && (
                 <span className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-[10px] font-semibold text-amber-800">
@@ -664,7 +665,6 @@ const PetComposer: React.FC<{
   const [category, setCategory] = useState(editing?.category ?? 'kedi');
   const [emoji, setEmoji] = useState(editing?.emoji ?? '🐱');
   const [color, setColor] = useState(editing?.color ?? '#be185d');
-  const [owner, setOwner] = useState<string>(editing?.owner ?? 'bizim');
   const [breed, setBreed] = useState(editing?.breed ?? '');
   const [age, setAge] = useState(editing?.age ?? '');
   const [bio, setBio] = useState(editing?.bio ?? '');
@@ -713,7 +713,7 @@ const PetComposer: React.FC<{
         category,
         emoji,
         color,
-        owner,
+        owner: 'bizim',
         breed: breed.trim() || undefined,
         age: age.trim() || undefined,
         bio: bio.trim() || undefined,
@@ -835,27 +835,13 @@ const PetComposer: React.FC<{
             </div>
           </div>
 
-          {/* Kimin dostu */}
+          {/* Kimin dostu — dostlarımız hep ikimizin */}
           <div>
             <p className="text-[11px] font-semibold text-stone-600 mb-1.5">Kimin dostu?</p>
-            <div className="flex gap-1.5">
-              {[
-                { id: 'bizim', label: '💞 Bizim' },
-                { id: 'murat', label: '🐻 Murat' },
-                { id: 'selin', label: '🌸 Selin' },
-              ].map((o) => (
-                <button
-                  key={o.id}
-                  onClick={() => setOwner(o.id)}
-                  className={`flex-1 py-2 rounded-xl text-[11px] font-bold transition-all ${
-                    owner === o.id
-                      ? 'bg-teal-600 text-white shadow-xs'
-                      : 'bg-teal-50 border border-teal-100 text-stone-600'
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-teal-50 border border-teal-100">
+              <span className="text-base">💞</span>
+              <span className="text-[11px] font-bold text-teal-800">Bizim dostumuz</span>
+              <span className="text-[10px] text-stone-500">— ikimizin de 🐾</span>
             </div>
           </div>
 
