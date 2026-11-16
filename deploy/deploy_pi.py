@@ -1,106 +1,260 @@
+"""Ahududu tek komut dağıtım zinciri.
+
+    python deploy/deploy_pi.py
+
+Sırasıyla:
+  1. Frontend'i derler (npm run build) -> frontend/dist
+  2. dist içeriğini backend/static'e senkronize eder (eski hash'li paketleri temizler)
+  3. Kaynağı Raspberry Pi 5'e yükler, Docker imajını yerinde derler, container'ı yeniler
+  4. Canlı build_id ile yerel index.html'in eşleştiğini doğrular
+
+Telefon uygulaması Pi'deki web arayüzünü yüklediği için bu adımlar sonrasında
+yeni sürüm, APK yeniden kurulmadan istemcilere dağıtılmış olur.
+"""
+
+import argparse
 import os
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
-import paramiko
 import time
+import urllib.error
+import urllib.request
+
+import paramiko
 
 # Ensure safe printing on Windows terminals
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-PI_HOST = "192.168.2.170"
-PI_USER = "murat"
-PI_PASS = "3366"
-PORT = 33470
+PI_HOST = os.getenv("AHUDUDU_PI_HOST", "192.168.2.170")
+PI_USER = os.getenv("AHUDUDU_PI_USER", "murat")
+PI_PASS = os.getenv("AHUDUDU_PI_PASS", "3366")
+PORT = int(os.getenv("AHUDUDU_PORT", "33470"))
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FRONTEND_DIR = os.path.join(ROOT_DIR, "frontend")
+FRONTEND_DIST = os.path.join(FRONTEND_DIR, "dist")
+STATIC_DIR = os.path.join(ROOT_DIR, "backend", "static")
+BUILD_ID_FILE = "build-id.txt"
+
+HEALTH_ATTEMPTS = 20
+HEALTH_DELAY_SECONDS = 3
+
+
+def step(message):
+    print(f"\n=== {message} ===")
+
+
+def run_local(command, cwd=None):
+    print(f"$ {' '.join(command)}")
+    subprocess.run(command, cwd=cwd, check=True, shell=(os.name == "nt"))
+
+
+def build_frontend():
+    step("Frontend derleniyor")
+    npm = shutil.which("npm") or "npm.cmd"
+    run_local([npm, "run", "build"], cwd=FRONTEND_DIR)
+    if not os.path.isfile(os.path.join(FRONTEND_DIST, "index.html")):
+        raise RuntimeError("Frontend derlemesi index.html üretmedi.")
+
+
+def sync_static():
+    step("backend/static senkronize ediliyor")
+    if not os.path.isdir(FRONTEND_DIST):
+        raise RuntimeError("frontend/dist bulunamadı. Önce derleme yapılmalı.")
+
+    assets_dir = os.path.join(STATIC_DIR, "assets")
+    if os.path.isdir(assets_dir):
+        shutil.rmtree(assets_dir)
+
+    os.makedirs(STATIC_DIR, exist_ok=True)
+    for name in os.listdir(FRONTEND_DIST):
+        source = os.path.join(FRONTEND_DIST, name)
+        target = os.path.join(STATIC_DIR, name)
+        if os.path.isdir(source):
+            if os.path.isdir(target):
+                shutil.rmtree(target)
+            shutil.copytree(source, target)
+        else:
+            shutil.copy(source, target)
+
+    # Build kimliği: imaj katmanları dosya zaman damgasını korumadığı için,
+    # kimliği açıkça dosyaya yazıyoruz ve backend onu okuyor.
+    # Aynı saniyedeki iki dağıtımın çakışmaması adına zaman damgasını tazeliyoruz.
+    index_file = os.path.join(STATIC_DIR, "index.html")
+    now = time.time()
+    os.utime(index_file, (now, now))
+
+    build_id = str(int(now))
+    with open(os.path.join(STATIC_DIR, BUILD_ID_FILE), "w", encoding="utf-8") as f:
+        f.write(build_id + "\n")
+
+    asset_count = len(os.listdir(assets_dir)) if os.path.isdir(assets_dir) else 0
+    print(f"index.html ve {asset_count} asset kopyalandı. build_id={build_id}")
+
+
+def local_build_id():
+    build_id_path = os.path.join(STATIC_DIR, BUILD_ID_FILE)
+    if os.path.exists(build_id_path):
+        with open(build_id_path, "r", encoding="utf-8") as f:
+            value = f.read().strip()
+        if value:
+            return value
+
+    index_file = os.path.join(STATIC_DIR, "index.html")
+    return str(int(os.path.getmtime(index_file)))
+
 
 def create_tarball():
     temp_tar = os.path.join(tempfile.gettempdir(), "ahududu_build.tar.gz")
     if os.path.exists(temp_tar):
         os.remove(temp_tar)
-        
-    print(f"Creating build tarball at {temp_tar}...")
-    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
+
+    print(f"Build tarball hazırlanıyor: {temp_tar}")
     with tarfile.open(temp_tar, "w:gz") as tar:
-        tar.add(os.path.join(root_dir, "Dockerfile"), arcname="Dockerfile")
-        tar.add(os.path.join(root_dir, "docker-compose.yml"), arcname="docker-compose.yml")
-        tar.add(os.path.join(root_dir, "backend"), arcname="backend")
-        tar.add(os.path.join(root_dir, "logo"), arcname="logo")
-        
-    print(f"Tarball created successfully ({os.path.getsize(temp_tar) / 1024:.1f} KB).")
+        tar.add(os.path.join(ROOT_DIR, "Dockerfile"), arcname="Dockerfile")
+        tar.add(os.path.join(ROOT_DIR, "docker-compose.yml"), arcname="docker-compose.yml")
+        tar.add(os.path.join(ROOT_DIR, "backend"), arcname="backend")
+        tar.add(os.path.join(ROOT_DIR, "logo"), arcname="logo")
+
+    print(f"Tarball hazır ({os.path.getsize(temp_tar) / 1024:.1f} KB).")
     return temp_tar
 
-def run_ssh_command(ssh, cmd, sudo=False):
+
+def run_ssh_command(ssh, cmd, sudo=False, timeout=1800, check=False):
     if sudo:
         cmd = f"echo '{PI_PASS}' | sudo -S {cmd}"
-    print(f"\n>>> Executing: {cmd}")
-    stdin, stdout, stderr = ssh.exec_command(cmd)
-    
+    print(f"\n>>> {cmd}")
+    stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
+
     out = stdout.read().decode('utf-8', errors='replace')
     err = stderr.read().decode('utf-8', errors='replace')
-    
+    status = stdout.channel.recv_exit_status()
+
     if out:
-        try:
-            print(out.strip())
-        except Exception:
-            print(out.encode('ascii', errors='replace').decode())
+        print(out.strip())
     if err and "Password:" not in err:
-        try:
-            print(f"[ERR] {err.strip()}")
-        except Exception:
-            pass
+        print(f"[ERR] {err.strip()}")
+
+    if check and status != 0:
+        raise RuntimeError(f"Komut başarısız oldu (exit={status}): {cmd}")
     return out
 
-def deploy():
-    print(f"Connecting to Raspberry Pi 5 at {PI_HOST}...")
+
+def deploy_to_pi():
+    step(f"Raspberry Pi 5'e bağlanılıyor ({PI_HOST})")
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=15)
-    print("SSH Connected successfully!")
-    
-    # 1. Create remote directories
-    run_ssh_command(ssh, "mkdir -p /DATA/AppData/ahududu/uploads /DATA/AppData/ahududu/src", sudo=True)
-    run_ssh_command(ssh, "mkdir -p /var/lib/casaos/apps/ahududu", sudo=True)
-    run_ssh_command(ssh, "chown -R murat:murat /DATA/AppData/ahududu /var/lib/casaos/apps/ahududu", sudo=True)
-    
-    # 2. Upload tarball
-    tar_path = create_tarball()
-    print("Uploading tarball via SFTP...")
-    sftp = ssh.open_sftp()
-    remote_tar = "/DATA/AppData/ahududu/build.tar.gz"
-    sftp.put(tar_path, remote_tar)
-    sftp.close()
-    print("Upload complete!")
-    
-    # 3. Extract source on Pi
-    print("Extracting source files...")
-    run_ssh_command(ssh, "tar -xzf /DATA/AppData/ahududu/build.tar.gz -C /DATA/AppData/ahududu/src")
-    
-    # 4. Build Docker container locally on Pi 5 (ARM64 native)
-    print("Building Docker image on Raspberry Pi 5 (native ARM64)...")
-    build_cmd = "docker build -t ghcr.io/muratcihanyandi/ahududu:latest /DATA/AppData/ahududu/src"
-    run_ssh_command(ssh, build_cmd, sudo=False)
-    
-    # 5. Place CasaOS docker-compose.yml
-    print("Configuring CasaOS compose...")
-    run_ssh_command(ssh, "cp /DATA/AppData/ahududu/src/docker-compose.yml /var/lib/casaos/apps/ahududu/docker-compose.yml", sudo=True)
-    
-    # 6. Stop existing container if running & start new one
-    print("Starting Ahududu container...")
-    run_ssh_command(ssh, "docker compose -f /var/lib/casaos/apps/ahududu/docker-compose.yml down", sudo=False)
-    run_ssh_command(ssh, "docker compose -f /var/lib/casaos/apps/ahududu/docker-compose.yml up -d", sudo=False)
-    
-    # 7. Health check
-    time.sleep(4)
-    print("\n--- Running health check ---")
-    health = run_ssh_command(ssh, f"curl -s http://localhost:{PORT}/api/system/version")
-    print(f"Health check response: {health}")
-    
-    ps = run_ssh_command(ssh, "docker ps --filter name=ahududu")
-    print("\nAhududu successfully running on Raspberry Pi 5 under CasaOS!")
-    ssh.close()
+    print("SSH bağlantısı kuruldu.")
+
+    try:
+        run_ssh_command(ssh, "mkdir -p /DATA/AppData/ahududu/uploads /DATA/AppData/ahududu/src", sudo=True)
+        run_ssh_command(ssh, "mkdir -p /var/lib/casaos/apps/ahududu", sudo=True)
+        run_ssh_command(ssh, "chown -R murat:murat /DATA/AppData/ahududu /var/lib/casaos/apps/ahududu", sudo=True)
+
+        tar_path = create_tarball()
+        print("Tarball SFTP ile yükleniyor...")
+        sftp = ssh.open_sftp()
+        sftp.put(tar_path, "/DATA/AppData/ahududu/build.tar.gz")
+        sftp.close()
+        print("Yükleme tamamlandı.")
+
+        step("Kaynak dosyalar açılıyor")
+        run_ssh_command(ssh, "rm -rf /DATA/AppData/ahududu/src && "
+                             "mkdir -p /DATA/AppData/ahududu/src && "
+                             "tar -xzf /DATA/AppData/ahududu/build.tar.gz -C /DATA/AppData/ahududu/src")
+
+        step("Docker imajı Pi 5 üzerinde derleniyor (native ARM64)")
+        run_ssh_command(
+            ssh,
+            "docker build -t ghcr.io/muratcihanyandi/ahududu:latest /DATA/AppData/ahududu/src",
+            timeout=3600,
+            check=True,
+        )
+
+        step("CasaOS compose dosyası güncelleniyor")
+        run_ssh_command(
+            ssh,
+            "cp /DATA/AppData/ahududu/src/docker-compose.yml /var/lib/casaos/apps/ahududu/docker-compose.yml",
+            sudo=True,
+            check=True,
+        )
+
+        step("Container yenileniyor")
+        run_ssh_command(ssh, "docker compose -f /var/lib/casaos/apps/ahududu/docker-compose.yml down")
+        run_ssh_command(
+            ssh,
+            "docker compose -f /var/lib/casaos/apps/ahududu/docker-compose.yml up -d",
+            check=True,
+        )
+    finally:
+        ssh.close()
+
+
+def wait_for_health(expected_build_id):
+    step("Canlı sürüm doğrulanıyor")
+    url = f"http://{PI_HOST}:{PORT}/api/system/version"
+    last_error = None
+
+    for attempt in range(1, HEALTH_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                payload = response.read().decode("utf-8")
+            import json
+            data = json.loads(payload)
+            build_id = str(data.get("build_id", ""))
+            if build_id == expected_build_id:
+                print(f"Build ID eşleşti: {build_id}")
+                print(f"Aktif özellikler: {', '.join(data.get('features', []))}")
+                return True
+            print(f"[{attempt}/{HEALTH_ATTEMPTS}] Sunucu build_id={build_id}, beklenen={expected_build_id}")
+            last_error = f"build_id uyuşmuyor ({build_id} != {expected_build_id})"
+        except (urllib.error.URLError, TimeoutError, ValueError) as e:
+            print(f"[{attempt}/{HEALTH_ATTEMPTS}] Sunucu henüz hazır değil: {e}")
+            last_error = str(e)
+        time.sleep(HEALTH_DELAY_SECONDS)
+
+    print(f"DOĞRULAMA BAŞARISIZ: {last_error}")
+    return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Ahududu build + deploy + doğrulama")
+    parser.add_argument("--skip-build", action="store_true", help="Frontend derlemesini atla")
+    parser.add_argument("--skip-deploy", action="store_true", help="Sadece derle ve static'i senkronize et")
+    parser.add_argument("--verify-only", action="store_true", help="Sadece canlı sürümü doğrula")
+    args = parser.parse_args()
+
+    expected_build_id = local_build_id() if os.path.exists(os.path.join(STATIC_DIR, "index.html")) else ""
+
+    if args.verify_only:
+        if not expected_build_id:
+            raise RuntimeError("Yerel build bulunamadı, doğrulama yapılamaz.")
+        sys.exit(0 if wait_for_health(expected_build_id) else 1)
+
+    if not args.skip_build:
+        build_frontend()
+        sync_static()
+        expected_build_id = local_build_id()
+    elif not expected_build_id:
+        raise RuntimeError("backend/static/index.html bulunamadı.")
+
+    if args.skip_deploy:
+        print(f"\nSadece derleme tamamlandı (build_id={expected_build_id}).")
+        return
+
+    deploy_to_pi()
+
+    if wait_for_health(expected_build_id):
+        print("\nDAĞITIM TAMAMLANDI. Telefon uygulaması yeni sürümü otomatik alacak.")
+    else:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    deploy()
+    main()

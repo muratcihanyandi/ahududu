@@ -5,6 +5,7 @@ from typing import List, Optional
 from backend.app.database import get_db
 from backend.app.models import GalleryItem, now_utc
 from backend.app.schemas import GalleryItemCreate, GalleryItemResponse
+from backend.app.config import settings
 from backend.app.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/api/gallery", tags=["gallery"])
@@ -37,7 +38,7 @@ async def add_gallery_item(payload: GalleryItemCreate, db: AsyncSession = Depend
     await db.refresh(item)
     
     # Broadcast to partner
-    recipient = "sevgilim" if payload.uploader == "murat" else "murat"
+    recipient = settings.partner_of(payload.uploader)
     await ws_manager.send_to_user(recipient, {
         "type": "new_gallery_item",
         "item": {

@@ -22,8 +22,17 @@ class Settings(BaseSettings):
     PORT: int = int(os.getenv("PORT", "33470"))
     
     # Couple Profiles
-    USER_MURAT: str = "murat"
-    USER_GIRLFRIEND: str = "sevgilim"
+    # Two fixed accounts, no "girlfriend/partner" concept: real names only.
+    USER_MURAT: str = os.getenv("AHUDUDU_USER_MURAT", "murat")
+    USER_SELIN: str = os.getenv("AHUDUDU_USER_SELIN", "selin")
+
+    @property
+    def USER_IDS(self) -> tuple[str, str]:
+        return (self.USER_MURAT, self.USER_SELIN)
+
+    def partner_of(self, user_id: str) -> str:
+        """The other person's id. Unknown ids fall back to Murat."""
+        return self.USER_SELIN if user_id == self.USER_MURAT else self.USER_MURAT
 
     class Config:
         env_file = ".env"

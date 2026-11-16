@@ -2,15 +2,15 @@ import json
 import logging
 from typing import Dict, List, Set
 from fastapi import WebSocket
+from backend.app.config import settings
 
 logger = logging.getLogger("ahududu.websocket")
 
 class ConnectionManager:
     def __init__(self):
-        # user_id -> list of active WebSockets (phone, watch, browser)
+        # user_id -> list of active WebSockets (phone, browser)
         self.active_connections: Dict[str, List[WebSocket]] = {
-            "murat": [],
-            "sevgilim": []
+            user_id: [] for user_id in settings.USER_IDS
         }
 
     async def connect(self, websocket: WebSocket, user_id: str):
@@ -21,7 +21,7 @@ class ConnectionManager:
         logger.info(f"User '{user_id}' connected. Total for user: {len(self.active_connections[user_id])}")
         
         # Broadcast online status to partner
-        partner_id = "sevgilim" if user_id == "murat" else "murat"
+        partner_id = settings.partner_of(user_id)
         await self.send_to_user(partner_id, {
             "type": "partner_status",
             "user_id": user_id,
@@ -36,7 +36,7 @@ class ConnectionManager:
         
         # If no more connections for this user, notify partner
         if not self.active_connections.get(user_id):
-            partner_id = "sevgilim" if user_id == "murat" else "murat"
+            partner_id = settings.partner_of(user_id)
             import asyncio
             asyncio.create_task(self.send_to_user(partner_id, {
                 "type": "partner_status",

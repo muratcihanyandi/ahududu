@@ -1,18 +1,53 @@
-from fastapi import APIRouter, Depends, HTTPException
+"""Mektuplar — kalpten yazılan mektup kutusu.
+
+Mektuplar ASLA kaybolmaz: silme işlemi mektubu arşive taşır (soft delete) ve
+her mektup silinmeden önce diske JSON yedeği yazılır. Arayüzdeki "arşiv"
+sekmesi silinmiş mektupları da gösterip geri getirmeye izin verir.
+"""
+
+import logging
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from typing import List
 from backend.app.database import get_db
 from backend.app.models import LoveLetter, now_utc
 from backend.app.schemas import LoveLetterCreate, LoveLetterResponse
+from backend.app.config import settings
 from backend.app.websocket_manager import ws_manager
+from backend.app.services import letter_archive
+
+logger = logging.getLogger("ahududu.letters")
 
 router = APIRouter(prefix="/api/letters", tags=["letters"])
 
+
 @router.get("", response_model=List[LoveLetterResponse])
-async def list_letters(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(LoveLetter).order_by(desc(LoveLetter.created_at)))
-    return result.scalars().all()
+async def list_letters(
+    include_deleted: bool = Query(
+        False,
+        description="Arşivdeki (silinmiş) mektupları da getir. Arayüz varsayılan "
+        "olarak hepsini göstermek için true gönderir.",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mektuplar — varsayılan olarak ARŞİVDEKİLER DAHİL hepsi döner.
+
+    Not: `include_deleted` geriye dönük uyumluluk için var; eşya kaybını
+    önlemek adına hiçbir mektup arayüzden gizlenmez.
+    """
+    query = select(LoveLetter).order_by(desc(LoveLetter.created_at))
+    result = await db.execute(query)
+    letters = result.scalars().all()
+    if letters:
+        # Yedeği olmayan mektuplar için bir kez arşiv al (tekrarlamaz).
+        try:
+            await letter_archive.backfill_letter_backups(letters)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Mektup yedeği alınamadı: %s", exc)
+    return letters
+
 
 @router.post("", response_model=LoveLetterResponse)
 async def create_letter(payload: LoveLetterCreate, db: AsyncSession = Depends(get_db)):
@@ -29,9 +64,12 @@ async def create_letter(payload: LoveLetterCreate, db: AsyncSession = Depends(ge
     db.add(letter)
     await db.commit()
     await db.refresh(letter)
-    
+
+    # Yeni mektup diske de yedeklenir (kalıcı arşiv).
+    letter_archive.backup_letter(letter_archive.letter_to_dict(letter), reason="created")
+
     # Send real-time notification to recipient
-    recipient = "sevgilim" if payload.sender == "murat" else "murat"
+    recipient = settings.partner_of(payload.sender)
     await ws_manager.send_to_user(recipient, {
         "type": "new_letter",
         "letter": {
@@ -44,12 +82,49 @@ async def create_letter(payload: LoveLetterCreate, db: AsyncSession = Depends(ge
     })
     return letter
 
+
+@router.post("/restore-all")
+async def restore_all_letters(db: AsyncSession = Depends(get_db)):
+    """Arşivdeki bütün mektupları kutuya geri getir.
+
+    Eski sürümlerde mektup "silindiğinde" kayıt tamamen yok oluyordu. Bu uç,
+    o dönemden kalan gizlenmiş mektupları tek dokunuşla geri getirir.
+    """
+    result = await db.execute(select(LoveLetter))
+    letters = result.scalars().all()
+    restored = 0
+    for letter in letters:
+        if getattr(letter, "is_deleted", False):
+            _setattr_safe(letter, "is_deleted", False)
+            _setattr_safe(letter, "deleted_at", None)
+            restored += 1
+    if restored:
+        await db.commit()
+        await ws_manager.broadcast({"type": "new_letter"})
+    return {"success": True, "restored": restored}
+
+
+@router.get("/archive")
+async def letter_archive_report(db: AsyncSession = Depends(get_db)):
+    """Mektup arşivinin özeti (yedeği alınmış miktar dahil)."""
+    result = await db.execute(select(LoveLetter))
+    letters = result.scalars().all()
+    deleted = [l for l in letters if getattr(l, "is_deleted", False)]
+    return {
+        "total": len(letters),
+        "active": len(letters) - len(deleted),
+        "archived": len(deleted),
+        "backup_dir": letter_archive.backup_dir(),
+    }
+
+
 @router.get("/{letter_id}", response_model=LoveLetterResponse)
 async def get_letter(letter_id: int, db: AsyncSession = Depends(get_db)):
     letter = await db.get(LoveLetter, letter_id)
     if not letter:
         raise HTTPException(status_code=404, detail="Mektup bulunamadı")
     return letter
+
 
 @router.post("/{letter_id}/open", response_model=LoveLetterResponse)
 async def open_letter(letter_id: int, db: AsyncSession = Depends(get_db)):
@@ -72,11 +147,44 @@ async def open_letter(letter_id: int, db: AsyncSession = Depends(get_db)):
         })
     return letter
 
+
 @router.delete("/{letter_id}")
 async def delete_letter(letter_id: int, db: AsyncSession = Depends(get_db)):
+    """Mektubu kutuya kaldır — KAYIT SİLİNMEZ, arşive taşınır.
+
+    Mektup geri getirilebilir olması için `is_deleted` işaretlenir; ayrıca
+    silinmeden önce diske JSON yedeği alınır. Arşiv sekmesinden geri getirilir.
+    """
     letter = await db.get(LoveLetter, letter_id)
     if not letter:
         raise HTTPException(status_code=404, detail="Mektup bulunamadı")
-    await db.delete(letter)
+
+    letter_archive.backup_letter(letter_archive.letter_to_dict(letter), reason="deleted")
+    _setattr_safe(letter, "is_deleted", True)
+    _setattr_safe(letter, "deleted_at", now_utc())
     await db.commit()
-    return {"success": True}
+    await db.refresh(letter)
+    await ws_manager.broadcast({"type": "new_letter"})
+    return {"success": True, "archived": True}
+
+
+@router.post("/{letter_id}/restore", response_model=LoveLetterResponse)
+async def restore_letter(letter_id: int, db: AsyncSession = Depends(get_db)):
+    """Arşivdeki mektubu geri getir."""
+    letter = await db.get(LoveLetter, letter_id)
+    if not letter:
+        raise HTTPException(status_code=404, detail="Mektup bulunamadı")
+    _setattr_safe(letter, "is_deleted", False)
+    _setattr_safe(letter, "deleted_at", None)
+    await db.commit()
+    await db.refresh(letter)
+    await ws_manager.broadcast({"type": "new_letter"})
+    return letter
+
+
+def _setattr_safe(obj, name: str, value) -> None:
+    """Kolon henüz eklenmemiş olsa bile patlamasın."""
+    try:
+        setattr(obj, name, value)
+    except Exception:  # noqa: BLE001
+        logger.debug("Mektup alanı yazılamadı: %s", name)

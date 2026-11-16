@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Feather, PenTool, Stamp, Send, X, Heart } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { SPenCanvas } from './SPenCanvas';
 import { api } from '../services/api';
+import { updates } from '../services/updates';
 import { UserId } from '../types';
 import { playHaptic, soundEngine, HAPTIC_PATTERNS } from '../services/haptics';
 
@@ -12,18 +13,88 @@ interface LetterEditorProps {
   onClose: () => void;
 }
 
+type LetterTheme = 'vintage_parchment' | 'rose_blush' | 'starry_night' | 'lavender';
+
+const LETTER_THEMES: { id: LetterTheme; color: string; title: string }[] = [
+  { id: 'vintage_parchment', color: '#fef3c7', title: 'Parşömen' },
+  { id: 'rose_blush', color: '#ffe4e6', title: 'Gül Pembesi' },
+  { id: 'starry_night', color: '#1e1b4b', title: 'Gece Göğü' },
+  { id: 'lavender', color: '#ede9fe', title: 'Lavanta' },
+];
+
+const DRAFT_KEY = 'ahududu_letter_draft';
+
+interface LetterDraft {
+  title: string;
+  content: string;
+  theme: LetterTheme;
+  canvasDataUrl: string | null;
+  canvasStrokesJson: string | null;
+}
+
+const loadLetterDraft = (): Partial<LetterDraft> => {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    return raw ? (JSON.parse(raw) as Partial<LetterDraft>) : {};
+  } catch {
+    return {};
+  }
+};
+
+const persistLetterDraft = (draft: LetterDraft) => {
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    // Canvas images can exceed the storage quota; keep the text no matter what.
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, canvasDataUrl: null }));
+    } catch {
+      // Storage unavailable: the editor is busy-marked, so no reload happens mid-write.
+    }
+  }
+};
+
+const clearLetterDraft = () => {
+  try {
+    localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // Ignore storage errors on cleanup.
+  }
+};
+
 export const LetterEditor: React.FC<LetterEditorProps> = ({
   currentUserId,
   onLetterSent,
   onClose,
 }) => {
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [theme, setTheme] = useState<'vintage_parchment' | 'rose_blush' | 'starry_night' | 'lavender'>('vintage_parchment');
+  const [initialDraft] = useState(loadLetterDraft);
+  const [title, setTitle] = useState(initialDraft.title ?? '');
+  const [content, setContent] = useState(initialDraft.content ?? '');
+  const [theme, setTheme] = useState<LetterTheme>(initialDraft.theme ?? 'vintage_parchment');
   const [activeTab, setActiveTab] = useState<'write' | 'draw'>('write');
-  const [canvasDataUrl, setCanvasDataUrl] = useState<string | null>(null);
-  const [canvasStrokesJson, setCanvasStrokesJson] = useState<string | null>(null);
+  const [canvasDataUrl, setCanvasDataUrl] = useState<string | null>(initialDraft.canvasDataUrl ?? null);
+  const [canvasStrokesJson, setCanvasStrokesJson] = useState<string | null>(initialDraft.canvasStrokesJson ?? null);
   const [isSending, setIsSending] = useState(false);
+  const [showRestoredNotice, setShowRestoredNotice] = useState(
+    Boolean(initialDraft.title || initialDraft.content || initialDraft.canvasDataUrl || initialDraft.canvasStrokesJson)
+  );
+
+  const hasDraftContent = Boolean(title || content || canvasDataUrl || canvasStrokesJson);
+
+  // Never reload the app while an unsent letter is being written.
+  useEffect(() => {
+    updates.setBusy(true);
+    return () => updates.setBusy(false);
+  }, []);
+
+  // Keep the draft on the device so even a forced reload cannot lose it.
+  useEffect(() => {
+    if (!hasDraftContent) {
+      clearLetterDraft();
+      return;
+    }
+    persistLetterDraft({ title, content, theme, canvasDataUrl, canvasStrokesJson });
+  }, [title, content, theme, canvasDataUrl, canvasStrokesJson, hasDraftContent]);
 
   const handleCanvasSave = (dataUrl: string, strokesJson: string) => {
     setCanvasDataUrl(dataUrl);
@@ -31,9 +102,20 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
     setActiveTab('write');
   };
 
+  const handleDiscardDraft = () => {
+    playHaptic(20);
+    clearLetterDraft();
+    setTitle('');
+    setContent('');
+    setCanvasDataUrl(null);
+    setCanvasStrokesJson(null);
+    setTheme('vintage_parchment');
+    setShowRestoredNotice(false);
+  };
+
   const handleSendLetter = async () => {
     if (!title && !content && !canvasDataUrl) {
-      alert('Lütfen sevgiline bir şeyler yaz veya çiz ❤️');
+      alert('Mektup boş olamaz.');
       return;
     }
 
@@ -59,6 +141,8 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
         stationery_theme: theme,
       });
 
+      clearLetterDraft();
+
       setTimeout(() => {
         setIsSending(false);
         onLetterSent();
@@ -78,7 +162,7 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 safe-area-all">
       <div className="relative w-full max-w-xl max-h-[92vh] flex flex-col bg-white rounded-3xl shadow-2xl overflow-hidden border border-rose-200/50">
         
         {/* Header */}
@@ -86,16 +170,32 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
           <div className="flex items-center gap-2">
             <Feather className="w-5 h-5 text-berry-600" />
             <h2 className="font-serif text-lg font-semibold text-berry-900">
-              Sevgilime Özel Mektup
+              Yeni Mektup
             </h2>
           </div>
           <button
             onClick={onClose}
+            aria-label="Editörü kapat"
             className="p-1.5 rounded-full hover:bg-rose-100 text-stone-500 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Restored draft notice */}
+        {showRestoredNotice && (
+          <div className="flex items-center justify-between gap-2 px-5 py-2 bg-amber-50 border-b border-amber-200/70 text-[11px] text-amber-900">
+            <span className="font-medium">
+              Yazdığın taslak geri yüklendi, kaldığın yerden devam edebilirsin.
+            </span>
+            <button
+              onClick={handleDiscardDraft}
+              className="shrink-0 px-2 py-1 rounded-lg bg-white border border-amber-300 font-semibold text-amber-900 hover:bg-amber-100 transition-colors"
+            >
+              Taslağı sil
+            </button>
+          </div>
+        )}
 
         {/* Tab switch & stationery theme picker */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-2.5 bg-rose-50/40 border-b border-rose-100/60">
@@ -133,16 +233,11 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
           {/* Theme circles */}
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] font-medium text-stone-500 mr-1">Kağıt:</span>
-            {[
-              { id: 'vintage_parchment', color: '#fef3c7', title: 'Parşömen' },
-              { id: 'rose_blush', color: '#ffe4e6', title: 'Gül Pembesi' },
-              { id: 'starry_night', color: '#1e1b4b', title: 'Gece Göğü' },
-              { id: 'lavender', color: '#ede9fe', title: 'Lavanta' },
-            ].map((t) => (
+            {LETTER_THEMES.map((t) => (
               <button
                 key={t.id}
                 onClick={() => {
-                  setTheme(t.id as any);
+                  setTheme(t.id);
                   playHaptic(20);
                 }}
                 className={`w-5 h-5 rounded-full border transition-all ${
@@ -161,7 +256,7 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
             <div className={`p-5 rounded-2xl border min-h-[380px] shadow-inner transition-colors ${themeStyles[theme]}`}>
               <input
                 type="text"
-                placeholder="Mektubun Başlığı... (örn: Sevgilime Bir Not)"
+                placeholder="Mektubun başlığı"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 className="w-full bg-transparent font-serif text-xl font-bold mb-4 border-b border-current/20 pb-2 focus:outline-none placeholder:opacity-50"

@@ -5,6 +5,7 @@ from typing import List, Optional
 from backend.app.database import get_db
 from backend.app.models import SharedNote, now_utc
 from backend.app.schemas import SharedNoteCreate, SharedNoteUpdate, SharedNoteResponse
+from backend.app.config import settings
 from backend.app.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/api/notes", tags=["notes"])
@@ -36,7 +37,7 @@ async def create_note(payload: SharedNoteCreate, db: AsyncSession = Depends(get_
     await db.refresh(note)
     
     # Broadcast to partner
-    recipient = "sevgilim" if payload.creator == "murat" else "murat"
+    recipient = settings.partner_of(payload.creator)
     await ws_manager.send_to_user(recipient, {
         "type": "new_note",
         "note": {

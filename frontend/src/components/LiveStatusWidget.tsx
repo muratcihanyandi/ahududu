@@ -1,162 +1,156 @@
-import React from 'react';
-import { Heart, Battery, BatteryCharging, MapPin, Watch, Footprints, Activity, Smartphone } from 'lucide-react';
-import { UserProfile, WatchBiometrics } from '../types';
+import React, { useMemo } from 'react';
+import { Heart, Battery, BatteryCharging, MapPin, Clock, Sparkles, Coffee } from 'lucide-react';
+import { UserProfile } from '../types';
 
 interface LiveStatusWidgetProps {
   partnerProfile: UserProfile | null;
-  partnerBiometrics: WatchBiometrics | null;
   myBattery?: { level: number; isCharging: boolean };
   distanceKm?: number;
   partnerName: string;
-  startDate?: string;
+  isPartnerOnline?: boolean;
+  /** Birlikte olunan gün sayısı (ilişki başlangıcından) */
+  daysTogether?: number;
+  /** Partnerle son etkileşimden bu yana geçen dakika */
+  mineBatteryLevel?: number;
 }
+
+const formatLastSeen = (value?: string): string => {
+  if (!value) return 'Bilinmiyor';
+  const seen = new Date(value).getTime();
+  if (Number.isNaN(seen)) return 'Bilinmiyor';
+
+  const minutes = Math.floor((Date.now() - seen) / 60000);
+  if (minutes < 1) return 'şimdi';
+  if (minutes < 60) return `${minutes} dk önce`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} saat önce`;
+  return `${Math.floor(hours / 24)} gün önce`;
+};
+
+/** Küçük pil rozeti — ana ekranda yer kaplamasın diye minimal */
+const BatteryPill: React.FC<{ level: number; charging: boolean; label?: string }> = ({
+  level,
+  charging,
+  label,
+}) => (
+  <span
+    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+      charging
+        ? 'bg-emerald-50 text-emerald-700'
+        : level <= 20
+          ? 'bg-amber-50 text-amber-700'
+          : 'bg-stone-100 text-stone-600'
+    }`}
+  >
+    {charging ? (
+      <BatteryCharging className="w-3 h-3" />
+    ) : (
+      <Battery className="w-3 h-3" />
+    )}
+    {label && <span className="opacity-70">{label}</span>}
+    <span className="tabular-nums">%{level}</span>
+  </span>
+);
 
 export const LiveStatusWidget: React.FC<LiveStatusWidgetProps> = ({
   partnerProfile,
-  partnerBiometrics,
   myBattery,
   distanceKm,
   partnerName,
-  startDate = '2023-06-15',
+  isPartnerOnline = false,
+  daysTogether,
+  mineBatteryLevel,
 }) => {
-  const calculateDays = () => {
-    try {
-      const start = new Date(startDate).getTime();
-      const now = new Date().getTime();
-      const diff = Math.floor((now - start) / (1000 * 60 * 60 * 24));
-      return diff > 0 ? diff : 1;
-    } catch (e) {
-      return 1;
-    }
-  };
-
-  const daysTogether = calculateDays();
   const phoneBattery = partnerProfile?.battery_level ?? 100;
   const isPhoneCharging = partnerProfile?.is_charging ?? false;
-  const watchBattery = partnerBiometrics?.battery ?? 88;
-  const heartRate = partnerBiometrics?.heart_rate ?? 74;
-  const steps = partnerBiometrics?.steps ?? 5210;
+  const lastSeen = formatLastSeen(partnerProfile?.last_seen);
+  const place = partnerProfile?.place_name?.trim();
+  const statusText = partnerProfile?.status_text?.trim();
+  const myLevel = mineBatteryLevel ?? myBattery?.level ?? 100;
+
+  const statusIsCinema = statusText?.includes('Sinemada');
+
+  const heroLine = useMemo(() => {
+    if (statusIsCinema) return 'Sinemada 🍿';
+    if (statusText) return statusText;
+    if (isPartnerOnline) return 'Şu an burada, seninle 💞';
+    return 'Seni düşünüyor olabilir 💭';
+  }, [statusIsCinema, statusText, isPartnerOnline]);
 
   return (
-    <div className="w-full bg-white/85 backdrop-blur-md rounded-3xl p-5 border border-rose-100 shadow-sm shadow-rose-900/5 mb-4">
-      {/* Top Banner: Days Together Counter */}
-      <div className="flex items-center justify-between pb-3.5 mb-3.5 border-b border-rose-100/60">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-full bg-rose-100 flex items-center justify-center">
-            <Heart className="w-4 h-4 fill-berry-500 text-berry-600" />
-          </div>
-          <div>
-            <span className="text-xs font-semibold text-berry-900">
-              Birlikte Geçen Günlerimiz
+    <div className="relative overflow-hidden rounded-3xl border border-rose-100/90 shadow-lg shadow-rose-900/5 bg-gradient-to-br from-white via-rose-50/50 to-pink-50/70">
+      {/* Yumuşak dekor */}
+      <div className="absolute -top-10 -right-8 w-32 h-32 rounded-full bg-rose-200/25 blur-2xl pointer-events-none" />
+      <div className="absolute -bottom-12 -left-8 w-28 h-28 rounded-full bg-amber-200/25 blur-2xl pointer-events-none" />
+
+      <div className="relative p-4">
+        {/* Üst satır: partner + canlı durum rozeti */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="relative flex h-9 w-9 items-center justify-center rounded-full bg-white shadow-xs text-lg shrink-0">
+              {partnerProfile?.avatar || '💞'}
+              <span
+                className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${
+                  isPartnerOnline ? 'bg-emerald-500' : 'bg-stone-300'
+                }`}
+              />
             </span>
-            <p className="text-[11px] text-stone-500">Aşkla geçen her an</p>
-          </div>
-        </div>
-        <div className="flex items-baseline gap-1 bg-gradient-to-r from-berry-50 to-pink-50 px-3 py-1 rounded-full border border-rose-200/50">
-          <span className="font-serif text-lg font-bold text-berry-700">
-            {daysTogether}
-          </span>
-          <span className="text-xs font-semibold text-berry-600">. Günümüz</span>
-        </div>
-      </div>
-
-      {/* Main Status Grid */}
-      <div className="grid grid-cols-2 gap-3">
-        {/* Partner Phone Status Card */}
-        <div className="bg-gradient-to-br from-rose-50/80 to-pink-50/60 p-3.5 rounded-2xl border border-rose-100/90 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between text-xs text-stone-500 mb-1.5">
-              <div className="flex items-center gap-1 font-semibold text-berry-900">
-                <Smartphone className="w-3.5 h-3.5 text-berry-600" />
-                <span>{partnerName}'in Telefonu</span>
-              </div>
-            </div>
-
-            {/* Real Phone Battery Display */}
-            <div className="flex items-center gap-1.5 my-1">
-              {isPhoneCharging ? (
-                <BatteryCharging className="w-5 h-5 text-emerald-500 animate-pulse" />
-              ) : (
-                <Battery className={`w-5 h-5 ${phoneBattery <= 20 ? 'text-amber-500' : 'text-stone-700'}`} />
-              )}
-              <span className="font-serif text-xl font-bold text-berry-950">
-                %{phoneBattery}
-              </span>
-              {isPhoneCharging && (
-                <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full font-semibold">
-                  Şarjda ⚡
-                </span>
-              )}
+            <div className="min-w-0">
+              <p className="font-serif text-sm font-bold text-berry-950 leading-tight truncate">
+                {partnerName}
+              </p>
+              <p className="text-[10px] text-stone-500">{lastSeen} görüldü</p>
             </div>
           </div>
 
-          <div className="pt-2 border-t border-rose-200/50 text-[11px] text-stone-600">
-            <div className="flex items-center gap-1 truncate">
-              <MapPin className="w-3 h-3 text-berry-500 shrink-0" />
-              <span className="truncate">{partnerProfile?.place_name || 'Evde 🏡'}</span>
-            </div>
-            <div className="text-stone-400 text-[10px] mt-0.5">
-              {distanceKm !== undefined ? `Mesafe: ${distanceKm} km` : 'Yan Yana 💕'}
-            </div>
+          {/* Pil rozetleri — küçük ve sağ üstte */}
+          <div className="flex items-center gap-1 shrink-0">
+            <BatteryPill level={phoneBattery} charging={isPhoneCharging} label={partnerName.slice(0, 3)} />
+            <BatteryPill level={myLevel} charging={myBattery?.isCharging ?? false} label="Sen" />
           </div>
         </div>
 
-        {/* Partner Galaxy Watch Status Card */}
-        <div className="bg-gradient-to-br from-pink-50/80 to-rose-50/60 p-3.5 rounded-2xl border border-rose-100/90 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between text-xs text-stone-500 mb-1.5">
-              <div className="flex items-center gap-1 font-semibold text-berry-900">
-                <Watch className="w-3.5 h-3.5 text-berry-600" />
-                <span>Galaxy Watch</span>
-              </div>
-              <span className="text-[10px] text-stone-500 font-semibold">
-                %{watchBattery}
-              </span>
-            </div>
-
-            {/* Heart Rate */}
-            <div className="flex items-center gap-1.5 my-1">
-              <Activity className="w-5 h-5 text-rose-500 animate-pulse" />
-              <span className="font-serif text-xl font-bold text-berry-950">
-                {heartRate}
-              </span>
-              <span className="text-[10px] text-rose-400 font-semibold">BPM</span>
-            </div>
-          </div>
-
-          <div className="pt-2 border-t border-rose-200/50 flex items-center justify-between text-[11px] text-stone-600">
-            <div className="flex items-center gap-1">
-              <Footprints className="w-3 h-3 text-stone-400" />
-              <span>{steps.toLocaleString('tr-TR')} adım</span>
-            </div>
-            <span className="text-[10px] text-emerald-600 font-semibold">Sakin 🍃</span>
-          </div>
+        {/* Durum cümlesi */}
+        <div className="mt-3 flex items-center gap-2">
+          <Heart
+            className={`w-4 h-4 shrink-0 ${
+              statusIsCinema ? 'text-amber-500' : 'text-rose-500 fill-rose-400 animate-pulse'
+            }`}
+          />
+          <p className="font-serif text-[15px] font-semibold text-berry-950 leading-snug truncate">
+            {heroLine}
+          </p>
         </div>
-      </div>
 
-      {/* Footer Info: My Battery & Partner Status */}
-      <div className="mt-3 pt-2.5 flex items-center justify-between text-xs text-stone-600 px-1 border-t border-rose-100/60">
-        <div className="flex items-center gap-1.5 truncate">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-          <span className="font-medium text-berry-900 truncate">
-            {partnerProfile?.status_text || 'Seni düşünüyor 🥰'}
-          </span>
+        {/* Alt bilgi şeridi: mesafe / konum / gün sayısı */}
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
+          {distanceKm != null && distanceKm > 0 && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-berry-50 text-[10px] font-semibold text-berry-700">
+              <MapPin className="w-3 h-3" />
+              {distanceKm < 1
+                ? `${Math.round(distanceKm * 1000)} m`
+                : `${distanceKm.toFixed(1)} km`}
+            </span>
+          )}
+          {place && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-stone-100 text-[10px] font-medium text-stone-600 max-w-[140px]">
+              <MapPin className="w-3 h-3 shrink-0" />
+              <span className="truncate">{place}</span>
+            </span>
+          )}
+          {daysTogether != null && daysTogether > 0 && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-[10px] font-semibold text-amber-800">
+              <Coffee className="w-3 h-3" />
+              {daysTogether} gün birlikte
+            </span>
+          )}
+          {!isPartnerOnline && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-stone-100 text-[10px] font-medium text-stone-500">
+              <Clock className="w-3 h-3" />
+              çevrimdışı
+            </span>
+          )}
         </div>
-        {myBattery && (
-          <div className="flex items-center gap-1.5 text-xs bg-rose-50/80 px-2.5 py-1 rounded-full border border-rose-100 text-stone-700 font-medium shrink-0 ml-2">
-            <Smartphone className="w-3.5 h-3.5 text-berry-600" />
-            <span>Sen:</span>
-            {myBattery.isCharging ? (
-              <BatteryCharging className="w-4 h-4 text-emerald-500 animate-pulse" />
-            ) : (
-              <Battery className={`w-4 h-4 ${myBattery.level <= 20 ? 'text-amber-500' : 'text-stone-600'}`} />
-            )}
-            <span className="font-bold text-berry-950">%{myBattery.level}</span>
-            {myBattery.isCharging && (
-              <span className="text-[10px] text-emerald-600 font-semibold">⚡</span>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );

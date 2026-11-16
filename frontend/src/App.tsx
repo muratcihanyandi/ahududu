@@ -1,23 +1,43 @@
-import React, { useState, useEffect } from 'react';
-import { Heart, Feather, Sparkles, Plus, Watch, ChevronRight, UserCheck } from 'lucide-react';
-import { UserId, UserProfile, LoveLetter, WatchBiometrics, CoupleStatus } from './types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Heart, Feather, Sparkles, Plus, ChevronRight, UserCheck, Archive } from 'lucide-react';
+import { UserId, UserProfile, LoveLetter, CoupleStatus, USERS, partnerOf, nameOf, SnapFeed, Showtime } from './types';
 import { api } from './services/api';
 import { wsClient } from './services/websocket';
+import {
+  initNotifications, clearAllNotifications, onNotificationTap,
+} from './services/notifications';
 import { Navigation, TabType } from './components/Navigation';
 import { LiveStatusWidget } from './components/LiveStatusWidget';
 import { NudgeButton } from './components/NudgeButton';
-import { WalkieTalkie } from './components/WalkieTalkie';
 import { LetterEditor } from './components/LetterEditor';
 import { LetterViewer } from './components/LetterViewer';
 import { ChatView } from './components/ChatView';
 import { MemoryGallery } from './components/MemoryGallery';
 import { SharedNotes } from './components/SharedNotes';
 import { CoupleRadar } from './components/CoupleRadar';
-import { WatchCompanion } from './components/WatchCompanion';
-import { WatchInstallModal } from './components/WatchInstallModal';
 import { UpdateBanner } from './components/UpdateBanner';
+import { MoreHub } from './components/MoreHub';
+import { GardenView } from './components/GardenView';
+import { CinemaSalon } from './components/CinemaSalon';
 import { playHaptic } from './services/haptics';
+import { registerBackHandler, installBackNavigation } from './services/backButton';
 import { getRealBatteryStatus, subscribeToBatteryChanges, BatteryStatus } from './services/battery';
+
+/** Sohbet mesajının tek satırlık önizlemesi (bildirim ve ekran üstü ipucu). */
+const previewOfMessage = (msg: { message_type?: string; content?: string }): string => {
+  const text = (msg.content || '').trim();
+  switch (msg.message_type) {
+    case 'image':
+      return '📷 Fotoğraf';
+    case 'video':
+      return '🎬 Video';
+    case 'voice':
+    case 'walkie_talkie':
+      return '🎙️ Sesli mesaj';
+    default:
+      return text.length > 60 ? `${text.slice(0, 60)}…` : text || '💌';
+  }
+};
 
 export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<UserId | null>(() => {
@@ -25,17 +45,78 @@ export const App: React.FC = () => {
   });
   const [activeTab, setActiveTab] = useState<TabType>('home');
   const [partnerProfile, setPartnerProfile] = useState<UserProfile | null>(null);
-  const [partnerBiometrics, setPartnerBiometrics] = useState<WatchBiometrics | null>(null);
   const [letters, setLetters] = useState<LoveLetter[]>([]);
   const [distanceKm, setDistanceKm] = useState<number | undefined>(undefined);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [selectedLetter, setSelectedLetter] = useState<LoveLetter | null>(null);
-  const [isWatchModalOpen, setIsWatchModalOpen] = useState(false);
   const [memorySubTab, setMemorySubTab] = useState<'gallery' | 'notes'>('gallery');
   const [myBattery, setMyBattery] = useState<BatteryStatus | undefined>(undefined);
+  const [isPartnerOnline, setIsPartnerOnline] = useState(false);
+  const [snapFeed, setSnapFeed] = useState<SnapFeed | null>(null);
+  const [isCinemaOpen, setIsCinemaOpen] = useState(false);
+  const [showRadar, setShowRadar] = useState(false);
+  const [gardenNews, setGardenNews] = useState(false);
+  const cinemaInnerBackRef = useRef<(() => boolean) | null>(null);
+  const [cinemaPartnerStatus, setCinemaPartnerStatus] = useState<{
+    watching: boolean;
+    title?: string;
+  }>({ watching: false });
+  const [snapToast, setSnapToast] = useState<string | null>(null);
+  const [tonightCinema, setTonightCinema] = useState<Showtime | null>(null);
+  /** Sunucu arşivi: silinmiş olsa da mektuplar burada tutulur (kaybolmaz). */
+  const [archivedLetters, setArchivedLetters] = useState<LoveLetter[]>([]);
+  /** Sohbette kaç yeni mesaj var (diğer sekmelerdeyken gelen) */
+  const [unreadChat, setUnreadChat] = useState(0);
+  /** Birlikte olduğumuz gün sayısı (ilişki başlangıcından bu yana) */
+  const daysTogether = (() => {
+    const start = new Date(2026, 4, 31, 0, 0, 0);
+    const diff = Date.now() - start.getTime();
+    return Math.max(0, Math.floor(diff / 86400000));
+  })();
 
-  const partnerId: UserId = currentUser === 'murat' ? 'sevgilim' : 'murat';
-  const partnerName = currentUser === 'murat' ? 'Sevgilim' : 'Murat';
+  /** Bu cihazda arşive alınan mektup kimlikleri (localStorage'da kalıcı). */
+  const readHiddenLetters = (owner: UserId): number[] => {
+    try {
+      const raw = localStorage.getItem(`ahududu_hidden_letters_${owner}`);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((n) => typeof n === 'number') : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const [letterHideList, setLetterHideList] = useState<number[]>(() =>
+    readHiddenLetters((localStorage.getItem('ahududu_user') as UserId) || 'murat')
+  );
+
+  // Telefon el değiştirdiyse (kullanıcı değiştiyse) o kişinin listesine geç.
+  useEffect(() => {
+    if (!currentUser) return;
+    setLetterHideList(readHiddenLetters(currentUser));
+  }, [currentUser]);
+
+  const saveLetterHideList = (list: number[]) => {
+    if (!currentUser) return;
+    setLetterHideList(list);
+    try {
+      localStorage.setItem(`ahududu_hidden_letters_${currentUser}`, JSON.stringify(list));
+    } catch {
+      /* yok say */
+    }
+  };
+
+  /** Arşivde ne kadar mektup var? (arşiv bölümü her zaman görünür) */
+  const archivedCount = archivedLetters.length;
+  /** Mektup arşivi bölümü açık mı? */
+  const [showLetterArchive, setShowLetterArchive] = useState(false);
+
+  const partnerId: UserId = partnerOf(currentUser ?? 'murat');
+  const partnerName = nameOf(partnerId);
+
+  /** Sohbet ekranı görünür mü? (dinleyici stale state'e takılmasın) */
+  const chatVisibleRef = useRef(false);
+  chatVisibleRef.current =
+    activeTab === 'chat' && !isCinemaOpen && !selectedLetter && !isEditorOpen;
 
   // Sync real hardware battery with server
   const syncBattery = async (userId: UserId) => {
@@ -55,6 +136,19 @@ export const App: React.FC = () => {
     if (!currentUser) return;
     localStorage.setItem('ahududu_user', currentUser);
     wsClient.connect(currentUser);
+
+    // Bildirim iznini al, kanali kur (yalnizca native kabukta etkili).
+    void initNotifications();
+    const offTap = onNotificationTap(() => {
+      setActiveTab('chat');
+      setUnreadChat(0);
+      void clearAllNotifications();
+    });
+    return () => offTap();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
 
     // Initial data load
     loadInitialData();
@@ -87,6 +181,60 @@ export const App: React.FC = () => {
         }));
       }
     });
+    const unsubPartnerStatus = wsClient.on('partner_status', (d: any) => {
+      if (d.user_id === partnerId) {
+        setIsPartnerOnline(Boolean(d.is_online));
+      }
+    });
+
+    // Yeni an / sinema daveti gibi olayları ana ekranda da yakala
+    const unsubSnap = wsClient.on('new_snap', (d: any) => {
+      if (d?.snap?.sender === partnerId) {
+        setSnapToast(`${nameOf(partnerId)} yeni bir an paylaştı! 📸 "Anlar" sekmesinden bak`);
+        window.setTimeout(() => setSnapToast(null), 4000);
+        loadSnapFeed();
+      }
+    });
+    const unsubCinema = wsClient.on('cinema_started', (d: any) => {
+      if (d?.started_by && d.started_by !== (currentUser as UserId)) {
+        // Partner filmi başlattı: ZORLA salona sokmuyoruz, sadece haber veriyoruz.
+        // Senkronizasyon "izinli" çalışır: kullanıcı isterse dokunup girer.
+        setSnapToast(`${nameOf(d.started_by)} ${d.title ? `"${d.title}"` : 'bir film'} başlattı 🍿`);
+        window.setTimeout(() => setSnapToast(null), 5000);
+      }
+    });
+
+    // Partner sinema salonuna girdi: bildirim + durumu "Sinemada"
+    const unsubPartnerJoined = wsClient.on('cinema_partner_joined', (d: any) => {
+      if (!d?.user_id || d.user_id === currentUser) return;
+      playHaptic([120, 100, 180, 800, 120, 100, 180]);
+      setSnapToast(
+        `${nameOf(d.user_id)} sinema salonuna girdi! 🍿${d.title ? ` · ${d.title}` : ''}`
+      );
+      window.setTimeout(() => setSnapToast(null), 7000);
+      setCinemaPartnerStatus({ watching: true, title: d.title });
+    });
+
+    const unsubCinemaPresence = wsClient.on('cinema_presence', (d: any) => {
+      if (!d?.user_id || d.user_id === currentUser) return;
+      setCinemaPartnerStatus({
+        watching: Boolean(d.is_watching),
+        title: d.title,
+      });
+    });
+
+    // Her ekranda gelen mesajı yakala: alt barda sayaç ve üstte kısa ipucu.
+    const unsubChat = wsClient.on('new_chat_message', (d: any) => {
+      const msg = d?.message;
+      if (!msg || msg.sender === currentUser) return;
+
+      // Sohbet sekmesi açık değilken sayacı artır.
+      if (!chatVisibleRef.current) setUnreadChat((prev) => prev + 1);
+      setSnapToast(`${nameOf(msg.sender)}: ${previewOfMessage(msg)}`);
+      window.setTimeout(() => setSnapToast(null), 3500);
+    });
+
+    loadSnapFeed();
 
     return () => {
       clearInterval(batteryInterval);
@@ -94,49 +242,139 @@ export const App: React.FC = () => {
       unsubLetter();
       unsubStatus();
       unsubProfile();
+      unsubPartnerStatus();
+      unsubSnap();
+      unsubCinema();
+      unsubPartnerJoined();
+      unsubCinemaPresence();
+      unsubChat();
     };
   }, [currentUser]);
+
+  // Sohbet sekmesi açıkken yeni mesaj sayacını sıfırla.
+  useEffect(() => {
+    if (activeTab === 'chat') setUnreadChat(0);
+  }, [activeTab]);
+
+  // ------------------------------------------------------------------
+  // Android geri tuşu: uygulamadan çıkmasın.
+  //   1) Açık pencereyi kapat  2) Ana ekrana dön  3) Uygulamayı arkaya al.
+  // ------------------------------------------------------------------
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const closeTopmost = (): boolean => {
+      if (isEditorOpen) {
+        setIsEditorOpen(false);
+        return true;
+      }
+      if (selectedLetter) {
+        setSelectedLetter(null);
+        return true;
+      }
+      if (isCinemaOpen) {
+        // Sinema ekranı açıksa kapat; salon içindeyse CinemaSalon kendi
+        // handler'ıyla önce salondan çıkar (aşağıdaki kayda bakın).
+        if (cinemaInnerBackRef.current && cinemaInnerBackRef.current()) return true;
+        setIsCinemaOpen(false);
+        return true;
+      }
+      return false;
+    };
+
+    const unregister = registerBackHandler(closeTopmost);
+    const uninstall = installBackNavigation(() => {
+      // Açık pencere yok:
+      // - Alt sekmedeysek ana ekrana dön (işlenmiş sayılır)
+      // - Ana ekrandaysak false döndür → native taraf uygulamayı arkaya alır
+      if (isEditorOpen || selectedLetter || isCinemaOpen) return true;
+      if (activeTab !== 'home') {
+        setActiveTab('home');
+        return true;
+      }
+      return false;
+    });
+
+    return () => {
+      unregister();
+      uninstall();
+    };
+  }, [currentUser, isEditorOpen, selectedLetter, isCinemaOpen, activeTab]);
+
+  const loadSnapFeed = async () => {
+    if (!currentUser) return;
+    try {
+      const f = await api.getSnapFeed(currentUser);
+      setSnapFeed(f);
+    } catch (e) {
+      // Sessizce yut: anlar yüklenemezse uygulamanın geri kalanı çalışsın
+    }
+  };
+
+  /** Bu akşamki sinema seansı (ana ekran kartı için) */
+  const loadTonightCinema = async (userId: UserId) => {
+    try {
+      const show = await api.getTonightShowtime(userId);
+      setTonightCinema(show);
+    } catch {
+      // Takvim yoksa kart gizli kalır
+    }
+  };
 
   const loadInitialData = async () => {
     if (!currentUser) return;
     try {
-      const [partnerProf, partnerBio, coupleStat, letterList] = await Promise.all([
+      const [partnerProf, coupleStat] = await Promise.all([
         api.getProfile(partnerId),
-        api.getWatchBiometrics(partnerId),
         api.getCoupleStatus(),
-        api.listLetters(),
       ]);
 
       setPartnerProfile(partnerProf);
-      setPartnerBiometrics(partnerBio);
       setDistanceKm(coupleStat.distance_km);
-      setLetters(letterList);
     } catch (e) {
       console.error(e);
     }
+    // Mektuplar ayrı yüklenir: bu adım patlasa bile mektuplar kaybolmasın.
+    await loadLetters();
   };
 
-  const loadLetters = async () => {
+  /**
+   * Mektupları yükle. Sunucudan gelen liste TEK gerçek kaynaktır.
+   * Bir mektup sunucuda duruyorsa arayüzden asla düşmez; yalnızca açıkça
+   * "arşive alınan" mektuplar ayrı bir bölümde gösterilir ve geri getirilebilir.
+   */
+  const loadLetters = async (): Promise<void> => {
     try {
       const data = await api.listLetters();
-      setLetters(data);
-    } catch (e) {}
+      const all = Array.isArray(data) ? data : [];
+      const archivedIds = new Set(
+        all.filter((l) => Boolean(l.is_deleted)).map((l) => l.id)
+      );
+      setLetters(all.filter((l) => !archivedIds.has(l.id)));
+      setArchivedLetters(all.filter((l) => archivedIds.has(l.id)));
+    } catch (e) {
+      console.warn('[Ahududu] Mektuplar yüklenemedi', e);
+    }
   };
 
-  // If opened directly on Samsung Galaxy Watch (/watch URL)
-  if (window.location.pathname === '/watch') {
-    return (
-      <div className="fixed inset-0 bg-black flex items-center justify-center overflow-hidden">
-        <div className="w-full h-full max-w-[450px] max-h-[450px] rounded-full overflow-hidden flex items-center justify-center">
-          <WatchCompanion
-            currentUserId={currentUser || 'sevgilim'}
-            partnerName={currentUser === 'murat' ? 'Sevgilim' : 'Murat'}
-            onOpenInstallModal={() => {}}
-          />
-        </div>
-      </div>
-    );
-  }
+  /** Bir mektubu arşive al (sunucudaki kayıt SİLİNMEZ, geri getirilebilir). */
+  const hideLetter = (letter: LoveLetter) => {
+    setLetters((prev) => prev.filter((l) => l.id !== letter.id));
+    setArchivedLetters((prev) => [letter, ...prev.filter((l) => l.id !== letter.id)]);
+    api.deleteLetter(letter.id).catch(() => {
+      // Sunucuya ulaşılamazsa mektup listede kalsın (kaybolmasın).
+      void loadLetters();
+    });
+  };
+
+  /** Arşive alınan mektubu geri getir. */
+  const restoreLetter = (letter: LoveLetter) => {
+    setArchivedLetters((prev) => prev.filter((l) => l.id !== letter.id));
+    setLetters((prev) => [letter, ...prev].sort((a, b) => b.id - a.id));
+    api.restoreLetter(letter.id).catch(() => {
+      void loadLetters();
+    });
+  };
 
   // If user is not yet selected, show the cute sweet welcome profile picker
   if (!currentUser) {
@@ -151,12 +389,9 @@ export const App: React.FC = () => {
             />
           </div>
 
-          <h1 className="font-serif text-2xl font-bold text-berry-950 mb-1">
+          <h1 className="font-serif text-2xl font-bold text-berry-950 mb-6">
             Ahududu'ya Hoş Geldin
           </h1>
-          <p className="text-xs text-stone-500 mb-6">
-            Sadece ikimize özel, aşk dolu dünyamız 💕
-          </p>
 
           <p className="font-serif text-sm font-semibold text-berry-900 mb-4">
             Bu telefonda kim oturuyor?
@@ -166,20 +401,15 @@ export const App: React.FC = () => {
             <button
               onClick={() => {
                 playHaptic(30);
-                setCurrentUser('sevgilim');
+                setCurrentUser('selin');
               }}
               className="w-full flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-rose-50 to-pink-50 hover:from-rose-100 hover:to-pink-100 border border-rose-200 text-berry-900 transition-all active:scale-95 shadow-xs group"
             >
               <div className="flex items-center gap-3">
                 <span className="text-3xl">🌸</span>
-                <div className="text-left">
-                  <span className="font-serif text-base font-bold block">
-                    Ben Sevgilimiyim
-                  </span>
-                  <span className="text-[11px] text-stone-500">
-                    Samsung Galaxy S24 Ultra & Watch 7
-                  </span>
-                </div>
+                <span className="font-serif text-base font-bold">
+                  Ben Selin'im
+                </span>
               </div>
               <ChevronRight className="w-5 h-5 text-berry-400 group-hover:translate-x-1 transition-transform" />
             </button>
@@ -193,14 +423,9 @@ export const App: React.FC = () => {
             >
               <div className="flex items-center gap-3">
                 <span className="text-3xl">🐻</span>
-                <div className="text-left">
-                  <span className="font-serif text-base font-bold block">
-                    Ben Murat'ım
-                  </span>
-                  <span className="text-[11px] text-stone-500">
-                    Samsung Galaxy S23 & Watch Ultra
-                  </span>
-                </div>
+                <span className="font-serif text-base font-bold">
+                  Ben Murat'ım
+                </span>
               </div>
               <ChevronRight className="w-5 h-5 text-berry-400 group-hover:translate-x-1 transition-transform" />
             </button>
@@ -215,42 +440,28 @@ export const App: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen pb-24 font-sans select-none">
+    <div
+      className="min-h-screen font-sans select-none"
+      style={{ paddingBottom: 'calc(6rem + var(--safe-bottom, 0px))' }}
+    >
       {/* Live Zero-Reinstall OTA Update Banner */}
       <UpdateBanner />
 
       {/* App Bar / Header */}
-      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-rose-100/80 px-4 py-3">
-        <div className="max-w-md mx-auto flex items-center justify-between">
+      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-rose-100/80 px-4">
+        <div
+          className="max-w-md mx-auto flex items-center justify-between py-3"
+          style={{ paddingTop: 'calc(var(--safe-top, 0px) + 0.75rem)' }}
+        >
           <div className="flex items-center gap-2.5">
             <img
               src="/logo.png"
               alt="Ahududu"
               className="w-9 h-9 object-contain drop-shadow-xs"
             />
-            <div>
-              <h1 className="font-serif text-lg font-bold text-berry-950 leading-tight">
-                Ahududu
-              </h1>
-              <p className="text-[10px] text-stone-500 font-medium">
-                {currentUser === 'murat' ? 'Murat 🐻' : 'Canım 🌸'} Dünyası
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                playHaptic(20);
-                const nextUser = currentUser === 'murat' ? 'sevgilim' : 'murat';
-                setCurrentUser(nextUser);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-rose-50 hover:bg-rose-100 border border-rose-200/70 text-xs font-semibold text-berry-900 transition-colors"
-              title="Profil Değiştir"
-            >
-              <span>{currentUser === 'murat' ? '🐻' : '🌸'}</span>
-              <span className="text-[11px]">Değiştir</span>
-            </button>
+            <h1 className="font-serif text-lg font-bold text-berry-950 leading-tight">
+              Ahududu
+            </h1>
           </div>
         </div>
       </header>
@@ -263,10 +474,11 @@ export const App: React.FC = () => {
             {/* Live Status Card */}
             <LiveStatusWidget
               partnerProfile={partnerProfile}
-              partnerBiometrics={partnerBiometrics}
               myBattery={myBattery}
               distanceKm={distanceKm}
               partnerName={partnerName}
+              isPartnerOnline={isPartnerOnline}
+              daysTogether={daysTogether}
             />
 
             {/* Giant Attention Nudge Button */}
@@ -275,11 +487,82 @@ export const App: React.FC = () => {
               partnerName={partnerName}
             />
 
-            {/* Walkie-Talkie Push-to-Talk Intercom */}
-            <WalkieTalkie
-              currentUserId={currentUser}
-              partnerName={partnerName}
-            />
+            {/* Hızlı erişim: Bahçe · Sinema · Anlar */}
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => {
+                  playHaptic(20);
+                  setActiveTab('garden');
+                }}
+                className="flex flex-col items-center gap-1 py-3 rounded-2xl bg-white/85 border border-emerald-100 shadow-xs active:scale-95 transition-transform"
+              >
+                <span className="text-xl">🌸</span>
+                <span className="text-[10px] font-bold text-berry-900">Bahçe</span>
+              </button>
+              <button
+                onClick={() => {
+                  playHaptic(25);
+                  setIsCinemaOpen(true);
+                }}
+                className="flex flex-col items-center gap-1 py-3 rounded-2xl bg-white/85 border border-amber-200 shadow-xs active:scale-95 transition-transform"
+              >
+                <span className="text-xl">🎬</span>
+                <span className="text-[10px] font-bold text-berry-900">Sinema</span>
+              </button>
+              <button
+                onClick={() => {
+                  playHaptic(20);
+                  setActiveTab('memories');
+                }}
+                className="flex flex-col items-center gap-1 py-3 rounded-2xl bg-white/85 border border-rose-100 shadow-xs active:scale-95 transition-transform"
+              >
+                <span className="text-xl">📸</span>
+                <span className="text-[10px] font-bold text-berry-900">Anlar</span>
+              </button>
+            </div>
+
+            {/* Sinema daveti: partner salonda ya da bu akşam seans var */}
+            {(cinemaPartnerStatus.watching || tonightCinema) && (
+              <div
+                onClick={() => {
+                  playHaptic(25);
+                  setIsCinemaOpen(true);
+                }}
+                className="relative overflow-hidden rounded-3xl p-3.5 cursor-pointer active:scale-[0.98] transition-transform shadow-lg shadow-berry-900/20 border border-amber-400/30"
+                style={{
+                  background: 'linear-gradient(120deg, #2a0713 0%, #5c0a20 55%, #7f1030 100%)',
+                }}
+              >
+                <div
+                  className="absolute inset-0 opacity-35 animate-[lightsSweep_8s_ease-in-out_infinite] pointer-events-none"
+                  style={{
+                    background:
+                      'conic-gradient(from 205deg at 15% 0%, rgba(255,220,160,0.45), transparent 38%)',
+                  }}
+                />
+                <div className="relative flex items-center gap-3">
+                  <span className="text-2xl animate-float">🍿</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[9px] font-bold tracking-[0.22em] text-amber-300/85 uppercase">
+                      Sinema Salonu
+                    </p>
+                    <p className="font-serif text-sm font-bold text-white leading-tight">
+                      {cinemaPartnerStatus.watching
+                        ? `${partnerName} sinemada! 🎬`
+                        : `Bu akşam: ${tonightCinema?.show_time ?? ''} ${tonightCinema?.title ?? ''}`}
+                    </p>
+                    <p className="text-[10px] text-white/65 mt-0.5">
+                      {cinemaPartnerStatus.watching
+                        ? cinemaPartnerStatus.title
+                          ? `Şu an izliyor: ${cinemaPartnerStatus.title}`
+                          : 'Sen de katıl, aynı saniyeden başla'
+                        : 'Biletini al, salonu aç'}
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-amber-200 text-lg">›</span>
+                </div>
+              </div>
+            )}
 
             {/* Quick Unread Letter Banner */}
             {unreadLetters.length > 0 && (
@@ -306,6 +589,26 @@ export const App: React.FC = () => {
                 </span>
               </div>
             )}
+
+            {/* Bahçe özeti — bugün bir şey bekliyor mu? */}
+            <button
+              onClick={() => {
+                playHaptic(20);
+                setActiveTab('garden');
+              }}
+              className="flex items-center gap-3 rounded-3xl bg-white/85 border border-emerald-100 shadow-sm px-4 py-3 text-left active:scale-[0.99] transition-transform"
+            >
+              <span className="text-xl shrink-0">🌱</span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-serif text-sm font-bold text-berry-950">
+                  Bahçede bugün
+                </span>
+                <span className="block text-[10px] text-stone-500 truncate">
+                  Günün sorusu, kapsüller ve şarkılarınız
+                </span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-stone-400 shrink-0" />
+            </button>
           </div>
         )}
 
@@ -340,9 +643,6 @@ export const App: React.FC = () => {
                 <Feather className="w-12 h-12 text-berry-400 mb-2 animate-float" />
                 <p className="font-serif text-sm font-semibold text-berry-900">
                   Henüz mektup yok
-                </p>
-                <p className="text-xs text-stone-500 mt-1">
-                  Sevgiline ilk aşk mektubunu veya S-Pen çizimini hemen yaz ✨
                 </p>
               </div>
             ) : (
@@ -386,7 +686,7 @@ export const App: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="shrink-0 ml-2">
+                      <div className="shrink-0 ml-2 flex items-center gap-1.5">
                         {isUnread ? (
                           <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-berry-500 text-white">
                             Mühürlü ✨
@@ -396,10 +696,99 @@ export const App: React.FC = () => {
                             Okundu ✓
                           </span>
                         )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            playHaptic(15);
+                            hideLetter(l);
+                          }}
+                          className="p-1.5 rounded-full text-stone-300 hover:text-berry-600"
+                          title="Arşive al (silinmez)"
+                          aria-label="Arşive al"
+                        >
+                          <Archive className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* ---- Arşiv: mektuplar asla silinmez, buradan geri getirilir ---- */}
+            {archivedCount > 0 && (
+              <div className="rounded-3xl border border-amber-200/70 bg-amber-50/60 p-3">
+                <button
+                  onClick={() => {
+                    setShowLetterArchive((open) => !open);
+                    playHaptic(15);
+                  }}
+                  className="w-full flex items-center justify-between gap-2"
+                  aria-expanded={showLetterArchive}
+                >
+                  <span className="flex items-center gap-2 min-w-0">
+                    <Archive className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span className="min-w-0 text-left">
+                      <span className="block font-serif text-sm font-bold text-berry-950">
+                        Mektup Arşivi ({archivedCount})
+                      </span>
+                      <span className="block text-[10px] text-stone-500">
+                        Arşive aldığın mektuplar burada saklanır, hiçbiri kaybolmaz
+                      </span>
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1 shrink-0">
+                    <span className="text-[10px] font-bold text-amber-800">
+                      {showLetterArchive ? 'Gizle' : 'Aç'}
+                    </span>
+                    <ChevronRight
+                      className={`w-4 h-4 text-stone-400 transition-transform ${
+                        showLetterArchive ? 'rotate-90' : ''
+                      }`}
+                    />
+                  </span>
+                </button>
+
+                {showLetterArchive && (
+                  <div className="mt-2 space-y-2">
+                    {archivedLetters.map((l) => (
+                      <div
+                        key={`arch-${l.id}`}
+                        className="flex items-center justify-between gap-2 rounded-2xl bg-white/85 border border-amber-100 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-serif text-xs font-bold text-berry-950 truncate">
+                            {l.title}
+                          </p>
+                          <p className="text-[10px] text-stone-500">
+                            {l.sender === currentUser ? 'Ben yazdım' : partnerName} ·{' '}
+                            {new Date(l.created_at).toLocaleDateString('tr-TR')}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={() => {
+                              playHaptic(20);
+                              restoreLetter(l);
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-berry-500 text-white text-[10px] font-bold active:scale-95"
+                          >
+                            Geri Getir
+                          </button>
+                          <button
+                            onClick={() => {
+                              playHaptic(12);
+                              setSelectedLetter(l);
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-white border border-rose-200 text-berry-800 text-[10px] font-bold active:scale-95"
+                          >
+                            Oku
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -454,29 +843,46 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Radar Tab */}
-        {activeTab === 'radar' && (
-          <CoupleRadar
-            currentUserId={currentUser}
-            partnerName={partnerName}
-          />
-        )}
+        {/* Bahçe: Günün sorusu · Zaman kapsülleri · Şarkılarımız · Duygu havası (demo) */}
+        {activeTab === 'garden' && <GardenView currentUserId={currentUser} />}
 
-        {/* Watch Tab */}
-        {activeTab === 'watch' && (
-          <WatchCompanion
-            currentUserId={currentUser}
-            partnerName={partnerName}
-            onOpenInstallModal={() => setIsWatchModalOpen(true)}
-          />
+        {/* Anılar: Anlık · Günlük · Hayvanlar · Sinema · Radar */}
+        {activeTab === 'memories' && (
+          <div className="flex flex-col space-y-4">
+            <MoreHub
+              currentUserId={currentUser}
+              onOpenCinema={() => setIsCinemaOpen(true)}
+              onOpenRadar={() => setShowRadar(true)}
+            />
+            {showRadar && (
+              <div className="animate-[fadeIn_0.25s_ease-out]">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-serif text-sm font-bold text-berry-950">Çift Radarı</h3>
+                  <button
+                    onClick={() => setShowRadar(false)}
+                    className="text-[11px] font-semibold text-stone-500 px-2.5 py-1 rounded-full bg-white/80 border border-rose-100"
+                  >
+                    Kapat
+                  </button>
+                </div>
+                <CoupleRadar currentUserId={currentUser} partnerName={partnerName} />
+              </div>
+            )}
+          </div>
         )}
       </main>
 
-      {/* Floating Bottom Navigation Bar */}
+      {/* Floating Bottom Navigation Bar — her zaman 5 tuş */}
       <Navigation
         activeTab={activeTab}
-        onChangeTab={setActiveTab}
+        onChangeTab={(tab) => {
+          setActiveTab(tab);
+          if (tab === 'chat') setUnreadChat(0);
+        }}
         unreadLettersCount={unreadLetters.length}
+        unreadChatCount={unreadChat}
+        hasNewSnaps={Boolean(snapFeed?.partner && (snapFeed.partner.unseen ?? 0) > 0)}
+        hasGardenNews={Boolean(gardenNews)}
       />
 
       {/* Letter Editor Modal */}
@@ -504,9 +910,47 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Watch Installation Helper Modal */}
-      {isWatchModalOpen && (
-        <WatchInstallModal onClose={() => setIsWatchModalOpen(false)} />
+      {/* Sinema Salonu — kendi tam ekran dünyası */}
+      {isCinemaOpen && (
+        <div className="fixed inset-0 z-[85] bg-stone-950 overflow-y-auto safe-area-all">
+          <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-2.5 bg-stone-950/95 backdrop-blur-md border-b border-amber-500/20">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🎬</span>
+              <span className="font-serif text-sm font-bold text-amber-100">Sinema Salonu</span>
+            </div>
+            <button
+              onClick={() => {
+                setIsCinemaOpen(false);
+                playHaptic(18);
+              }}
+              className="px-3 py-1.5 rounded-full bg-white/10 text-white text-[11px] font-bold active:scale-95"
+            >
+              Kapat ✕
+            </button>
+          </div>
+          <div className="max-w-md mx-auto p-4 pb-24">
+            <CinemaSalon
+              currentUserId={currentUser}
+              onBackHandlerReady={(handler) => {
+                cinemaInnerBackRef.current = handler;
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Yeni an / sinema bildirimi */}
+      {snapToast && (
+        <div
+          onClick={() => {
+            setActiveTab('memories');
+            setSnapToast(null);
+          }}
+          className="fixed left-1/2 -translate-x-1/2 top-16 z-[95] max-w-[92%] px-4 py-2.5 rounded-2xl bg-berry-900/95 text-white text-xs font-semibold shadow-2xl flex items-center gap-2 animate-[fadeIn_0.3s_ease-out] cursor-pointer"
+        >
+          <Sparkles className="w-4 h-4 text-amber-300 shrink-0" />
+          <span>{snapToast}</span>
+        </div>
       )}
     </div>
   );

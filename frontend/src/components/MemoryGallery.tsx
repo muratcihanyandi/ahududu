@@ -176,7 +176,7 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
 
       {/* Upload Modal */}
       {showUploadModal && previewUrl && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 safe-area-all">
           <div className="bg-white rounded-3xl p-5 max-w-sm w-full border border-rose-100 shadow-2xl">
             <h3 className="font-serif text-base font-bold text-berry-950 mb-3">
               Yeni Anı Paylaş 📸
@@ -214,7 +214,7 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
 
       {/* Full-view Modal */}
       {selectedItem && (
-        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3">
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-3 safe-area-all">
           <button
             onClick={() => setSelectedItem(null)}
             className="absolute top-4 right-4 p-2 rounded-full bg-white/20 text-white hover:bg-white/30"

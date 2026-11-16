@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timezone
 from backend.app.database import get_db
+from backend.app.config import settings
 from backend.app.models import UserProfile, now_utc
 from backend.app.schemas import UserProfileSchema, UserProfileUpdate
 from backend.app.websocket_manager import ws_manager
@@ -10,27 +11,23 @@ from backend.app.websocket_manager import ws_manager
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 async def ensure_profiles(db: AsyncSession):
-    # Ensure default profiles exist
-    murat = await db.get(UserProfile, "murat")
-    if not murat:
-        db.add(UserProfile(
-            id="murat",
-            display_name="Murat 🐻",
-            avatar="🐻",
-            status_text="Canımı Düşünüyor ❤️",
-            battery_level=88,
-            place_name="Evde 🏡"
-        ))
-    sevgilim = await db.get(UserProfile, "sevgilim")
-    if not sevgilim:
-        db.add(UserProfile(
-            id="sevgilim",
-            display_name="Sevgilim 🌸",
-            avatar="🌸",
-            status_text="Gülümsüyor ✨",
-            battery_level=94,
-            place_name="Evde 🏡"
-        ))
+    # Ensure the two accounts exist. No fake status/place text is seeded:
+    # a profile starts empty until the person themselves fills it in.
+    defaults = [
+        (settings.USER_MURAT, "Murat", "🐻"),
+        (settings.USER_SELIN, "Selin", "🌸"),
+    ]
+    for user_id, display_name, avatar in defaults:
+        existing = await db.get(UserProfile, user_id)
+        if not existing:
+            db.add(UserProfile(
+                id=user_id,
+                display_name=display_name,
+                avatar=avatar,
+                status_text="",
+                place_name="",
+                battery_level=100,
+            ))
     await db.commit()
 
 @router.get("/profiles")
@@ -62,7 +59,7 @@ async def update_profile(user_id: str, payload: UserProfileUpdate, db: AsyncSess
     await db.refresh(profile)
     
     # Broadcast status change to partner
-    partner_id = "sevgilim" if user_id == "murat" else "murat"
+    partner_id = settings.partner_of(user_id)
     await ws_manager.send_to_user(partner_id, {
         "type": "partner_profile_updated",
         "profile": {

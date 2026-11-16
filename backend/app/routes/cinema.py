@@ -1,0 +1,585 @@
+"""Sinema Salonu — birlikte izleme odası.
+
+Murat ya da Selin herhangi bir siteden bir video linki seçer. Link, sayfa
+içinde oynatılabilir (iframe / doğrudan video dosyası) hale getirilir. İki
+telefon da aynı filmi aynı saniyede görür: oynat / duraklat / sarma işlemleri
+WebSocket üzerinden anında karşı tarafa yansır.
+"""
+
+import logging
+import re
+from typing import List, Optional
+from urllib.parse import urlparse, parse_qs
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.app.config import settings
+from backend.app.database import get_db
+from backend.app.models import CinemaRoom, now_utc
+from backend.app.schemas import (
+    CinemaRoomCreate,
+    CinemaRoomResponse,
+    CinemaControl,
+    CinemaReaction,
+)
+from backend.app.websocket_manager import ws_manager
+from backend.app.services.film_resolver import resolve_page_video
+
+logger = logging.getLogger("ahududu.cinema")
+
+router = APIRouter(prefix="/api/cinema", tags=["cinema"])
+
+# Doğrudan oynatılabilen video dosyaları
+VIDEO_EXTENSIONS = (".mp4", ".webm", ".m4v", ".mov", ".ogv", ".ogg", ".mkv", ".m3u8", ".ts")
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")
+
+# Site bazlı gömme kuralları: (regex, iframe üretici)
+YOUTUBE_REGEX = re.compile(
+    r"(?:youtube\.com/(?:watch\?.*?v=|embed/|shorts/|live/)|youtu\.be/)([A-Za-z0-9_\-]{6,})"
+)
+VIMEO_REGEX = re.compile(r"vimeo\.com/(?:video/)?(\d+)")
+DAILYMOTION_REGEX = re.compile(r"dailymotion\.com/(?:video/|embed/video/)([A-Za-z0-9]+)")
+TWITCH_REGEX = re.compile(r"twitch\.tv/([A-Za-z0-9_]+)")
+BILIBILI_REGEX = re.compile(r"bilibili\.com/video/([A-Za-z0-9]+)")
+OKRU_REGEX = re.compile(r"ok\.ru/video/(\d+)")
+STREAMABLE_REGEX = re.compile(r"streamable\.com/([A-Za-z0-9]+)")
+FACEBOOK_REGEX = re.compile(r"facebook\.com/.+/videos?/")
+INSTAGRAM_REGEX = re.compile(r"instagram\.com/(?:reel|p|tv)/")
+
+
+def _iframe(src: str, allow_fullscreen: bool = True) -> str:
+    allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+    if allow_fullscreen:
+        allow += "; fullscreen"
+    return (
+        f'<iframe src="{src}" frameborder="0" allow="{allow}" '
+        'allowfullscreen referrerpolicy="origin" style="width:100%;height:100%;border:0"></iframe>'
+    )
+
+
+def resolve_video(raw_url: str) -> dict:
+    """Kullanıcının yapıştırdığı linki sayfa içinde oynatılabilir hale getirir."""
+    url = (raw_url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Video bağlantısı boş olamaz")
+
+    # Daha önce bozulmuş (https:///api/media/...) kayıtları onar
+    url = url.replace("https:///", "/").replace("http:///", "/")
+
+    # Medya kütüphanesi yolu: göreli kalırsa iframe/video kaynağı bozulur.
+    if url.startswith("/api/media/") or url.startswith("api/media/"):
+        if not url.startswith("/"):
+            url = "/" + url
+        return {
+            "source": "upload",
+            "video_url": url,
+            "embed_url": None,
+            "kind": "file",
+            "poster_url": None,
+        }
+
+    if not re.match(r"^https?://", url):
+        url = "https://" + url
+
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower().replace("www.", "")
+    path = parsed.path or ""
+    low = url.lower()
+
+    # Zaten gömme adresi yapıştırılmışsa
+    if host.endswith("youtube.com") and "/embed/" in path:
+        return {
+            "source": "embed",
+            "embed_url": url,
+            "video_url": url,
+            "kind": "embed",
+            "poster_url": f"https://img.youtube.com/vi/{path.split('/embed/')[-1].split('?')[0]}/maxresdefault.jpg",
+        }
+
+    match = YOUTUBE_REGEX.search(url)
+    if match:
+        video_id = match.group(1)
+        start = parse_qs(parsed.query).get("t", [""])[0]
+        embed = f"https://www.youtube.com/embed/{video_id}?rel=0&modestbranding=1"
+        if start:
+            digits = re.sub(r"\D", "", start)
+            if digits:
+                embed += f"&start={digits}"
+        return {
+            "source": "youtube",
+            "video_url": url,
+            "embed_url": embed,
+            "kind": "embed",
+            "poster_url": f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
+        }
+
+    match = VIMEO_REGEX.search(url)
+    if match:
+        video_id = match.group(1)
+        return {
+            "source": "vimeo",
+            "video_url": url,
+            "embed_url": f"https://player.vimeo.com/video/{video_id}?dnt=1",
+            "kind": "embed",
+            "poster_url": None,
+        }
+
+    match = DAILYMOTION_REGEX.search(url)
+    if match:
+        video_id = match.group(1)
+        return {
+            "source": "dailymotion",
+            "video_url": url,
+            "embed_url": f"https://www.dailymotion.com/embed/video/{video_id}",
+            "kind": "embed",
+            "poster_url": f"https://www.dailymotion.com/thumbnail/video/{video_id}",
+        }
+
+    match = BILIBILI_REGEX.search(url)
+    if match:
+        bvid = match.group(1)
+        return {
+            "source": "bilibili",
+            "video_url": url,
+            "embed_url": f"https://player.bilibili.com/player.html?bvid={bvid}&autoplay=0",
+            "kind": "embed",
+            "poster_url": None,
+        }
+
+    match = OKRU_REGEX.search(url)
+    if match:
+        video_id = match.group(1)
+        return {
+            "source": "okru",
+            "video_url": url,
+            "embed_url": f"https://ok.ru/videoembed/{video_id}",
+            "kind": "embed",
+            "poster_url": None,
+        }
+
+    match = STREAMABLE_REGEX.search(url)
+    if match:
+        video_id = match.group(1)
+        return {
+            "source": "streamable",
+            "video_url": url,
+            "embed_url": f"https://streamable.com/e/{video_id}",
+            "kind": "embed",
+            "poster_url": None,
+        }
+
+    if host.endswith("twitch.tv") and "clips" in path:
+        slug = path.rstrip("/").split("/")[-1]
+        return {
+            "source": "twitch",
+            "video_url": url,
+            "embed_url": f"https://clips.twitch.tv/embed?clip={slug}&parent=ahududu",
+            "kind": "embed",
+            "poster_url": None,
+        }
+
+    match = TWITCH_REGEX.search(url)
+    if match:
+        channel = match.group(1)
+        return {
+            "source": "twitch",
+            "video_url": url,
+            "embed_url": f"https://player.twitch.tv/?channel={channel}&parent=ahududu",
+            "kind": "embed",
+            "poster_url": None,
+        }
+
+    if FACEBOOK_REGEX.search(url):
+        return {
+            "source": "facebook",
+            "video_url": url,
+            "embed_url": f"https://www.facebook.com/plugins/video.php?href={url}&show_text=false",
+            "kind": "embed",
+            "poster_url": None,
+        }
+
+    if INSTAGRAM_REGEX.search(url):
+        clean = url.split("?")[0].rstrip("/")
+        return {
+            "source": "instagram",
+            "video_url": url,
+            "embed_url": f"{clean}/embed",
+            "kind": "embed",
+            "poster_url": None,
+        }
+
+    # Doğrudan video dosyası (mp4, webm, m3u8...) veya medya kütüphanesi yolu
+    if low.split("?")[0].endswith(VIDEO_EXTENSIONS) or "/api/media/file/" in low:
+        source = "upload" if "/api/media/file/" in low else "link"
+        return {
+            "source": source,
+            "video_url": url,
+            "embed_url": None,
+            "kind": "file",
+            "poster_url": None,
+        }
+
+    # Sunucudaki görsel/medya yolu: sayfa içinde oynatılabilir değil, iframe'e gömülmez.
+    if url.startswith("/api/media/") or low.split("?")[0].endswith(IMAGE_EXTENSIONS):
+        return {
+            "source": "image",
+            "video_url": url,
+            "embed_url": None,
+            "kind": "file",
+            "poster_url": url,
+        }
+
+    # Başarısızsa siteyi iframe içine göm (bazı siteler izin vermez ama deniyoruz)
+    if not parsed.netloc:
+        # Göreli / geçersiz bir yol hiçbir yerde oynatılamaz; anlamlı hata ver.
+        raise HTTPException(status_code=400, detail="Geçerli bir video bağlantısı yapıştır")
+
+    return {
+        "source": host or "link",
+        "video_url": url,
+        "embed_url": url,
+        "kind": "embed",
+        "poster_url": None,
+    }
+
+
+def _room_payload(room: CinemaRoom) -> dict:
+    return {
+        "id": room.id,
+        "title": room.title,
+        "video_url": room.video_url,
+        "source": room.source,
+        "embed_url": room.embed_url,
+        "cover_url": room.cover_url,
+        "poster_url": room.poster_url,
+        "kind": room.kind,
+        "created_by": room.created_by,
+        "is_playing": bool(room.is_playing),
+        "is_active": bool(room.is_active),
+        "position": room.position or 0.0,
+        "duration": room.duration or 0.0,
+        "updated_by": room.updated_by,
+        "last_seen_at": room.last_seen_at.isoformat() if room.last_seen_at else None,
+        "created_at": room.created_at.isoformat() if room.created_at else None,
+        "updated_at": room.updated_at.isoformat() if room.updated_at else None,
+    }
+
+
+@router.post("/resolve")
+async def resolve_link(payload: dict):
+    """Bir video linkini sayfa içinde oynatılabilir adrese çevirir.
+
+    Bilinen siteler (YouTube, Vimeo…) doğrudan çözülür. Bilinmeyen bir film
+    sitesiyse sayfa indirilip içindeki gerçek video kaynağı aranır; böylece
+    site kendi sayfasını engellediği (X-Frame-Options) durumlarda da film
+    uygulama içinde oynatılabilir.
+    """
+    url = payload.get("video_url") or payload.get("url") or ""
+    resolved = resolve_video(url)
+
+    # Zaten tanınan bir kaynak (youtube/vimeo/mp4) → doğrudan dön
+    if resolved.get("source") not in (None, "", "link") and not _is_generic_site(resolved, url):
+        return resolved
+
+    # Bilinmeyen site: gerçek video kaynağını sayfadan çıkar
+    try:
+        page_result = await resolve_page_video(resolved["video_url"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Sayfa çözümlemesi başarısız: %s", exc)
+        page_result = {"ok": False}
+
+    if page_result.get("ok") and page_result.get("url"):
+        found = page_result["url"]
+        if found.lower().endswith((".mp4", ".m3u8", ".webm")):
+            return {
+                "source": "link",
+                "video_url": found,
+                "embed_url": None,
+                "kind": "file",
+                "poster_url": resolved.get("poster_url"),
+                "page_url": resolved["video_url"],
+                "page_title": page_result.get("page_title"),
+            }
+        return {
+            "source": "embed",
+            "video_url": resolved["video_url"],
+            "embed_url": found,
+            "kind": "embed",
+            "poster_url": resolved.get("poster_url"),
+            "page_url": resolved["video_url"],
+            "page_title": page_result.get("page_title"),
+        }
+
+    return resolved
+
+
+def _is_generic_site(resolved: dict, original_url: str) -> bool:
+    """Tanınmayan site mi? (site adını source olarak döndüren durum)"""
+    source = (resolved.get("source") or "").lower()
+    known = {
+        "youtube", "vimeo", "dailymotion", "bilibili", "twitch", "okru",
+        "streamable", "facebook", "instagram", "upload", "link",
+    }
+    return source not in known
+
+
+@router.get("", response_model=List[CinemaRoomResponse])
+async def list_rooms(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(CinemaRoom).order_by(desc(CinemaRoom.is_active), desc(CinemaRoom.updated_at))
+    )
+    return result.scalars().all()
+
+
+@router.get("/current", response_model=Optional[CinemaRoomResponse])
+async def current_room(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(CinemaRoom).where(CinemaRoom.is_active.is_(True)).order_by(desc(CinemaRoom.updated_at)).limit(1)
+    )
+    room = result.scalars().first()
+    return room
+
+
+@router.post("", response_model=CinemaRoomResponse)
+async def create_room(payload: CinemaRoomCreate, db: AsyncSession = Depends(get_db)):
+    resolved = resolve_video(payload.video_url)
+
+    # Aynı link zaten salonda varsa yenisini açmıyoruz
+    existing = await db.execute(
+        select(CinemaRoom).where(CinemaRoom.video_url == resolved["video_url"]).limit(1)
+    )
+    room = existing.scalars().first()
+
+    if room:
+        room.title = payload.title.strip() or room.title
+        room.kind = payload.kind or room.kind
+        room.cover_url = payload.cover_url or room.cover_url
+        room.poster_url = payload.poster_url or resolved["poster_url"] or room.poster_url
+    else:
+        room = CinemaRoom(
+            title=payload.title.strip() or "Bizim Filmimiz 🍿",
+            video_url=resolved["video_url"],
+            source=resolved["source"],
+            embed_url=resolved["embed_url"],
+            cover_url=payload.cover_url,
+            poster_url=payload.poster_url or resolved["poster_url"],
+            # Gömme siteleri (YouTube, Vimeo…) "embed", doğrudan dosyalar "film".
+            # Karışık durumlar için embed_url varlığı oynatıcıyı belirler.
+            kind=("embed" if resolved.get("embed_url") else "film"),
+            created_by=payload.created_by or "murat",
+            is_playing=False,
+            is_active=False,
+            position=0.0,
+            duration=0.0,
+        )
+        db.add(room)
+
+    # Sadece bu film aktif olsun
+    all_rooms = await db.execute(select(CinemaRoom))
+    for other in all_rooms.scalars().all():
+        if other is not room and other.is_active:
+            other.is_active = False
+
+    await db.commit()
+    await db.refresh(room)
+
+    await ws_manager.broadcast({"type": "cinema_room_created", "room": _room_payload(room)})
+    return room
+
+
+@router.get("/{room_id}/embed")
+async def room_embed(room_id: int, db: AsyncSession = Depends(get_db)):
+    """Oda için HTML gömme kodu (iframe içinde fullscreen'e izin verir)."""
+    room = await db.get(CinemaRoom, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Salon bulunamadı")
+    if room.embed_url:
+        return {"html": _iframe(room.embed_url), "kind": "embed", "src": room.embed_url}
+    return {"html": None, "kind": "file", "src": room.video_url}
+
+
+@router.post("/{room_id}/start", response_model=CinemaRoomResponse)
+async def start_room(room_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
+    """Filmi başlat: her iki telefon da yatay sinema salonuna girer."""
+    room = await db.get(CinemaRoom, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Salon bulunamadı")
+
+    all_rooms = await db.execute(select(CinemaRoom))
+    for other in all_rooms.scalars().all():
+        other.is_active = False
+
+    room.is_active = True
+    room.is_playing = True
+    room.position = 0.0
+    # Bilinen süre korunur (aynı film yeniden başlatıldığında ilerleme çubuğu bozulmasın)
+    room.updated_by = payload.get("user_id", "murat")
+    room.last_seen_at = now_utc()
+    await db.commit()
+    await db.refresh(room)
+
+    await ws_manager.broadcast({
+        "type": "cinema_started",
+        "room": _room_payload(room),
+        "started_by": payload.get("user_id", "murat"),
+        "title": room.title,
+    })
+    return room
+
+
+@router.post("/{room_id}/control", response_model=CinemaRoomResponse)
+async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = Depends(get_db)):
+    """Oynat / duraklat / sarma — partnerin ekranına anında yansır."""
+    room = await db.get(CinemaRoom, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Salon bulunamadı")
+
+    action = (payload.action or "").lower()
+    if action == "play":
+        room.is_playing = True
+    elif action == "pause":
+        room.is_playing = False
+    elif action == "seek":
+        room.position = float(payload.position or 0.0)
+    elif action in ("adopt", "join"):
+        # Salona yeni katılan taraf, kimsenin ekranını oynatmaz: sadece
+        # "salondayım" bilgisini tazeler. Konum oynatıcıda zaten senkronlanır.
+        room.last_seen_at = now_utc()
+    elif action == "leave":
+        # Salondan çıkan kişi filmi duraklatır. İki taraf da çıktıysa salon kapanır;
+        # böylece kimse izlemediği halde "oynuyor" görünen bir film kalmaz.
+        room.last_seen_at = now_utc()
+        room.is_playing = False
+        room.is_active = False
+        room.updated_by = payload.user_id
+        # Profildeki 'Sinemada' durumu ANINDA temizlensin.
+        # WS mesaji kaybolsa/gecikse bile HTTP yolu tek basina yeterli olsun.
+        try:
+            await set_cinema_presence(payload.user_id, False)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug('cinema leave presence temizlenemedi: %s', exc)
+    elif action == "stop":
+        room.is_active = False
+        room.is_playing = False
+        room.position = 0.0
+    elif action == "sync":
+        # Sadece oynatma durumunu/pozisyonunu tazele (yeni gelen tarafın isteği)
+        pass
+    else:
+        raise HTTPException(status_code=400, detail="Bilinmeyen işlem")
+
+    if payload.position is not None and action in ("play", "pause", "seek"):
+        room.position = float(payload.position)
+    # Süre hiçbir zaman sıfıra geri yazılmaz: iki telefonun aynı anda
+    # bildirim göndermesi durumunda bile bilinen süre korunur.
+    if payload.duration and float(payload.duration) > 0:
+        room.duration = float(payload.duration)
+
+    room.updated_by = payload.user_id
+    room.updated_at = now_utc()
+    await db.commit()
+    await db.refresh(room)
+
+    await ws_manager.broadcast({
+        "type": "cinema_sync",
+        "room_id": room.id,
+        "action": action,
+        "position": room.position,
+        "duration": room.duration,
+        "is_playing": room.is_playing,
+        "is_active": room.is_active,
+        "updated_by": room.updated_by,
+        "updated_at": room.updated_at.isoformat(),
+    })
+    return room
+
+
+@router.post("/{room_id}/react")
+async def react_in_room(room_id: int, payload: CinemaReaction):
+    """Film sırasında 💕😂😱 uçuşsun."""
+    await ws_manager.broadcast({
+        "type": "cinema_reaction",
+        "room_id": room_id,
+        "sender": payload.sender,
+        "emoji": payload.emoji,
+    })
+    return {"success": True}
+
+
+async def touch_position(room_id: int, position: float, is_playing: bool, user_id: str) -> None:
+    """Oynatma sırasındaki periyodik konum bildirimini kaydeder.
+
+    WebSocket üzerinden gelir (HTTP'den çok daha hafif). Sunucudaki konumun
+    güncel kalması, salona sonradan giren kişinin filmi doğru saniyeden
+    başlatmasını sağlar.
+    """
+    from backend.app.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        room = await db.get(CinemaRoom, room_id)
+        if not room or not room.is_active:
+            return
+        room.position = max(0.0, float(position))
+        room.is_playing = bool(is_playing)
+        room.updated_by = user_id
+        room.last_seen_at = now_utc()
+        await db.commit()
+
+
+async def set_cinema_presence(user_id: str, is_watching: bool, title: Optional[str] = None) -> None:
+    """Kişinin Ahududu durumunu "Sinemada 🍿" yapar; çıkınca eski durumuna döner.
+
+    Bu sayede partnerin ana ekranında "Selin — Sinemada 🍿" görünür.
+    """
+    from backend.app.database import AsyncSessionLocal
+    from backend.app.models import UserProfile
+
+    async with AsyncSessionLocal() as db:
+        profile = await db.get(UserProfile, user_id)
+        if not profile:
+            return
+
+        if is_watching:
+            # Şu anki durumu sakla (çıkınca geri döneceğiz)
+            if not (profile.status_text or "").startswith("Sinemada"):
+                presence_memory[user_id] = profile.status_text or ""
+            label = f"Sinemada 🍿" + (f" · {title}" if title else "")
+            profile.status_text = label[:100]
+        else:
+            profile.status_text = presence_memory.get(user_id, "") or ""
+            presence_memory.pop(user_id, None)
+
+        profile.last_seen = now_utc()
+        await db.commit()
+
+        # Partnerinizin durum kartı anında güncellensin
+        await ws_manager.send_to_user(settings.partner_of(user_id), {
+            "type": "partner_profile_updated",
+            "profile": {
+                "id": profile.id,
+                "display_name": profile.display_name,
+                "status_text": profile.status_text,
+                "battery_level": profile.battery_level,
+                "is_charging": profile.is_charging,
+                "place_name": profile.place_name,
+                "avatar": profile.avatar,
+                "last_seen": profile.last_seen.isoformat() if profile.last_seen else None,
+            },
+        })
+
+
+# Sinemadayken kaydettiğimiz "eski durum" (bellekte, uygulama ömrü boyunca)
+presence_memory: dict = {}
+
+
+@router.delete("/{room_id}")
+async def delete_room(room_id: int, db: AsyncSession = Depends(get_db)):
+    room = await db.get(CinemaRoom, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Salon bulunamadı")
+    await db.delete(room)
+    await db.commit()
+    await ws_manager.broadcast({"type": "cinema_room_deleted", "room_id": room_id})
+    return {"success": True}

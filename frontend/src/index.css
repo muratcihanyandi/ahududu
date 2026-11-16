@@ -3,16 +3,66 @@
 @tailwind utilities;
 
 @layer base {
+  /* The app chrome is always light, including the system status/navigation
+     bars. Declaring it keeps the OS from switching to white-on-white icons. */
+  :root {
+    color-scheme: light;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+  }
+
+  html,
+  body {
+    /* Background must paint behind the system bars, content must not. */
+    background-attachment: fixed;
+  }
+
   body {
     -webkit-tap-highlight-color: transparent;
     user-select: none;
     -webkit-user-select: none;
     overscroll-behavior-y: none;
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+  }
+
+  #root {
+    min-height: 100vh;
   }
 
   input, textarea {
     user-select: auto;
     -webkit-user-select: auto;
+  }
+}
+
+@layer utilities {
+  /* Top inset for the sticky header: content starts below the status bar. */
+  .safe-top {
+    padding-top: var(--safe-top);
+  }
+
+  /* Content area: keep clear of the bottom gesture/nav bar. */
+  .safe-bottom {
+    padding-bottom: var(--safe-bottom);
+  }
+
+  /* Fixed overlay modals (letter editor/viewer) must respect the same insets. */
+  .safe-area-all {
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
+  }
+}
+
+/* Status bar icons are light-on-dark only on the starry letter paper;
+   everywhere else the app is light, so use dark icons for contrast. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: light;
   }
 }
 
@@ -30,4 +80,119 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(190, 24, 93, 0.4);
+}
+
+/* ------------------------------------------------------------------
+   Anlık Fotoğraf, Günlük, Hayvan Albümü ve Sinema Salonu animasyonları
+   ------------------------------------------------------------------ */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes floatUp {
+  0% { opacity: 0; transform: translateY(0) scale(0.6) rotate(-8deg); }
+  15% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-62vh) scale(1.35) rotate(12deg); }
+}
+
+@keyframes snapIn {
+  from { opacity: 0; transform: scale(0.94); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes spinSlow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pageFlipIn {
+  0% { opacity: 0; transform: perspective(1200px) rotateY(-35deg) translateX(-24px); }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: perspective(1200px) rotateY(0deg) translateX(0); }
+}
+
+@keyframes paperFloat {
+  0%, 100% { transform: translateY(0) rotate(-0.4deg); }
+  50% { transform: translateY(-4px) rotate(0.4deg); }
+}
+
+@keyframes petBounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  30% { transform: translateY(-7px) scale(1.04); }
+  60% { transform: translateY(-2px) scale(0.99); }
+}
+
+@keyframes curtainOpen {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+@keyframes marqueeGlow {
+  0%, 100% { opacity: 0.55; filter: blur(18px) brightness(1); }
+  50% { opacity: 1; filter: blur(26px) brightness(1.35); }
+}
+
+@keyframes projectorFlicker {
+  0%, 100% { opacity: 0.9; }
+  47% { opacity: 0.55; }
+  52% { opacity: 1; }
+  78% { opacity: 0.7; }
+}
+
+@keyframes lightsSweep {
+  0% { transform: translateX(-30%) rotate(-14deg); opacity: 0.35; }
+  50% { transform: translateX(30%) rotate(14deg); opacity: 0.75; }
+  100% { transform: translateX(-30%) rotate(-14deg); opacity: 0.35; }
+}
+
+@keyframes seatBob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.5px); }
+}
+
+@keyframes popIn {
+  0% { opacity: 0; transform: scale(0.85) translateY(10px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes cinematicIn {
+  0% { opacity: 0; letter-spacing: 0.6em; filter: blur(6px); }
+  100% { opacity: 1; letter-spacing: 0.12em; filter: blur(0); }
+}
+
+/* Günlük kağıdı: gerçek defter sayfası dokusu */
+.diary-paper {
+  background-color: #fffdf7;
+  background-image:
+    linear-gradient(to bottom, rgba(190, 24, 93, 0.06) 1px, transparent 1px),
+    radial-gradient(circle at 20% 0%, rgba(217, 119, 6, 0.08), transparent 45%),
+    radial-gradient(circle at 90% 100%, rgba(190, 24, 93, 0.07), transparent 40%);
+  background-size: 100% 30px, 100% 100%, 100% 100%;
+}
+
+.diary-margin {
+  border-left: 2px solid rgba(225, 29, 72, 0.18);
+}
+
+/* Sinema: sinema salonu karanlığı ve projektör ışığı */
+.cinema-vignette::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.85) 100%);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }

@@ -1,0 +1,60 @@
+name: ahududu
+services:
+  app:
+    container_name: ahududu-app
+    image: ghcr.io/muratcihanyandi/ahududu:latest
+    platform: linux/arm64
+    restart: unless-stopped
+    ports:
+      - target: 33470
+        published: "33470"
+        protocol: tcp
+        mode: host
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://muratcihanyandi:Can-10u3557@192.168.2.170:5432/ahududu
+      UPLOAD_DIR: /data/uploads
+      STATIC_DIR: /app/backend/static
+      PORT: "33470"
+    volumes:
+      - type: bind
+        source: /DATA/AppData/ahududu/uploads
+        target: /data/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:33470/api/system/version"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    labels:
+      icon: "https://raw.githubusercontent.com/muratcihanyandi/ahududu/main/logo/ahududu_logo.png"
+      title: "Ahududu ❤️"
+
+x-casaos:
+  architectures:
+    - arm64
+  main: app
+  author: Murat
+  category: Personal
+  developer: muratcihanyandi
+  icon: https://raw.githubusercontent.com/muratcihanyandi/ahududu/main/logo/ahududu_logo.png
+  thumbnail: https://raw.githubusercontent.com/muratcihanyandi/ahududu/main/logo/ahududu_logo.png
+  title:
+    custom: Ahududu ❤️
+    en_us: Ahududu
+  tagline:
+    custom: Bizim Dünyamız
+    en_us: Our World
+  description:
+    custom: Murat ve sevgilisi için özel çift uygulaması. S-Pen mektuplar, telsiz, çift radarı, ortak galeri ve notlar.
+    en_us: Private couple app with S-Pen letters, walkie-talkie, couple radar, shared gallery and notes.
+  scheme: http
+  port_map: "33470"
+  index: /
+  is_uncontrolled: false
+  store_app_id: ahududu
+  hostname: 192.168.2.170
+  tip:
+    custom: Telefon uygulaması yalnızca bir kez kurulur; sunucu güncellemeleri otomatik olarak dağıtılır.
+  screenshot_link:
+    - https://raw.githubusercontent.com/muratcihanyandi/ahududu/main/logo/icon_onizleme.png

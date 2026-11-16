@@ -2,13 +2,13 @@
 
 ## 1. Vizyon ve Amaç
 Ahududu; Murat ve sevgilisi için özel olarak tasarlanmış, romantik, samimi ve teknik hiçbir karmaşıklık içermeyen ikili çift uygulamasıdır. 
-Uygulama genel uygulama mağazalarında yayınlanmayacak, doğrudan çiftin kendi cihazlarında (Samsung Galaxy S23, Galaxy S24 Ultra, Samsung Watch 7 ve Watch Ultra) çalışacaktır.
+Uygulama genel uygulama mağazalarında yayınlanmayacak, doğrudan çiftin kendi cihazlarında (Samsung Galaxy S23, Galaxy S24 Ultra) çalışacaktır.
 
 Sunucu altyapısı Murat'ın evindeki Raspberry Pi 5 üzerinde, CasaOS ortamında Docker konteynerleri ve PostgreSQL veritabanı ile çalışır. Dış dünya erişimi Cloudflare Tunnel ile sağlanır.
 
 ## 2. Temel Hedef Kitle ve Kullanıcı Profilleri
-- **Murat (Geliştirici & Partner):** Samsung Galaxy S23 & Samsung Watch Ultra.
-- **Sevgilisi (Son Kullanıcı):** Samsung Galaxy S24 Ultra (S-Pen donanımlı) & Samsung Watch 7. Yazılımdan veya teknik detaylardan anlamaz; arayüz büyüleyici, tatlı, pürüzsüz ve sıfır çaba gerektiren bir sadelikte olmalıdır.
+- **Murat (Geliştirici & Partner):** Samsung Galaxy S23.
+- **Sevgilisi (Son Kullanıcı):** Samsung Galaxy S24 Ultra (S-Pen donanımlı). Yazılımdan veya teknik detaylardan anlamaz; arayüz büyüleyici, tatlı, pürüzsüz ve sıfır çaba gerektiren bir sadelikte olmalıdır.
 
 ## 3. Mimari ve "Sıfır Yeniden Kurulum" Prensibi
 - **Tek Seferlik Kurulum:** APK her iki telefona sadece bir defa kurulur (Native Shell / Capacitor).
@@ -24,14 +24,14 @@ Sunucu altyapısı Murat'ın evindeki Raspberry Pi 5 üzerinde, CasaOS ortamınd
 
 2. **İlgi İsteme Butonu ("Beni Sev!"):**
    - Ana ekranda sevimli, interaktif ilgi butonu.
-   - Dokunulduğunda sevgilinin telefonuna ve saatine anında özel kalp atışı titreşimleri, sesli bildirim ve ekranda uçuşan ahududu ve kalp efektleri gönderir.
+   - Dokunulduğunda sevgilinin telefonuna anında özel kalp atışı titreşimleri, sesli bildirim ve ekranda uçuşan ahududu ve kalp efektleri gönderir.
    - Hızlı tatlı yanıt butonları ("Hemen geliyorum!", "Kocaman sarıldım", "Canım benim").
 
-3. **Çift Sohbeti & Telsiz (Walkie-Talkie) / Sesli Notlar:**
-   - Anlık WebSocket mesajlaşma.
-   - Yüksek kaliteli fotoğraf ve video paylaşımı.
-   - Bas-Konuş Telsiz (Walkie-Talkie): Butona basılı tutarak konuşulduğunda diğer tarafta anında sevimli bir telsiz sesiyle otomatik çalar.
-   - Ortam sesi dinleme / kontrolü: Güvenli, karşılıklı rızaya dayalı anlık ses kontrolü.
+3. **Çift Sohbeti / Sesli Notlar:**
+   - Anlık mesajlaşma.
+   - Yüksek kaliteli fotoğraf, video ve sesli mesaj paylaşımı.
+   - Sohbet ekranı sabittir: başlık ve mesaj yazma alanı oynamaz, yalnızca mesaj listesi kayar.
+   - Sade başlık: "Selin" (kişi adı), canlı bağlantı göstergesi.
 
 4. **Ortak Galeri ve Anı Defteri:**
    - Fotoğraf & videolar için ortak albümler.
@@ -47,10 +47,43 @@ Sunucu altyapısı Murat'ın evindeki Raspberry Pi 5 üzerinde, CasaOS ortamınd
    - "Yanına Git" yol tarifi kısayolu.
 
 7. **Uzaktan Titreşim (Remote Haptics):**
-   - Kalp atışı, sarılma, öpücük ve acil ilgi titreşim desenlerini doğrudan partnerin telefonuna ve saatine iletme.
+   - Kalp atışı, sarılma, öpücük ve acil ilgi titreşim desenlerini doğrudan partnerin telefonuna iletme.
 
-8. **Samsung Galaxy Watch Entegrasyonu (Watch 7 & Watch Ultra):**
-   - Dairesel Wear OS ekranlarına tam uyumlu arayüz.
-   - Anlık kalp atışı (BPM), adım sayısı ve stres seviyesi senkronizasyonu.
-   - Saatten saate titreşim ve aşk animasyonları.
-   - "Saate Kur" tek tıkla kurulum kılavuzu.
+8. **Anlık Fotoğraf (Anlar):**
+   - "Şu an ne yapıyorum" kareleri; 24 saat sonra kendiliğinden kaybolur.
+   - Kamera/galeri, filtreler, duygu etiketi, görüldü bilgisi ve anlık tepki emojileri.
+
+9. **Günlük (Bizim Defterimiz):**
+   - Ortak anı defteri: başlık, ruh hali, yıldız puanı, hava, fotoğraf.
+   - Kilitli (yalnızca yazanın gördüğü) sayfalar, gün serisi istatistikleri, sayfa çevirme animasyonu.
+
+10. **Hayvan Albümü:**
+    - Her hayvana isim + kategori (kedi, köpek, kuş, balık, tavşan, hamster, kaplumbağa, sürüngen, at, diğer).
+    - Cins, yaş, hikâye, sevimli notlar, sahiplik, favori ve her hayvana özel fotoğraf galerisi.
+    - Kategori normalizasyonu: `köpek` / `kopek` / `Köpek` aynı kategoriye düşer.
+
+11. **Sinema Salonu — Takvim + Birlikte İzleme (Büyük Güncelleme):**
+    - **Sinema takvimi:** O ayın yayın programı beyaz perde gibi şık bir takvimde. Murat ya da Selin elle film ekleyebilir;
+      OpenClaw "sinema takvimini ayarla" dediğinde bütün ayı tek istekle kurabilir (`/api/cinema/calendar/import`).
+    - Herhangi bir siteden video (YouTube, Vimeo, Dailymotion, Bilibili, Twitch, ok.ru, Streamable, .mp4/.m3u8) veya telefondan dosya.
+    - Uygulamadan "bilet alınır" (gerçek bilet değil, ortak rezervasyon + bilet kodu). Bilet olmadan salona girilmez.
+    - Seans saatinde salona girilir; telefon otomatik yataya döner, animasyonlu sinema salonu açılır.
+    - **Senkron izleme:** oynat/duraklat/sarma WebSocket ile anında; sunucu konumu kaydeder, katılan kişi aynı saniyeden devam eder.
+    - **Salona giriş bildirimi:** partnerin sinemaya girdiği anda bildirim gelir; Ahududu durumu "Sinemada 🍿" olur.
+    - Karakterler (🐻 Murat / 🌸 Selin) perdenin iki yanında görünür.
+    - ❤️😂😱😍🍿 tepkileri iki tarafta da uçar; "Tam ekran" ile salon tam ekrana geçer.
+    - Film izlerken otomatik güncelleme yenilemesi ertelenir; film bölünmez.
+
+12. **Kullanım Kolaylıkları:**
+    - **Android geri tuşu:** Açık pencereyi kapatır, sonra ana ekrana döner, en sonda uygulamayı arkaya alır — uygulamadan çıkarmaz.
+    - **Sabit sohbet ekranı:** Başlık ve mesaj yazma alanı sabit; yalnızca mesaj listesi kayar.
+    - **Sade başlıklar:** "Selin ile Sohbet" yerine yalnızca kişi adı.
+    - **Ana sayfa:** "Biz" sekmesi "Ana sayfa" oldu; pil göstergeleri küçük rozetlere indirildi, durum cümlesi,
+      birlikte geçen gün sayısı ve hızlı erişim kartları öne çıktı.
+    - **Teknik kelime yok:** Arayüzde teknik terim (API, OpenClaw, format listeleri vb.) görünmez.
+
+13. **Navigasyon:** Alt bar her zaman 5 tuş — **Ana sayfa · Mektuplar · Sohbet · Bahçe · Anılar**.
+    Sinema ve Çift Radarı ana sayfa ve "Anılar" sekmesinden açılır.
+
+14. **Anı Bahçesi (demo):** Günün Sorusu, Zaman Kapsülleri, Bizim Şarkılarımız, Yıllar Önce Bugün,
+    Duygu Havası — hepsi DEMO etiketiyle. (My Bibi uygulamasından ilham alınmıştır.)

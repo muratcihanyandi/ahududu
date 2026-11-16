@@ -7,18 +7,28 @@ const config: CapacitorConfig = {
   server: {
     // Points directly to the live server on Raspberry Pi 5
     // Guarantees zero-reinstall instant updates!
-    url: 'http://192.168.2.170:33470',
-    cleartext: true,
+    url: 'https://ahududu.fakeyol.com',
+    cleartext: false,
     allowNavigation: [
-      '192.168.2.170:33470',
+      'ahududu.fakeyol.com',
       '*.muratcihanyandi.com',
       'localhost:*'
     ]
   },
   android: {
     allowMixedContent: true,
-    backgroundColor: '#fdf2f8'
-  }
+    backgroundColor: '#fdf2f8',
+  },
+  plugins: {
+    // The app is light-themed on every screen, so the OS must draw DARK
+    // status-bar icons. Without this the system defaults to white icons,
+    // which are invisible on the near-white app background.
+    StatusBar: {
+      style: 'LIGHT',           // 'LIGHT' = dark icons (Android naming)
+      overlaysWebView: false,   // WebView starts below the status bar
+      backgroundColor: '#fdf2f8',
+    },
+  },
 };
 
 export default config;

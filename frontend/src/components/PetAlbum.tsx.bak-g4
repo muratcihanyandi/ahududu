@@ -1,0 +1,932 @@
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+  Plus, Heart, Camera, X, Trash2, Star, Pencil, PawPrint,
+  Film, ChevronLeft, ChevronRight, Image as ImageIcon, Sparkles,
+} from 'lucide-react';
+import { Pet, PetWithPhotos, PetPhoto, UserId, USERS, partnerOf, nameOf } from '../types';
+import { api, mediaUrl } from '../services/api';
+import { wsClient } from '../services/websocket';
+import { playHaptic, soundEngine } from '../services/haptics';
+
+interface PetAlbumProps {
+  currentUserId: UserId;
+}
+
+// Kategoriler: her hayvana isim ve kategori verilebiliyor
+const CATEGORIES: { id: string; label: string; emoji: string; color: string }[] = [
+  { id: 'kedi', label: 'Kediler', emoji: '🐱', color: '#f59e0b' },
+  { id: 'köpek', label: 'Köpekler', emoji: '🐶', color: '#be185d' },
+  { id: 'kuş', label: 'Kuşlar', emoji: '🐦', color: '#0284c7' },
+  { id: 'balık', label: 'Balıklar', emoji: '🐠', color: '#0891b2' },
+  { id: 'tavşan', label: 'Tavşanlar', emoji: '🐰', color: '#db2777' },
+  { id: 'hamster', label: 'Hamsterlar', emoji: '🐹', color: '#d97706' },
+  { id: 'kaplumbağa', label: 'Kaplumbağalar', emoji: '🐢', color: '#15803d' },
+  { id: 'sürüngen', label: 'Sürüngenler', emoji: '🦎', color: '#65a30d' },
+  { id: 'at', label: 'Atlar', emoji: '🐴', color: '#92400e' },
+  { id: 'diğer', label: 'Diğer', emoji: '🐾', color: '#6b7280' },
+];
+
+// Hızlı emoji seçenekleri
+const EMOJI_CHOICES = ['🐱', '🐶', '🐦', '🐠', '🐰', '🐹', '🐢', '🦎', '🐴', '🐾', '🦜', '🐍', '🐷', '🐮', '🐑', '🐆', '🦊', '🐼'];
+const COLOR_CHOICES = ['#be185d', '#db2777', '#f59e0b', '#0284c7', '#0891b2', '#15803d', '#7c3aed', '#92400e'];
+
+const categoryOf = (id: string) => CATEGORIES.find((c) => c.id === id);
+
+export const PetAlbum: React.FC<PetAlbumProps> = ({ currentUserId }) => {
+  const partnerId = partnerOf(currentUserId);
+  const [pets, setPets] = useState<PetWithPhotos[]>([]);
+  const [category, setCategory] = useState('Tümü');
+  const [isLoading, setIsLoading] = useState(true);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [editingPet, setEditingPet] = useState<Pet | null>(null);
+  const [detailPet, setDetailPet] = useState<PetWithPhotos | null>(null);
+  const [lightbox, setLightbox] = useState<{ photos: PetPhoto[]; index: number; petName: string } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = useCallback((text: string) => {
+    setToast(text);
+    window.setTimeout(() => setToast(null), 2500);
+  }, []);
+
+  const load = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const data = await api.listPets();
+      setPets(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error('Hayvan albümü yüklenemedi', e);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+
+    const reload = () => load();
+    const unsubNew = wsClient.on('new_pet', (data: any) => {
+      if (data?.pet) {
+        soundEngine.playLoveChime();
+        playHaptic(60);
+        showToast(`${nameOf(partnerId)} yeni bir dost ekledi: ${data.pet.name}! 🐾`);
+        load();
+      }
+    });
+    const unsubUpdated = wsClient.on('pet_updated', reload);
+    const unsubDeleted = wsClient.on('pet_deleted', reload);
+    const unsubPhoto = wsClient.on('new_pet_photo', (data: any) => {
+      if (data?.photo) {
+        setPets((prev) =>
+          prev.map((p) =>
+            p.pet.id === data.pet_id
+              ? {
+                  ...p,
+                  photos: [data.photo, ...p.photos],
+                  photo_count: p.photo_count + 1,
+                }
+              : p
+          )
+        );
+        playHaptic(40);
+      }
+    });
+    const unsubPhotoDeleted = wsClient.on('pet_photo_deleted', reload);
+
+    return () => {
+      unsubNew();
+      unsubUpdated();
+      unsubDeleted();
+      unsubPhoto();
+      unsubPhotoDeleted();
+    };
+  }, [load, partnerId, showToast]);
+
+  const filtered = useMemo(() => {
+    if (category === 'Tümü') return pets;
+    return pets.filter((p) => p.pet.category === category);
+  }, [pets, category]);
+
+  const usedCategories = useMemo(() => {
+    const set = new Set(pets.map((p) => p.pet.category));
+    return CATEGORIES.filter((c) => set.has(c.id));
+  }, [pets]);
+
+  const totalPhotos = pets.reduce((sum, p) => sum + p.photo_count, 0);
+
+  const toggleFavorite = async (pet: Pet, e: React.MouseEvent) => {
+    e.stopPropagation();
+    playHaptic(25);
+    try {
+      const updated = await api.updatePet(pet.id, { is_favorite: !pet.is_favorite });
+      setPets((prev) => prev.map((p) => (p.pet.id === pet.id ? { ...p, pet: updated } : p)));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const deletePet = async (pet: Pet) => {
+    if (!window.confirm(`"${pet.name}" albümünü silmek istediğine emin misin?`)) return;
+    try {
+      await api.deletePet(pet.id);
+      setPets((prev) => prev.filter((p) => p.pet.id !== pet.id));
+      setDetailPet(null);
+      playHaptic(35);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  return (
+    <div className="flex flex-col space-y-4">
+      {/* Kapak */}
+      <div className="relative overflow-hidden rounded-3xl p-4 bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 text-white shadow-lg shadow-teal-900/20">
+        <div className="absolute -right-4 -bottom-6 text-[100px] opacity-15 leading-none">🐾</div>
+        <div className="absolute -left-6 -top-8 w-28 h-28 rounded-full bg-white/15 blur-2xl" />
+
+        <div className="relative flex items-start justify-between">
+          <div>
+            <h2 className="font-serif text-lg font-bold leading-tight">Hayvan Albümümüz 🐾</h2>
+            <p className="text-[11px] text-white/85 mt-0.5">
+              {pets.length} dost · {totalPhotos} fotoğraf
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              setEditingPet(null);
+              setComposerOpen(true);
+              playHaptic(25);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-white/95 text-teal-700 text-xs font-bold shadow-md active:scale-95 transition-all"
+          >
+            <Plus className="w-4 h-4" />
+            Dost Ekle
+          </button>
+        </div>
+
+        {/* Kategori özet halkaları */}
+        {usedCategories.length > 0 && (
+          <div className="relative flex gap-2 overflow-x-auto no-scrollbar mt-3">
+            {usedCategories.map((c) => {
+              const count = pets.filter((p) => p.pet.category === c.id).length;
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => {
+                    setCategory(category === c.id ? 'Tümü' : c.id);
+                    playHaptic(15);
+                  }}
+                  className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[10px] font-bold transition-all ${
+                    category === c.id ? 'bg-white text-teal-800' : 'bg-white/20 text-white'
+                  }`}
+                >
+                  <span>{c.emoji}</span>
+                  {c.label}
+                  <span className="opacity-70">{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Kategori filtresi */}
+      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+        <button
+          onClick={() => {
+            setCategory('Tümü');
+            playHaptic(15);
+          }}
+          className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
+            category === 'Tümü'
+              ? 'bg-teal-600 text-white shadow-xs'
+              : 'bg-white/80 border border-teal-100 text-stone-600'
+          }`}
+        >
+          Tümü
+        </button>
+        {CATEGORIES.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => {
+              setCategory(c.id);
+              playHaptic(15);
+            }}
+            className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
+              category === c.id
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'bg-white/80 border border-teal-100 text-stone-600'
+            }`}
+          >
+            {c.emoji} {c.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Dost kartları */}
+      {isLoading ? (
+        <div className="p-10 text-center text-xs text-stone-500 animate-pulse">Dostlarımız geliyor…</div>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center p-10 bg-white/70 rounded-3xl border border-teal-100 text-center">
+          <PawPrint className="w-10 h-10 text-teal-300 mb-2 animate-pulse" />
+          <p className="font-serif text-sm font-semibold text-berry-900">
+            {pets.length === 0 ? 'Henüz bir dost eklenmedi 🐾' : 'Bu kategoride dost yok'}
+          </p>
+          <p className="text-xs text-stone-500 mt-1 max-w-[250px]">
+            Evcil dostlarını, sokak arkadaşlarını, sevdiğiniz tüm hayvanları isimleriyle buraya ekleyin ✨
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          {filtered.map(({ pet, photos, photo_count }) => {
+            const cat = categoryOf(pet.category);
+            return (
+              <button
+                key={pet.id}
+                onClick={() => {
+                  setDetailPet({ pet, photos, photo_count });
+                  playHaptic(20);
+                }}
+                className="group relative text-left rounded-3xl overflow-hidden bg-white border border-teal-100 shadow-xs hover:shadow-lg transition-all active:scale-[0.97]"
+              >
+                <div className="relative aspect-[4/5] overflow-hidden" style={{ backgroundColor: `${pet.color || cat?.color}22` }}>
+                  {pet.photo_url ? (
+                    <img
+                      src={mediaUrl(pet.photo_url)}
+                      alt={pet.name}
+                      loading="lazy"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-6xl animate-[petBounce_3s_ease-in-out_infinite]">
+                      {pet.emoji || cat?.emoji || '🐾'}
+                    </div>
+                  )}
+
+                  <div className="absolute inset-x-0 top-0 p-2 flex items-center justify-between">
+                    <span
+                      className="text-[9px] font-bold px-2 py-0.5 rounded-full text-white shadow-xs"
+                      style={{ backgroundColor: cat?.color || '#0d9488' }}
+                    >
+                      {cat?.emoji} {cat?.label.replace(/lar$|ler$/, '') || pet.category}
+                    </span>
+                    <span
+                      onClick={(e) => toggleFavorite(pet, e)}
+                      className="p-1 rounded-full bg-black/25 backdrop-blur-xs"
+                    >
+                      <Star
+                        className={`w-3.5 h-3.5 ${
+                          pet.is_favorite ? 'text-amber-400 fill-amber-400' : 'text-white'
+                        }`}
+                      />
+                    </span>
+                  </div>
+
+                  {photo_count > 0 && (
+                    <span className="absolute top-1/2 right-2 -translate-y-1/2 flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-black/45 text-white text-[9px] font-semibold">
+                      <ImageIcon className="w-2.5 h-2.5" />
+                      {photo_count}
+                    </span>
+                  )}
+
+                  <div className="absolute inset-x-0 bottom-0 p-2.5 bg-gradient-to-t from-black/80 via-black/40 to-transparent">
+                    <div className="flex items-center gap-1">
+                      <span className="text-sm">{pet.emoji || '🐾'}</span>
+                      <h4 className="font-serif text-sm font-bold text-white truncate">{pet.name}</h4>
+                    </div>
+                    <p className="text-[10px] text-white/75 truncate">
+                      {pet.breed || pet.age || (pet.owner === 'bizim' ? 'Bizim dostumuz' : nameOf(pet.owner as UserId))}
+                    </p>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed left-1/2 -translate-x-1/2 top-20 z-[70] px-4 py-2 rounded-2xl bg-teal-900/90 text-white text-xs font-semibold shadow-xl">
+          {toast}
+        </div>
+      )}
+
+      {composerOpen && (
+        <PetComposer
+          editing={editingPet}
+          onClose={() => {
+            setComposerOpen(false);
+            setEditingPet(null);
+          }}
+          onSaved={() => {
+            setComposerOpen(false);
+            setEditingPet(null);
+            load();
+            showToast(editingPet ? 'Bilgiler güncellendi ✨' : 'Yeni dostumuz eklendi! 🐾');
+          }}
+        />
+      )}
+
+      {detailPet && (
+        <PetDetail
+          currentUserId={currentUserId}
+          data={detailPet}
+          onClose={() => setDetailPet(null)}
+          onEdit={(pet) => {
+            setDetailPet(null);
+            setEditingPet(pet);
+            setComposerOpen(true);
+          }}
+          onDelete={deletePet}
+          onOpenPhoto={(photos, index) => setLightbox({ photos, index, petName: detailPet.pet.name })}
+          onRefresh={load}
+        />
+      )}
+
+      {lightbox && (
+        <PetLightbox
+          data={lightbox}
+          onClose={() => setLightbox(null)}
+          onNavigate={(index) => setLightbox((prev) => (prev ? { ...prev, index } : null))}
+        />
+      )}
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Detay (pet profile + galeri)                                        */
+/* ------------------------------------------------------------------ */
+
+const PetDetail: React.FC<{
+  currentUserId: UserId;
+  data: PetWithPhotos;
+  onClose: () => void;
+  onEdit: (pet: Pet) => void;
+  onDelete: (pet: Pet) => void;
+  onOpenPhoto: (photos: PetPhoto[], index: number) => void;
+  onRefresh: () => void;
+}> = ({ currentUserId, data, onClose, onEdit, onDelete, onOpenPhoto, onRefresh }) => {
+  const { pet } = data;
+  const [photos, setPhotos] = useState<PetPhoto[]>(data.photos);
+  const [isUploading, setIsUploading] = useState(false);
+  const [hearts, setHearts] = useState<number[]>([]);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const cat = categoryOf(pet.category);
+
+  useEffect(() => setPhotos(data.photos), [data]);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploading(true);
+    playHaptic(25);
+    try {
+      const upload = await api.uploadMedia(file, 'pets');
+      const isVideo = file.type.startsWith('video');
+      const photo = await api.addPetPhoto(pet.id, {
+        uploader: currentUserId,
+        media_url: upload.url,
+        media_type: isVideo ? 'video' : 'image',
+      });
+      setPhotos((prev) => [photo, ...prev]);
+      if (!pet.photo_url) onRefresh();
+      soundEngine.playLoveChime();
+    } catch (err) {
+      console.error(err);
+      alert('Fotoğraf yüklenemedi.');
+    } finally {
+      setIsUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const deletePhoto = async (photo: PetPhoto, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm('Bu fotoğrafı silmek istiyor musun?')) return;
+    try {
+      await api.deletePetPhoto(pet.id, photo.id);
+      setPhotos((prev) => prev.filter((p) => p.id !== photo.id));
+      onRefresh();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const sendLove = () => {
+    playHaptic([80, 60, 80, 60, 160]);
+    setHearts((prev) => [...prev, Date.now()]);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-md overflow-y-auto safe-area-all">
+      <div className="min-h-full flex items-start justify-center p-3">
+        <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden animate-[popIn_0.3s_ease-out]">
+          {/* Kapak fotoğrafı */}
+          <div className="relative h-52" style={{ backgroundColor: `${pet.color}33` }}>
+            {pet.photo_url ? (
+              <img src={mediaUrl(pet.photo_url)} alt={pet.name} className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-8xl animate-[petBounce_3s_ease-in-out_infinite]">
+                {pet.emoji || '🐾'}
+              </div>
+            )}
+            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-black/30" />
+
+            <button onClick={onClose} className="absolute top-3 right-3 p-2 rounded-full bg-black/40 text-white">
+              <X className="w-5 h-5" />
+            </button>
+            <div className="absolute top-3 left-3 flex gap-1.5">
+              <button onClick={() => onEdit(pet)} className="p-2 rounded-full bg-black/40 text-white">
+                <Pencil className="w-4 h-4" />
+              </button>
+              <button onClick={() => onDelete(pet)} className="p-2 rounded-full bg-black/40 text-rose-300">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="absolute bottom-3 left-4 right-4 flex items-end justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-serif text-2xl font-bold text-white drop-shadow">{pet.name}</h2>
+                  <span className="text-2xl">{pet.emoji}</span>
+                </div>
+                <p className="text-[11px] text-white/85 mt-0.5">
+                  {cat?.emoji} {cat?.label || pet.category}
+                  {pet.breed ? ` · ${pet.breed}` : ''}
+                  {pet.age ? ` · ${pet.age}` : ''}
+                </p>
+              </div>
+              <button
+                onClick={sendLove}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-rose-500 text-white text-xs font-bold shadow-lg active:scale-90 transition-transform"
+              >
+                <Heart className="w-3.5 h-3.5 fill-white" />
+                Sev
+              </button>
+            </div>
+
+            {/* uçan kalpler */}
+            {hearts.map((key) => (
+              <div key={key} className="pointer-events-none absolute inset-0 overflow-hidden">
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <span
+                    key={i}
+                    className="absolute bottom-8 text-2xl animate-[floatUp_1.8s_ease-out_forwards]"
+                    style={{ left: `${15 + Math.random() * 70}%`, animationDelay: `${i * 70}ms` }}
+                  >
+                    ❤️
+                  </span>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          <div className="p-4 space-y-4">
+            {/* Bilgiler */}
+            <div className="flex flex-wrap gap-1.5">
+              <span className="px-2.5 py-1 rounded-full bg-teal-50 border border-teal-100 text-[10px] font-semibold text-teal-800">
+                {pet.owner === 'bizim' ? '💞 Bizim dostumuz' : `${USERS[pet.owner as UserId]?.emoji} ${nameOf(pet.owner as UserId)}'in dostu`}
+              </span>
+              {pet.is_favorite && (
+                <span className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-[10px] font-semibold text-amber-800">
+                  ⭐ Favori
+                </span>
+              )}
+              <span className="px-2.5 py-1 rounded-full bg-rose-50 border border-rose-100 text-[10px] font-semibold text-berry-800">
+                📸 {photos.length} fotoğraf
+              </span>
+            </div>
+
+            {pet.bio && (
+              <div className="rounded-2xl bg-teal-50/60 border border-teal-100 p-3">
+                <p className="text-[10px] font-bold text-teal-700 mb-0.5">Hikayesi</p>
+                <p className="text-xs text-stone-700 leading-relaxed">{pet.bio}</p>
+              </div>
+            )}
+            {pet.love_notes && (
+              <div className="rounded-2xl bg-rose-50/70 border border-rose-100 p-3">
+                <p className="text-[10px] font-bold text-berry-700 mb-0.5">Sevimli Halleri 🐾</p>
+                <p className="text-xs text-stone-700 leading-relaxed">{pet.love_notes}</p>
+              </div>
+            )}
+
+            {/* Galeri */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-serif text-sm font-bold text-berry-950 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  Fotoğraf Albümü
+                </h3>
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={isUploading}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-teal-600 text-white text-[11px] font-bold shadow-xs active:scale-95 disabled:opacity-60"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  {isUploading ? 'Yükleniyor…' : 'Fotoğraf Ekle'}
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*,video/*"
+                  onChange={handleUpload}
+                  className="hidden"
+                />
+              </div>
+
+              {photos.length === 0 ? (
+                <div className="rounded-2xl border-2 border-dashed border-teal-200 p-6 text-center">
+                  <Camera className="w-8 h-8 text-teal-300 mx-auto mb-1" />
+                  <p className="text-xs text-stone-500">
+                    {pet.name}'in ilk fotoğrafını ekle 📸
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-1.5">
+                  {photos.map((photo, i) => (
+                    <div
+                      key={photo.id}
+                      onClick={() => onOpenPhoto(photos, i)}
+                      className="group relative aspect-square rounded-xl overflow-hidden bg-teal-50 cursor-pointer active:scale-95 transition-transform"
+                    >
+                      {photo.media_type === 'video' ? (
+                        <>
+                          <video src={mediaUrl(photo.media_url)} muted playsInline className="w-full h-full object-cover" />
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                            <Film className="w-6 h-6 text-white" />
+                          </div>
+                        </>
+                      ) : (
+                        <img
+                          src={mediaUrl(photo.media_url)}
+                          alt={photo.caption || pet.name}
+                          loading="lazy"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                        />
+                      )}
+                      <button
+                        onClick={(e) => deletePhoto(photo, e)}
+                        className="absolute top-1 right-1 p-1 rounded-full bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Tam ekran fotoğraf görüntüleyici                                    */
+/* ------------------------------------------------------------------ */
+
+const PetLightbox: React.FC<{
+  data: { photos: PetPhoto[]; index: number; petName: string };
+  onClose: () => void;
+  onNavigate: (index: number) => void;
+}> = ({ data, onClose, onNavigate }) => {
+  const { photos, index, petName } = data;
+  const photo = photos[index];
+  if (!photo) return null;
+
+  return (
+    <div className="fixed inset-0 z-[70] bg-black flex flex-col safe-area-all">
+      <div className="flex items-center justify-between px-4 py-3">
+        <p className="text-white text-sm font-bold">{petName}</p>
+        <button onClick={onClose} className="p-2 rounded-full bg-white/10 text-white">
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      <div className="relative flex-1 min-h-0 flex items-center justify-center">
+        <button
+          onClick={() => onNavigate(Math.max(0, index - 1))}
+          disabled={index === 0}
+          className="absolute left-1 z-10 p-2 rounded-full bg-white/10 text-white disabled:opacity-20"
+        >
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+
+        {photo.media_type === 'video' ? (
+          <video
+            key={photo.id}
+            src={mediaUrl(photo.media_url)}
+            controls
+            autoPlay
+            playsInline
+            className="max-h-full max-w-full object-contain"
+          />
+        ) : (
+          <img
+            key={photo.id}
+            src={mediaUrl(photo.media_url)}
+            alt={photo.caption || petName}
+            className="max-h-full max-w-full object-contain animate-[snapIn_0.25s_ease-out]"
+          />
+        )}
+
+        <button
+          onClick={() => onNavigate(Math.min(photos.length - 1, index + 1))}
+          disabled={index === photos.length - 1}
+          className="absolute right-1 z-10 p-2 rounded-full bg-white/10 text-white disabled:opacity-20"
+        >
+          <ChevronRight className="w-6 h-6" />
+        </button>
+      </div>
+
+      <div className="px-4 pb-4 text-center">
+        {photo.caption && <p className="text-white/90 text-sm">{photo.caption}</p>}
+        <p className="text-white/40 text-[10px] mt-1">
+          {index + 1} / {photos.length} · {USERS[photo.uploader]?.emoji}
+        </p>
+      </div>
+    </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Hayvan ekle / düzenle                                               */
+/* ------------------------------------------------------------------ */
+
+const PetComposer: React.FC<{
+  editing: Pet | null;
+  onClose: () => void;
+  onSaved: () => void;
+}> = ({ editing, onClose, onSaved }) => {
+  const isNew = !editing;
+  const [name, setName] = useState(editing?.name ?? '');
+  const [category, setCategory] = useState(editing?.category ?? 'kedi');
+  const [emoji, setEmoji] = useState(editing?.emoji ?? '🐱');
+  const [color, setColor] = useState(editing?.color ?? '#be185d');
+  const [owner, setOwner] = useState<string>(editing?.owner ?? 'bizim');
+  const [breed, setBreed] = useState(editing?.breed ?? '');
+  const [age, setAge] = useState(editing?.age ?? '');
+  const [bio, setBio] = useState(editing?.bio ?? '');
+  const [loveNotes, setLoveNotes] = useState(editing?.love_notes ?? '');
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(
+    editing?.photo_url ? mediaUrl(editing.photo_url) : null
+  );
+  const [isFavorite, setIsFavorite] = useState(editing?.is_favorite ?? false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectCategory = (id: string) => {
+    setCategory(id);
+    const cat = categoryOf(id);
+    if (cat) setEmoji(cat.emoji);
+    playHaptic(12);
+  };
+
+  const handlePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setPhotoFile(f);
+    setPhotoPreview(URL.createObjectURL(f));
+    e.target.value = '';
+  };
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      setError('Dostumuzun bir ismi olmalı 🐾');
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    playHaptic(30);
+
+    try {
+      let photoUrl = editing?.photo_url || undefined;
+      if (photoFile) {
+        const upload = await api.uploadMedia(photoFile, 'pets');
+        photoUrl = upload.url;
+      }
+
+      const payload = {
+        name: name.trim(),
+        category,
+        emoji,
+        color,
+        owner,
+        breed: breed.trim() || undefined,
+        age: age.trim() || undefined,
+        bio: bio.trim() || undefined,
+        love_notes: loveNotes.trim() || undefined,
+        photo_url: photoUrl,
+        is_favorite: isFavorite,
+      };
+
+      if (editing) {
+        await api.updatePet(editing.id, payload as Partial<Pet>);
+      } else {
+        await api.createPet(payload as any);
+      }
+      soundEngine.playLoveChime();
+      onSaved();
+    } catch (err) {
+      console.error(err);
+      setError('Kaydedilemedi, tekrar dener misin?');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/65 backdrop-blur-md flex items-end sm:items-center justify-center safe-area-all">
+      <div className="w-full sm:max-w-md max-h-[94vh] overflow-y-auto bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white">
+          <div className="flex items-center gap-2">
+            <PawPrint className="w-5 h-5" />
+            <h3 className="font-serif text-base font-bold">
+              {isNew ? 'Yeni Dost Ekle' : 'Dostu Düzenle'}
+            </h3>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-white/20">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-3.5">
+          {/* Fotoğraf */}
+          <div className="flex items-center gap-3">
+            <label
+              className="relative w-20 h-20 rounded-2xl overflow-hidden border-2 border-dashed border-teal-200 flex items-center justify-center cursor-pointer bg-teal-50 shrink-0"
+              style={{ backgroundColor: `${color}22` }}
+            >
+              {photoPreview ? (
+                <img src={photoPreview} alt="Kapak" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-3xl">{emoji}</span>
+              )}
+              <span className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[8px] text-center py-0.5">
+                Fotoğraf
+              </span>
+              <input type="file" accept="image/*" onChange={handlePhoto} className="hidden" />
+            </label>
+
+            <div className="flex-1">
+              <label className="text-[11px] font-semibold text-stone-600">İsim</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Pamuk, Mırmır, Kuki…"
+                className="w-full px-3 py-2 mt-1 rounded-xl border border-teal-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-teal-400"
+              />
+            </div>
+          </div>
+
+          {/* Kategori */}
+          <div>
+            <p className="text-[11px] font-semibold text-stone-600 mb-1.5">Kategori</p>
+            <div className="grid grid-cols-4 gap-1.5">
+              {CATEGORIES.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => selectCategory(c.id)}
+                  className={`flex flex-col items-center gap-0.5 py-2 rounded-xl text-[9px] font-bold transition-all ${
+                    category === c.id
+                      ? 'bg-teal-600 text-white shadow-xs'
+                      : 'bg-teal-50 border border-teal-100 text-stone-600'
+                  }`}
+                >
+                  <span className="text-lg">{c.emoji}</span>
+                  {c.label.replace(/lar$|ler$/, '')}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Emoji & renk */}
+          <div>
+            <p className="text-[11px] font-semibold text-stone-600 mb-1.5">Simgesi</p>
+            <div className="flex flex-wrap gap-1">
+              {EMOJI_CHOICES.map((e) => (
+                <button
+                  key={e}
+                  onClick={() => setEmoji(e)}
+                  className={`w-8 h-8 rounded-lg text-lg transition-all ${
+                    emoji === e ? 'bg-teal-100 ring-2 ring-teal-500' : 'hover:bg-teal-50'
+                  }`}
+                >
+                  {e}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-semibold text-stone-600 mb-1.5">Renk</p>
+            <div className="flex gap-1.5">
+              {COLOR_CHOICES.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setColor(c)}
+                  className={`w-7 h-7 rounded-full transition-all ${color === c ? 'ring-2 ring-offset-2 ring-stone-400 scale-110' : ''}`}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Kimin dostu */}
+          <div>
+            <p className="text-[11px] font-semibold text-stone-600 mb-1.5">Kimin dostu?</p>
+            <div className="flex gap-1.5">
+              {[
+                { id: 'bizim', label: '💞 Bizim' },
+                { id: 'murat', label: '🐻 Murat' },
+                { id: 'selin', label: '🌸 Selin' },
+              ].map((o) => (
+                <button
+                  key={o.id}
+                  onClick={() => setOwner(o.id)}
+                  className={`flex-1 py-2 rounded-xl text-[11px] font-bold transition-all ${
+                    owner === o.id
+                      ? 'bg-teal-600 text-white shadow-xs'
+                      : 'bg-teal-50 border border-teal-100 text-stone-600'
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[11px] font-semibold text-stone-600">Cinsi</label>
+              <input
+                type="text"
+                value={breed}
+                onChange={(e) => setBreed(e.target.value)}
+                placeholder="Shih Tzu, Tekir…"
+                className="w-full px-3 py-2 mt-1 rounded-xl border border-teal-200 text-xs focus:outline-none focus:ring-2 focus:ring-teal-400"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-stone-600">Yaşı</label>
+              <input
+                type="text"
+                value={age}
+                onChange={(e) => setAge(e.target.value)}
+                placeholder="2 yaşında"
+                className="w-full px-3 py-2 mt-1 rounded-xl border border-teal-200 text-xs focus:outline-none focus:ring-2 focus:ring-teal-400"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[11px] font-semibold text-stone-600">Hikayesi</label>
+            <textarea
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              rows={2}
+              placeholder="Nasıl tanıştık, neler yapmayı sever…"
+              className="w-full px-3 py-2 mt-1 rounded-xl border border-teal-200 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-teal-400"
+            />
+          </div>
+
+          <div>
+            <label className="text-[11px] font-semibold text-stone-600">Sevimli halleri 🐾</label>
+            <textarea
+              value={loveNotes}
+              onChange={(e) => setLoveNotes(e.target.value)}
+              rows={2}
+              placeholder="En tatlı hareketleri, sevdiği oyuncaklar…"
+              className="w-full px-3 py-2 mt-1 rounded-xl border border-teal-200 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-teal-400"
+            />
+          </div>
+
+          <button
+            onClick={() => setIsFavorite((v) => !v)}
+            className={`w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-bold transition-all ${
+              isFavorite ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-teal-50 text-stone-600 border border-teal-100'
+            }`}
+          >
+            <Star className={`w-4 h-4 ${isFavorite ? 'fill-amber-500 text-amber-500' : ''}`} />
+            {isFavorite ? 'Favorilerde ⭐' : 'Favorilere ekle'}
+          </button>
+
+          {error && <p className="text-xs text-rose-600 font-medium">{error}</p>}
+
+          <button
+            onClick={handleSave}
+            disabled={isSaving}
+            className="w-full py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-serif text-sm font-bold shadow-lg active:scale-[0.98] disabled:opacity-60"
+          >
+            {isSaving ? 'Kaydediliyor…' : isNew ? 'Albüme Ekle 🐾' : 'Değişiklikleri Kaydet'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default PetAlbum;

@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
 from backend.app.database import get_db
+from backend.app.config import settings
 from backend.app.models import UserProfile, LocationLog, now_utc
 from backend.app.schemas import LocationUpdate
 from backend.app.websocket_manager import ws_manager
@@ -44,7 +45,7 @@ async def update_location(payload: LocationUpdate, db: AsyncSession = Depends(ge
     await db.commit()
 
     # Calculate distance if both coords exist
-    partner_id = "sevgilim" if payload.user_id == "murat" else "murat"
+    partner_id = settings.partner_of(payload.user_id)
     partner = await db.get(UserProfile, partner_id)
     distance_km = None
     if profile and partner and profile.current_lat and partner.current_lat:
@@ -71,32 +72,28 @@ async def update_location(payload: LocationUpdate, db: AsyncSession = Depends(ge
 
 @router.get("/couple-status")
 async def get_couple_status(db: AsyncSession = Depends(get_db)):
-    murat = await db.get(UserProfile, "murat")
-    sevgilim = await db.get(UserProfile, "sevgilim")
-    
+    murat = await db.get(UserProfile, settings.USER_MURAT)
+    selin = await db.get(UserProfile, settings.USER_SELIN)
+
     distance_km = None
-    if murat and sevgilim and murat.current_lat and sevgilim.current_lat:
+    if murat and selin and murat.current_lat and selin.current_lat:
         distance_km = haversine_distance(
             murat.current_lat, murat.current_lon,
-            sevgilim.current_lat, sevgilim.current_lon
+            selin.current_lat, selin.current_lon
         )
-        
+
+    def person(profile):
+        return {
+            "lat": profile.current_lat if profile else None,
+            "lon": profile.current_lon if profile else None,
+            "place": (profile.place_name or "") if profile else "",
+            "battery": profile.battery_level if profile else 100,
+            "status": (profile.status_text or "") if profile else "",
+            "last_seen": profile.last_seen.isoformat() if (profile and profile.last_seen) else None,
+        }
+
     return {
-        "murat": {
-            "lat": murat.current_lat if murat else None,
-            "lon": murat.current_lon if murat else None,
-            "place": murat.place_name if murat else "Bilinmiyor",
-            "battery": murat.battery_level if murat else 100,
-            "status": murat.status_text if murat else "Beklemede",
-            "last_seen": murat.last_seen.isoformat() if (murat and murat.last_seen) else None
-        },
-        "sevgilim": {
-            "lat": sevgilim.current_lat if sevgilim else None,
-            "lon": sevgilim.current_lon if sevgilim else None,
-            "place": sevgilim.place_name if sevgilim else "Bilinmiyor",
-            "battery": sevgilim.battery_level if sevgilim else 100,
-            "status": sevgilim.status_text if sevgilim else "Beklemede",
-            "last_seen": sevgilim.last_seen.isoformat() if (sevgilim and sevgilim.last_seen) else None
-        },
-        "distance_km": distance_km
+        settings.USER_MURAT: person(murat),
+        settings.USER_SELIN: person(selin),
+        "distance_km": distance_km,
     }

@@ -5,6 +5,7 @@ from typing import List
 from backend.app.database import get_db
 from backend.app.models import ChatMessage
 from backend.app.schemas import ChatMessageCreate, ChatMessageResponse
+from backend.app.config import settings
 from backend.app.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -38,7 +39,7 @@ async def send_message(payload: ChatMessageCreate, db: AsyncSession = Depends(ge
     await db.refresh(msg)
     
     # Broadcast to partner
-    recipient = "sevgilim" if payload.sender == "murat" else "murat"
+    recipient = settings.partner_of(payload.sender)
     await ws_manager.send_to_user(recipient, {
         "type": "new_chat_message",
         "message": {

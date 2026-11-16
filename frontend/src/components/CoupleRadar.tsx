@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MapPin, Navigation2, Battery, RefreshCw, Vibrate, ExternalLink, Heart } from 'lucide-react';
-import { CoupleStatus, UserId } from '../types';
+import { CoupleStatus, UserId, USERS, partnerOf } from '../types';
 import { api } from '../services/api';
 import { wsClient } from '../services/websocket';
 import { playHaptic, HAPTIC_PATTERNS } from '../services/haptics';
@@ -22,7 +22,7 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
     const unsub = wsClient.on('partner_location_update', (data: any) => {
       setStatus((prev) => {
         if (!prev) return prev;
-        const partnerKey = currentUserId === 'murat' ? 'sevgilim' : 'murat';
+        const partnerKey = partnerOf(currentUserId);
         return {
           ...prev,
           [partnerKey]: {
@@ -68,7 +68,7 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
             longitude: pos.coords.longitude,
             accuracy: pos.coords.accuracy,
             battery: batteryInfo.level,
-            place_name: 'Canlı Konum Alındı 📍',
+            place_name: '',
           });
           setIsUpdating(false);
           loadStatus();
@@ -85,8 +85,8 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
     );
   };
 
-  const myData = currentUserId === 'murat' ? status?.murat : status?.sevgilim;
-  const partnerData = currentUserId === 'murat' ? status?.sevgilim : status?.murat;
+  const myData = status?.[currentUserId];
+  const partnerData = status?.[partnerOf(currentUserId)];
 
   const openNavigation = () => {
     if (partnerData?.lat && partnerData?.lon) {
@@ -95,7 +95,7 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
         '_blank'
       );
     } else {
-      alert('Sevgilinin henüz GPS koordinatı bulunmuyor.');
+      alert('Konum henüz yok.');
     }
   };
 
@@ -105,17 +105,15 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
       <div className="bg-gradient-to-r from-berry-600 via-rose-500 to-pink-500 rounded-3xl p-6 text-white text-center shadow-lg shadow-berry-500/20 relative overflow-hidden">
         <div className="absolute top-0 right-0 -mr-6 -mt-6 w-32 h-32 rounded-full bg-white/10 blur-xl pointer-events-none" />
         <div className="flex items-center justify-center gap-2 mb-1 opacity-90 text-xs font-semibold">
-          <Heart className="w-4 h-4 fill-white" />
-          <span>Kalplerimizin Mesafesi</span>
+          <MapPin className="w-4 h-4" />
+          <span>Mesafe</span>
         </div>
         <div className="font-serif text-3xl font-extrabold tracking-tight mt-1">
-          {status?.distance_km !== undefined ? `${status.distance_km} KM` : 'Aramızda Aşk Var 💕'}
+          {status?.distance_km != null ? `${status.distance_km} km` : 'Bilinmiyor'}
         </div>
-        <p className="text-xs text-pink-100 mt-1">
-          {status?.distance_km && status.distance_km < 0.1
-            ? 'Şu an yan yanasınız! 🥰'
-            : 'Mesafe ne olursa olsun hep aklımdasın'}
-        </p>
+        {status?.distance_km != null && status.distance_km < 0.1 && (
+          <p className="text-xs text-pink-100 mt-1">Aynı konumdasınız</p>
+        )}
       </div>
 
       {/* Radar Map Graphic Card */}
@@ -130,7 +128,7 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
           {/* Me */}
           <div className="flex flex-col items-center">
             <div className="w-14 h-14 rounded-full bg-berry-100 border-2 border-berry-500 flex items-center justify-center text-2xl shadow-md">
-              {currentUserId === 'murat' ? '🐻' : '🌸'}
+              {USERS[currentUserId].emoji}
             </div>
             <span className="font-semibold text-xs text-berry-900 mt-1">Ben</span>
             <span className="text-[10px] text-stone-500">
@@ -148,7 +146,7 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
           {/* Partner */}
           <div className="flex flex-col items-center">
             <div className="w-14 h-14 rounded-full bg-rose-100 border-2 border-rose-500 flex items-center justify-center text-2xl shadow-md">
-              {currentUserId === 'murat' ? '🌸' : '🐻'}
+              {USERS[partnerOf(currentUserId)].emoji}
             </div>
             <span className="font-semibold text-xs text-rose-950 mt-1">{partnerName}</span>
             <span className="text-[10px] text-stone-500">
@@ -159,10 +157,12 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
 
         {/* Status text */}
         <div className="mt-8 text-center text-xs text-stone-600 z-10">
-          <p className="font-semibold text-berry-900">{partnerData?.place || 'Evde 🏡'}</p>
-          <p className="text-[11px] text-stone-400 mt-0.5">
-            Son görülme: {partnerData?.last_seen ? new Date(partnerData.last_seen).toLocaleTimeString('tr-TR') : 'Şimdi'}
-          </p>
+          <p className="font-semibold text-berry-900">{partnerData?.place || 'Konum bilinmiyor'}</p>
+          {partnerData?.last_seen && (
+            <p className="text-[11px] text-stone-400 mt-0.5">
+              Son görülme: {new Date(partnerData.last_seen).toLocaleString('tr-TR', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })}
+            </p>
+          )}
         </div>
       </div>
 

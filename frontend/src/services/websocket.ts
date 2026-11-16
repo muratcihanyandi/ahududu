@@ -23,7 +23,7 @@ class WebSocketClient {
 
     // If running in Capacitor Android Native App (where host is localhost)
     if (window.location.hostname === 'localhost' && window.location.port !== '33470' && window.location.port !== '5173') {
-      const serverUrl = localStorage.getItem('ahududu_server_url') || 'http://192.168.2.170:33470';
+      const serverUrl = localStorage.getItem('ahududu_server_url') || 'https://ahududu.fakeyol.com';
       const cleanHost = serverUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
       const isHttps = serverUrl.startsWith('https');
       wsProtocol = isHttps ? 'wss:' : 'ws:';

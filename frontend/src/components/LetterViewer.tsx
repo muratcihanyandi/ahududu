@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, Stamp, Heart, Calendar, User, Eye } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { LoveLetter } from '../types';
+import { LoveLetter, USERS, nameOf } from '../types';
 import { api } from '../services/api';
 import { playHaptic, soundEngine, HAPTIC_PATTERNS } from '../services/haptics';
 
@@ -55,10 +55,10 @@ export const LetterViewer: React.FC<LetterViewerProps> = ({
   };
 
   const currentTheme = themeStyles[letter.stationery_theme] || themeStyles.vintage_parchment;
-  const isFromMurat = letter.sender === 'murat';
+  const senderName = nameOf(letter.sender);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5">
+    <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 safe-area-all">
       <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col bg-white rounded-3xl shadow-2xl overflow-hidden border border-rose-200/50">
         
         {/* Close Button */}
@@ -115,7 +115,7 @@ export const LetterViewer: React.FC<LetterViewerProps> = ({
             {/* Header info */}
             <div className="px-6 py-4 bg-rose-50/70 border-b border-rose-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-xl">{isFromMurat ? '🐻' : '🌸'}</span>
+                <span className="text-xl">{USERS[letter.sender].emoji}</span>
                 <div>
                   <h3 className="font-serif text-base font-bold text-berry-950">
                     {letter.title}
@@ -123,7 +123,7 @@ export const LetterViewer: React.FC<LetterViewerProps> = ({
                   <div className="flex items-center gap-3 text-xs text-stone-500">
                     <span className="flex items-center gap-1">
                       <User className="w-3 h-3" />
-                      {isFromMurat ? 'Murat' : 'Sevgilim'}
+                      {senderName}
                     </span>
                     <span className="flex items-center gap-1">
                       <Calendar className="w-3 h-3" />
@@ -156,7 +156,7 @@ export const LetterViewer: React.FC<LetterViewerProps> = ({
                     </p>
                     <img
                       src={letter.canvas_image_url}
-                      alt="Sevgilimin Çizimi"
+                      alt="Mektuba eklenen çizim"
                       className="w-full max-h-[400px] object-contain rounded-xl bg-white/40 border border-current/20"
                     />
                   </div>
