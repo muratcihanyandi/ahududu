@@ -89,6 +89,22 @@ export interface PlayerAdapter {
 
 /** Bu farkın altında oynatıcı "yerinde" sayılır. */
 export const SYNC_SETTLED_SECONDS = 0.45;
+/**
+ * Komut anında (applyState) sarma yapmak için gereken en küçük sapma.
+ *
+ * HLS'te her sarma yeni bölüm indirir; çok küçük eşik sarma fırtınasına
+ * (video hiç oynamıyor) yol açıyordu. 2.5 sn altındaki fark görmezden gelinir.
+ */
+export const SYNC_ALIGN_SECONDS = 2.5;
+/**
+ * Film oynarken videoyu GERİYE bu kadar saniyeden fazla çekme.
+ *
+ * "7-8. saniyeye geliyor, 2. saniyeye dönüyor" salınımının koruması: bayat
+ * konumlar videoyu geri sarmasın.
+ */
+export const SYNC_BACKWARD_GUARD = 3;
+/** Kullanıcının kendi sarmasından sonra bu süre boyunca geri sarmaya izin var. */
+export const SYNC_GRACE_LOCAL_SEEK_MS = 8000;
 /** Bu farkın altında düzeltme YAPILMAZ (kayan nokta + codec toleransı). */
 export const SYNC_TOLERANCE_SECONDS = 1.5;
 /** Seek sonrası bu süre boyunca yeniden seek yapılmaz. */
@@ -298,6 +314,8 @@ export class SyncEngine {
 
   private lastLocalActionAt = -Infinity;
   private lastSeekAt = -Infinity;
+  /** Kullanıcının kendi sarması: geri-çekme koruması bunu bilmeli. */
+  private lastLocalSeekAt = -Infinity;
   private nudged = false;
   private baseRate = 1;
   /** Oynatıcı hazır değilken gelen durum burada bekler (late-join). */
@@ -413,18 +431,53 @@ export class SyncEngine {
 
     const target = expectedPosition(merged, this.now());
     const current = adapter.getTime();
+
+    // ---- GERİ-ÇEKME (RUBBER-BAND) KORUMASI ----
+    // Bildirilen hata: "film 7-8. saniyeye geliyor, 2. saniyeye dönüyor,
+    // tekrar 7-8, yine 2..." — sonsuz salınım.
+    //
+    // Sebep: gelen durumdaki konum videonun GERİSİNDE olduğunda adaptör onu
+    // uygulayıp videoyu geriye sarıyor. Film OYNUYORSA ve oynatıcı durmuş
+    // değilse, geriye sarma yalnızca kullanıcının KENDİ sarması olabilir
+    // (`localSeekAt` ile işaretlenir). Aksi halde bayat konumdur; yok say.
+    const isStaleBackwards =
+      merged.isPlaying &&
+      !adapter.isPaused() &&
+      current > 3 &&
+      target < current - SYNC_BACKWARD_GUARD &&
+      this.now() - this.lastLocalSeekAt > SYNC_GRACE_LOCAL_SEEK_MS;
+    if (isStaleBackwards) {
+      // Videoyu geri çekme; sadece oynatmayı sürdür.
+      return;
+    }
+
     const gap = Math.abs(drift(current, target));
 
-    // OYNATMAYA BAŞLARKEN de saniyeyi eşitle: kullanıcının istediği tam bu.
-    // "Durdurduk → başlattık → iki taraf aynı dakika:saniyeden devam etsin."
-    // (Sadece olay anında senkron modunda oynarken buraya hiç girilmez.)
-    const shouldAlign = gap > 0.3;
-    if (shouldAlign) {
+    // ---- SARMA FIRTINASI KORUMASI ----
+    // Salon her 2 saniyede bir konum tazeliyor (heartbeat/anchor yenilemesi).
+    // Her tazelemede `setTime` çağırmak HLS'te SONSUZ sarma döngüsü yaratıyordu:
+    // video bir bölümü indirmeye başlıyor, yeni bir sarma gelince baştan
+    // başlıyor, hiç oynamıyordu ("başlıyor sonra duruyor").
+    //
+    // Kurallar:
+    //   - Oynatıcı hâlâ sarma/tampon yapıyorsa DOKUNMA (ilk sarma tamamlansın).
+    //   - Sapma küçükse (<= SYNC_ALIGN_SECONDS) hiç sarma.
+    //   - Kısa süre önce sarıldıysa (cooldown) tekrar sarma.
+    const isHls = adapter.kind === 'hls';
+    const busy = adapter.isSeeking() || adapter.isBuffering()
+      || (isHls && adapter.getTime() > 0 && adapter.isBuffering());
+
+    const recentlySeeked = this.now() - this.lastSeekAt < SYNC_SEEK_COOLDOWN_MS;
+    const alignThreshold = isHls ? SYNC_ALIGN_SECONDS : 0.3;
+
+    if (!busy && !recentlySeeked && gap > alignThreshold) {
       adapter.setTime(target);
       this.lastSeekAt = this.now();
     }
 
     if (merged.isPlaying) {
+      // Sarma/tampon sürerken play() çağırmak da zararlı değil ama gereksiz;
+      // veri hazır olunca HLS adaptörü kendisi devam ettirir.
       if (adapter.isPaused() && !adapter.isEnded()) adapter.play();
       // Hızlı hız kaydırmasından kalma bir oran varsa normale dön.
       if (this.nudged) {
@@ -439,7 +492,10 @@ export class SyncEngine {
   /** Kullanıcı aksiyonunu motor açısından işaretle (grace + cooldown). */
   noteLocalAction(seek = false): void {
     this.lastLocalActionAt = this.now();
-    if (seek) this.lastSeekAt = this.now();
+    if (seek) {
+      this.lastSeekAt = this.now();
+      this.lastLocalSeekAt = this.now();
+    }
   }
 
   /** Hedef saniye (durum + şu an). */

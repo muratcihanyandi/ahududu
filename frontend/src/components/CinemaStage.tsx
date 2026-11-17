@@ -62,6 +62,14 @@ export interface CinemaStageProps {
 const TICK_MS = 1000;
 /** iframe kaynaklarında perdenin "hazırlanıyor"da takılma emniyeti (ms). */
 const FRAME_LOAD_TIMEOUT_MS = 8000;
+/**
+ * Sarma bu süreden uzun sürerse tarayıcı takılmış sayılır ve kurtarılır (ms).
+ *
+ * Gerçek ölçüm: normal sarma 0.5–10 sn. Chromium/MediaSource bazen `seeked`
+ * olayını hiç göndermiyor ve video sonsuza kadar `readyState=1` kalıyor.
+ * 12 sn sonra oynatıcıyı hafifçe iterek bu durumdan çıkıyoruz.
+ */
+const STUCK_SEEK_MS = 12_000;
 
 export const CinemaStage: React.FC<CinemaStageProps> = ({
   room,
@@ -129,6 +137,10 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const pendingPlayRef = useRef(false);
   /** Kullanıcının en son istediği oynatma durumu (state gecikmesin). */
   const wantPlayingRef = useRef(false);
+  /** Sarmanın başladığı an (0 = sarma yok). Takılan sarmayı kurtarmak için. */
+  const seekStuckRef = useRef(0);
+  /** Kullanıcının sardığı hedef saniye (takılma kurtarmasında buradan devam). */
+  const seekTargetRef = useRef(-1);
 
   /* ------------------------------------------------------------------ */
   /* Eksik akışı kendiliğinden onar                                      */
@@ -472,19 +484,42 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     if (fresh) freshSceneRef.current = false;
 
     const adapter = engine.getAdapter();
-    // ---- ÇİFT SARMA KORUMASI ----
+    // ---- ÇİFT SARMA / SARMA FIRTINASI KORUMASI ----
     // Kullanıcı ilerleme çubuğunu kaydırdığında biz zaten sarmayı uyguladık;
     // komut sunucuya gidip geri döndüğünde aynı saniyeye İKİNCİ kez sarmak
     // HLS'te yeni bölüm indirmeye (5–10 sn donma) yol açıyordu.
-    // Oynatıcı hâlâ ilk sarmanın verisini yüklüyorsa geri dönen komutu yut.
-    if (
-      adapter &&
-      !fresh &&
-      adapter.kind !== 'youtube' &&
-      (adapter.isSeeking() || adapter.isBuffering()) &&
-      Math.abs(adapter.getTime() - state.position) < 3
-    ) {
-      return;
+    //
+    // Ayrıca salon her 2 saniyede konum tazeliyor (anchor yenilemesi). Film
+    // oynarken bu tazelemeler sarma TETİKLEMEMELİ: aksi halde sarma döngüsü
+    // hiç bitmiyor ve video "başlıyor sonra duruyor" durumunda kalıyor.
+    if (adapter && !fresh && adapter.kind !== 'youtube') {
+      const busy = adapter.isSeeking() || adapter.isBuffering();
+      const gap = Math.abs(adapter.getTime() - state.position);
+      if (busy && gap < 15) return;
+      // Film zaten akıyorsa ve sapma küçükse hiç dokunma.
+      if (state.isPlaying && !adapter.isPaused() && gap < 3) {
+        return;
+      }
+    }
+
+    // ---- GERİ-ÇEKME (RUBBER-BAND) KORUMASI ----
+    // Gerçek hata: film 7-8. saniyeye geliyor, sonra 2. saniyeye dönüyor,
+    // tekrar ilerliyor, yine geri dönüyor (sonsuz salınım).
+    // Sebep: gelen durumda `position` 0 (ya da videonun çok gerisinde) olsa
+    // bile `applyState` onu uyguluyor ve video başa sarılıyor.
+    // Film AKIYORSA ve gelen hedef video'nun BELİRGİN ŞEKİLDE GERİSİNDEYSE
+    // (>= 3 sn) bu bilgi bayattır; yok say.
+    if (adapter && !fresh && state.isPlaying) {
+      const current = adapter.getTime();
+      const backwards = current - state.position;
+      if (backwards > 3) {
+        // Kullanıcının kendi sarması (seekTargetRef) ise uygula; değilse yok say.
+        const isOwnSeek =
+          seekTargetRef.current >= 0 && Math.abs(seekTargetRef.current - state.position) < 2;
+        if (!isOwnSeek) {
+          return;
+        }
+      }
     }
 
     engine.applyState(
@@ -541,8 +576,55 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         // HLS'te sarma yeni bölüm indirir (5–10 sn). Bu sürede kullanıcıya
         // "hazırlanıyor" gösteriyoruz ve oynat isteğini kaybetmiyoruz.
         if (adapter.kind !== 'youtube') {
-          const busy = adapter.isSeeking() || adapter.isBuffering();
+          const video = videoRef.current;
+          // GERÇEK durumu video elementinden oku. Adaptörün `isSeeking()` bayrağı
+          // kendi zamanlayıcısıyla sıfırlanıyor; `seeked` olayı gelmediğinde
+          // gerçeği yansıtmıyor.
+          const videoSeeking = Boolean(video?.seeking);
+          const videoStuck =
+            Boolean(video) &&
+            videoSeeking &&
+            video!.readyState <= 1 &&
+            wantPlayingRef.current;
+
+          const buffering = adapter.isBuffering();
+          const busy = videoSeeking || buffering;
           setPlaybackBusy((prev) => (prev === busy ? prev : busy));
+
+          // ---- TAKILI SARMA KURTARMA ----
+          // Chromium/MediaSource bazı durumlarda sarmayı hiç tamamlamıyor:
+          // `seeking=true`, `readyState=1` kalıyor, `seeked` olayı gelmiyor ve
+          // hiç ağ isteği yapılmıyor. Kullanıcı bunu "başlıyor ama devam
+          // etmiyor" olarak görüyor. Çare: oynatıcıyı aynı noktaya itip
+          // oynatmayı yeniden başlatmak.
+          if (videoStuck) {
+            if (seekStuckRef.current === 0) {
+              seekStuckRef.current = Date.now();
+            } else if (Date.now() - seekStuckRef.current > STUCK_SEEK_MS) {
+              seekStuckRef.current = Date.now(); // bir sonraki deneme için sıfırla
+              // Kullanıcının gitmek istediği saniye varsa ondan devam et.
+              const here =
+                seekTargetRef.current >= 0 ? seekTargetRef.current : video!.currentTime;
+              const ad = engine.getAdapter() as unknown as {
+                restartAt?: (s: number) => void;
+              } | null;
+              if (ad?.restartAt) {
+                // En güvenilir kurtarma: oynatıcıyı o saniyeden yeniden kur.
+                console.warn('[cinema] sarma takıldı, oynatıcı yeniden kuruluyor:', here);
+                wantPlayingRef.current = true;
+                ad.restartAt(here);
+              } else {
+                try {
+                  video!.currentTime = here + 0.01;
+                  void video!.play().catch(() => {});
+                } catch {
+                  /* yok say */
+                }
+              }
+            }
+          } else {
+            seekStuckRef.current = 0;
+          }
 
           if (!busy) {
             // Veri hazır: bekleyen oynat isteği varsa şimdi uygula.
@@ -693,6 +775,9 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
 
   const seekTo = (next: number) => {
     const target = clampPosition(next, duration || state.duration);
+    // Takılma kurtarması bu saniyeden devam etsin (video'nun takıldığı yerden
+    // değil, kullanıcının gitmek istediği yerden).
+    seekTargetRef.current = target;
     adapterNow()?.setTime(target);
     setCurrentTime(target);
     publishSeek(target);
@@ -702,6 +787,66 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     const adapter = adapterNow();
     const from = adapter ? adapter.getTime() : state.position;
     seekTo(from + delta);
+  };
+
+  /* ---- Sarma çubuğu: sürükleyerek hassas sarma ----
+   *
+   * Çubuk ~396 piksel geniş ve film ~7000 saniye: 1 piksel ≈ 18 saniye!
+   * Tek dokunuşla istediğin saniyeye inmek imkânsızdı. Bu yüzden:
+   *   - basılı tutup sürükleyince hedef CANLI gösterilir (metin),
+   *   - bırakınca o saniyeye sarılır.
+   * Böylece "7. dakikaya al" gerçekten 7:00 olur.
+   */
+  const [scrubPreview, setScrubPreview] = useState<number | null>(null);
+  const scrubRectRef = useRef<DOMRect | null>(null);
+  const scrubMovedRef = useRef(false);
+  const scrubTargetRef = useRef(0);
+
+  const ratioFromEvent = (e: React.PointerEvent, rect: DOMRect): number => {
+    const x = e.clientX - rect.left;
+    return Math.min(1, Math.max(0, x / rect.width));
+  };
+
+  const startScrubbing = (e: React.PointerEvent) => {
+    const el = e.currentTarget as HTMLElement;
+    const rect = el.getBoundingClientRect();
+    scrubRectRef.current = rect;
+    scrubMovedRef.current = false;
+    const ratio = ratioFromEvent(e, rect);
+    scrubTargetRef.current = ratio * totalDuration;
+    setScrubPreview(ratio * 100);
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      /* yok say */
+    }
+  };
+
+  const moveScrubbing = (e: React.PointerEvent) => {
+    const rect = scrubRectRef.current;
+    if (!rect) return;
+    scrubMovedRef.current = true;
+    const ratio = ratioFromEvent(e, rect);
+    scrubTargetRef.current = ratio * totalDuration;
+    setScrubPreview(ratio * 100);
+  };
+
+  const endScrubbing = (e: React.PointerEvent) => {
+    const rect = scrubRectRef.current;
+    if (!rect) return;
+    // Sürükleme yapıldıysa bırakılan noktaya sar; yapılmadıysa tek dokunuş.
+    const ratio = ratioFromEvent(e, rect);
+    const target = scrubMovedRef.current ? scrubTargetRef.current : ratio * totalDuration;
+    scrubRectRef.current = null;
+    setScrubPreview(null);
+    playHaptic(12);
+    seekTo(target);
+  };
+
+  const cancelScrubbing = () => {
+    scrubRectRef.current = null;
+    scrubMovedRef.current = false;
+    setScrubPreview(null);
   };
 
   const toggleMute = () => {
@@ -970,6 +1115,13 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
             {formatTime(currentTime)}
           </span>
 
+          {/* Sürüklerken hedef saniye (hassas sarma göstergesi) */}
+          {scrubPreview !== null && (
+            <span className="absolute left-1/2 -translate-x-1/2 -top-1 px-2 py-0.5 rounded-full bg-amber-400 text-cinema-950 text-[10px] font-bold tabular-nums shadow-lg pointer-events-none">
+              {formatTime(scrubTargetRef.current)}
+            </span>
+          )}
+
           <button
             onClick={(e) => {
               const el = e.currentTarget as HTMLElement;
@@ -977,12 +1129,17 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
               const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
               seekTo(ratio * totalDuration);
             }}
-            className="flex-1 h-1.5 rounded-full bg-white/20 overflow-hidden relative"
+            onPointerDown={(e) => startScrubbing(e)}
+            onPointerMove={(e) => moveScrubbing(e)}
+            onPointerUp={(e) => endScrubbing(e)}
+            onPointerCancel={() => cancelScrubbing()}
+            className="flex-1 h-1.5 rounded-full bg-white/20 overflow-hidden relative touch-none"
+            style={{ touchAction: 'none' }}
             title="Sarma"
           >
             <span
               className="absolute left-0 top-0 h-full rounded-full bg-gradient-to-r from-amber-300 to-rose-400"
-              style={{ width: `${progress}%` }}
+              style={{ width: `${scrubPreview !== null ? scrubPreview : progress}%` }}
             >
               <span className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-white shadow" />
             </span>

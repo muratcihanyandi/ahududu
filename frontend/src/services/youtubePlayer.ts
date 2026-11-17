@@ -746,6 +746,10 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
   /** Oynatmak istiyoruz mu? (sarma/tampon sonrası kendiliğinden devam için) */
   private resumeWanted = false;
   private resumeAttempts = 0;
+  /** Yeniden kurulum sonrası başlanacak saniye (>=0 ise uygulanır). */
+  private pendingStartTime = -1;
+  /** Olay köprüsü (yeniden kurulumda da gerekli). */
+  private readonly adapterEvents: AdapterEvents;
 
   constructor(
     private videoEl: HTMLVideoElement,
@@ -753,6 +757,7 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
     events: AdapterEvents
   ) {
     super(videoEl, events);
+    this.adapterEvents = events;
     void this.attachSource(events);
   }
 
@@ -778,15 +783,33 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
       }
 
       const hls = new Hls({
-        // Perde içinde küçük tampon: senkron sapmasını azaltır.
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
+        // Yeniden kurulumda hedef saniye: hls.js bunu kendisi uygular
+        // (currentTime ataması MediaSource tarafından yutulabiliyor).
+        startPosition: this.pendingStartTime > 0 ? this.pendingStartTime : -1,
+        // ---- Tampon: MOBİL İÇİN DAYANIKLI ----
+        // Eski ayar (30/60) yavaş ağda tamponu hiç dolduramıyordu: video
+        // "başlıyor sonra duruyor" durumuna düşüyordu. Sarma sonrası da
+        // yeni bölüm indirilirken aynı sorun yaşanıyordu.
+        // Küçük ama SÜREKLİ bir tampon tutmak, mobil hatta takılmayı önler.
+        maxBufferLength: 12,
+        maxMaxBufferLength: 24,
+        maxBufferSize: 24 * 1000 * 1000,
+        backBufferLength: 30,
+        // ABR: yavaş ağda hemen düşük kaliteye insin, tamponu besleyebilsin.
+        abrEwmaDefaultEstimate: 800_000,
+        abrBandWidthFactor: 0.8,
+        abrBandWidthUpFactor: 0.6,
+        startLevel: -1, // otomatik: ağa göre en uygun kaliteden başla
         enableWorker: true,
         lowLatencyMode: false,
         // Hatalarda birkaç kez kendini toparlasın (CDN dalgalanmaları).
         manifestLoadingMaxRetry: 4,
         levelLoadingMaxRetry: 4,
         fragLoadingMaxRetry: 6,
+        // Segment yüklemesi takılırsa hızla yeniden dene (timeout kısa).
+        fragLoadingTimeOut: 20_000,
+        manifestLoadingTimeOut: 15_000,
+        levelLoadingTimeOut: 15_000,
       });
       this.hls = hls;
 
@@ -809,6 +832,34 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
         if (Number.isFinite(dur) && dur > 0) events.onDuration?.(dur);
       });
 
+      // Yeniden kurulum sonrası hedef saniyeye atla (sarma takılması kurtarma).
+      // SADECE loadedmetadata: o anda duration ve seekable hazır olur.
+      // (MANIFEST_PARSED çok erken; currentTime atanamıyor ve hedef kayboluyor.)
+      const applyPendingStart = () => {
+        if (this.pendingStartTime < 0) return;
+        if (this.videoEl.readyState < 1) return;
+        const t = this.pendingStartTime;
+        this.pendingStartTime = -1;
+        try {
+          this.videoEl.currentTime = t;
+          hls.startLoad(t);
+          if (this.resumeWanted) void this.videoEl.play().catch(() => {});
+        } catch {
+          /* yok say */
+        }
+      };
+      video.addEventListener('loadedmetadata', applyPendingStart);
+      video.addEventListener('canplay', applyPendingStart);
+      // Emniyet: olaylar kaçarsa kısa aralıklarla dene (en fazla 10 sn).
+      let tries = 0;
+      const poll = window.setInterval(() => {
+        tries += 1;
+        applyPendingStart();
+        if (this.pendingStartTime < 0 || tries > 40 || this.disposed) {
+          window.clearInterval(poll);
+        }
+      }, 250);
+
       // ---- Sarma sonrası oynatma güvencesi ----
       // HLS'te sarma yeni bölüm indirir. Tarayıcı bu sırada verilen `play()`
       // komutunu bazen sessizce yutuyor: video "başlıyor sonra duruyor"
@@ -828,6 +879,28 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
 
       hls.loadSource(this.src);
       hls.attachMedia(video);
+      // Yeniden kurulumda hedef saniye varsa yüklemeyi oradan başlat:
+      // bu, videonun 0'dan başlamasını önler.
+      if (this.pendingStartTime > 0) {
+        try {
+          hls.startLoad(this.pendingStartTime);
+        } catch {
+          /* yok say */
+        }
+      }
+      // ---- Hedef saniyeyi hls.js'e de bildir ----
+      // `currentTime` ataması MediaSource'da sessizce yutulabildiği için
+      // hls.js'in kendi başlangıç konumunu da kullanıyoruz (çift güvence).
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (this.pendingStartTime > 0) {
+          try {
+            hls.stopLoad();
+            hls.startLoad(this.pendingStartTime);
+          } catch {
+            /* yok say */
+          }
+        }
+      });
     } catch (err) {
       console.error('hls.js yüklenemedi', err);
       events.onError?.('Film akışı oynatılamadı 🎬');
@@ -868,6 +941,37 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
     this.resumeAttempts = 0;
   }
 
+  /**
+   * Oynatıcıyı verilen saniyeden TAMAMEN yeniden kur.
+   *
+   * Sarma takıldığında (`seeking` hiç bitmiyor, `readyState=1`) yumuşak
+   * kurtarma (startLoad / recoverMediaError) yetmiyor: MediaSource bozulmuş
+   * oluyor. Bu durumda hls.js örneğini kapatıp sıfırdan kurmak tek güvenilir
+   * çözüm — video o saniyeden oynamaya başlar.
+   */
+  restartAt(seconds: number): void {
+    const video = this.videoEl;
+    const resume = this.resumeWanted;
+    console.warn('[cinema] oynatıcı yeniden kuruluyor:', seconds);
+    try {
+      this.hls?.destroy?.();
+    } catch {
+      /* yok say */
+    }
+    this.hls = null;
+    try {
+      video.removeAttribute('src');
+      video.load();
+    } catch {
+      /* yok say */
+    }
+    this.resumeWanted = resume;
+    this.resumeAttempts = 0;
+    // Yeniden kurulum: hedef saniyeyi hatırla, hazır olunca oraya sar.
+    this.pendingStartTime = Math.max(0, seconds);
+    void this.attachSource(this.adapterEvents);
+  }
+
   play(): void {
     this.setResumeWanted(true);
     super.play();
@@ -879,6 +983,12 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
   }
 
   setTime(seconds: number): void {
+    // Yeniden kurulum sürüyorsa sarma yutulur: hedef saniye olarak saklanır ve
+    // oynatıcı hazır olunca uygulanır (aksi halde video 0'dan başlıyordu).
+    if (this.pendingStartTime >= 0) {
+      this.pendingStartTime = Math.max(0, seconds);
+      return;
+    }
     super.setTime(seconds);
     // Sarma sonrası oynatmak istiyorsak veri gelince devam et.
     if (this.resumeWanted) {

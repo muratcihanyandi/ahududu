@@ -1048,10 +1048,14 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
           void leaveRoom(true);
           return;
         }
-        if (Math.abs(next.position - playback.position) > 1.2) {
-          // Anchor'ı da tazele: `expectedPosition` "hangi andan itibaren
-          // ilerliyoruz" bilgisini anchorMs'ten alır. Anchor eskide kalırsa
-          // geçen süre iki kez sayılır.
+        // ---- ANCHOR'I OYNARKEN TAZELEME ----
+        // `CinemaStage` her saniye oynatıcının konumunu bildiriyor. Burada
+        // anchor'ı tazelemek `state.anchorMs`'i değiştiriyor, bu da sahnedeki
+        // senkron effect'ini tetikleyip yeniden sarma yapıyordu: sarma döngüsü
+        // hiç bitmiyor, video "başlıyor sonra duruyor" durumunda kalıyordu.
+        // Oynarken salonun kendi zaman çizgisi (anchor) korunur; yalnızca
+        // duraklatılmışken konum gerçekten güncellenir.
+        if (!playback.isPlaying && Math.abs(next.position - playback.position) > 1.2) {
           setPlayback((prev) => ({ ...prev, position: next.position!, anchorMs: Date.now() }));
         }
       }
