@@ -119,6 +119,16 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const [frameStuck, setFrameStuck] = useState(false);
   const [loadingFaded, setLoadingFaded] = useState(false);
   const [stageDrawerOpen, setStageDrawerOpen] = useState(false);
+  /**
+   * Perde meşgul: sarma ya da tampon. HLS'te sarma yeni bölüm indirdiği için
+   * 5–10 saniye sürebilir. Bu sırada kullanıcıya "hazırlanıyor" gösterilir ve
+   * oynat isteği saklanır (sessizce yutulmaz).
+   */
+  const [playbackBusy, setPlaybackBusy] = useState(false);
+  /** Sarma/tampon biterken uygulanacak "oynat" isteği. */
+  const pendingPlayRef = useRef(false);
+  /** Kullanıcının en son istediği oynatma durumu (state gecikmesin). */
+  const wantPlayingRef = useRef(false);
 
   /* ------------------------------------------------------------------ */
   /* Eksik akışı kendiliğinden onar                                      */
@@ -230,6 +240,9 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   /** Tick içinden güncel durum okunabilsin (kapanışta eski değer kalmasın). */
   const stateRef = useRef(state);
   stateRef.current = state;
+  // Salon "oynuyor" diyorsa kullanıcı oynatmak istiyor demektir. Sarma
+  // sonrası oynatıcı kendiliğinden durmuşsa tick bunu görüp devam ettirir.
+  wantPlayingRef.current = state.isPlaying;
 
   /**
    * Kullanıcının yapıştırdığı linki perdeye koyar.
@@ -457,6 +470,23 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     // uygulanırsa video ortadan başlar ya da anında "bitti" görünür.
     const fresh = freshSceneRef.current;
     if (fresh) freshSceneRef.current = false;
+
+    const adapter = engine.getAdapter();
+    // ---- ÇİFT SARMA KORUMASI ----
+    // Kullanıcı ilerleme çubuğunu kaydırdığında biz zaten sarmayı uyguladık;
+    // komut sunucuya gidip geri döndüğünde aynı saniyeye İKİNCİ kez sarmak
+    // HLS'te yeni bölüm indirmeye (5–10 sn donma) yol açıyordu.
+    // Oynatıcı hâlâ ilk sarmanın verisini yüklüyorsa geri dönen komutu yut.
+    if (
+      adapter &&
+      !fresh &&
+      adapter.kind !== 'youtube' &&
+      (adapter.isSeeking() || adapter.isBuffering()) &&
+      Math.abs(adapter.getTime() - state.position) < 3
+    ) {
+      return;
+    }
+
     engine.applyState(
       compensateLatency(
         {
@@ -506,6 +536,27 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         if (dur > 0 && Math.abs(dur - duration) > 0.5) setDuration(dur);
         // NOT: Burada `onStateChange` çağrılmıyor. Her saniye konum yazmak
         // salonun anchor'ını bozup iki tarafı birbirine çekiyordu.
+
+        // ---- Sarma/tampon bitişini gözle ----
+        // HLS'te sarma yeni bölüm indirir (5–10 sn). Bu sürede kullanıcıya
+        // "hazırlanıyor" gösteriyoruz ve oynat isteğini kaybetmiyoruz.
+        if (adapter.kind !== 'youtube') {
+          const busy = adapter.isSeeking() || adapter.isBuffering();
+          setPlaybackBusy((prev) => (prev === busy ? prev : busy));
+
+          if (!busy) {
+            // Veri hazır: bekleyen oynat isteği varsa şimdi uygula.
+            if (pendingPlayRef.current) {
+              pendingPlayRef.current = false;
+              adapter.play();
+              setBlockedAutoplay(false);
+            } else if (wantPlayingRef.current && adapter.isPaused() && !adapter.isEnded()) {
+              // Kullanıcı oynatmak istiyor ama oynatıcı durmuş (sarma sonrası
+              // tarayıcı play'i düşürmüş olabilir): kendiliğinden devam et.
+              adapter.play();
+            }
+          }
+        }
       }
     }, TICK_MS);
     return () => window.clearInterval(timer);
@@ -605,10 +656,20 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     const adapter = adapterNow();
     if (adapter) {
       if (playing) {
+        // Sarma/tampon sürüyorsa play() sessizce yutulur (tarayıcı "seeking"
+        // hâlindeyken oynatmayı erteler, bazen de hiç uygulamaz). İsteği
+        // hatırla: veri hazır olunca kendiliğinden oynatılacak.
+        pendingPlayRef.current = true;
+        if (playbackBusy || (adapter.kind !== 'youtube' && adapter.isSeeking())) {
+          setPlaybackBusy(true);
+          publishPlayPause(true);
+          return;
+        }
         adapter.play();
         // Oynatma engelliyse "sesi aç" düğmesi referansı kaybolmasın.
         setBlockedAutoplay(false);
       } else {
+        pendingPlayRef.current = false;
         adapter.pause();
       }
     }
@@ -759,6 +820,22 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
           <Loader2 className="w-10 h-10 text-amber-300 animate-spin" />
           <p className="text-amber-100/80 text-xs font-semibold tracking-[0.2em] uppercase">
             Perde hazırlanıyor
+          </p>
+        </div>
+      )}
+
+      {/* Sarma/tampon göstergesi.
+          HLS'te sarma yeni bölüm indirir: 5–10 saniye sürebilir. Bu sırada
+          ekran donmuş gibi görünmesin, kullanıcı ne olduğunu anlasın.
+          pointer-events-none: alttaki düğmeler kullanılabilir kalır. */}
+      {ready && playbackBusy && !error && source !== 'youtube' && (
+        <div className="absolute inset-0 z-[14] pointer-events-none flex flex-col items-center justify-center gap-2.5 bg-black/35">
+          <Loader2 className="w-9 h-9 text-amber-300 animate-spin" />
+          <p className="text-amber-100/90 text-[11px] font-semibold tracking-[0.15em] uppercase">
+            Sahne hazırlanıyor
+          </p>
+          <p className="text-white/50 text-[10px] px-6 text-center">
+            Filmi o saniyeden yüklüyoruz…
           </p>
         </div>
       )}

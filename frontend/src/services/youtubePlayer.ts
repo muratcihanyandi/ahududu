@@ -743,6 +743,9 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
   readonly kind = 'hls' as const;
   private hls: any = null;
   private disposed = false;
+  /** Oynatmak istiyoruz mu? (sarma/tampon sonrası kendiliğinden devam için) */
+  private resumeWanted = false;
+  private resumeAttempts = 0;
 
   constructor(
     private videoEl: HTMLVideoElement,
@@ -806,11 +809,80 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
         if (Number.isFinite(dur) && dur > 0) events.onDuration?.(dur);
       });
 
+      // ---- Sarma sonrası oynatma güvencesi ----
+      // HLS'te sarma yeni bölüm indirir. Tarayıcı bu sırada verilen `play()`
+      // komutunu bazen sessizce yutuyor: video "başlıyor sonra duruyor"
+      // şikayetinin kaynağı buydu. Bölüm hazır olunca (FRAG_CHANGED) hâlâ
+      // duruyorsa ve oynatmak istiyorsak kendiliğinden devam ettir.
+      hls.on(Hls.Events.FRAG_CHANGED, () => {
+        if (this.resumeWanted && video.paused && !video.ended) {
+          this.tryResume();
+        }
+      });
+      // 'seeked' de aynı işi görsün (yerleşik HLS yolunda FRAG_CHANGED yok).
+      video.addEventListener('seeked', () => {
+        if (this.resumeWanted && video.paused && !video.ended) {
+          this.tryResume();
+        }
+      });
+
       hls.loadSource(this.src);
       hls.attachMedia(video);
     } catch (err) {
       console.error('hls.js yüklenemedi', err);
       events.onError?.('Film akışı oynatılamadı 🎬');
+    }
+  }
+
+  /** Oynatmak istiyoruz ama oynatıcı durdu: yeniden dene (sınırlı sayıda). */
+  private tryResume(): void {
+    if (this.disposed || this.resumeAttempts >= 6) return;
+    this.resumeAttempts += 1;
+    const video = this.videoEl;
+    try {
+      const p = video.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => {
+          // Otomatik oynatma engeli: sessize alıp bir kez daha dene.
+          try {
+            video.muted = true;
+            video.play().catch(() => {});
+          } catch {
+            /* yok say */
+          }
+        });
+      }
+    } catch {
+      /* yok say */
+    }
+    // Kısa aralıklarla tekrar kontrol et (bölüm geçişi uzun sürebilir).
+    window.setTimeout(() => {
+      if (this.disposed) return;
+      if (this.resumeWanted && video.paused && !video.ended) this.tryResume();
+    }, 900);
+  }
+
+  /** Oynatmayı "sürdür" niyetini ayarla (sarma/duraklat sonrası). */
+  setResumeWanted(wanted: boolean): void {
+    this.resumeWanted = Boolean(wanted);
+    this.resumeAttempts = 0;
+  }
+
+  play(): void {
+    this.setResumeWanted(true);
+    super.play();
+  }
+
+  pause(): void {
+    this.setResumeWanted(false);
+    super.pause();
+  }
+
+  setTime(seconds: number): void {
+    super.setTime(seconds);
+    // Sarma sonrası oynatmak istiyorsak veri gelince devam et.
+    if (this.resumeWanted) {
+      this.tryResume();
     }
   }
 
