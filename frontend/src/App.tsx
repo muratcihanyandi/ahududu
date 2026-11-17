@@ -22,6 +22,7 @@ import { UpdateBanner } from './components/UpdateBanner';
 import { MoreHub } from './components/MoreHub';
 import { GardenView } from './components/GardenView';
 import { CinemaSalon } from './components/CinemaSalon';
+import { GamesList, GamePlayer, GameEntry } from './components/GamesView';
 import { playHaptic } from './services/haptics';
 import { registerBackHandler, installBackNavigation } from './services/backButton';
 import { getRealBatteryStatus, subscribeToBatteryChanges, BatteryStatus } from './services/battery';
@@ -59,6 +60,8 @@ export const App: React.FC = () => {
   const [partnerLastSeen, setPartnerLastSeen] = useState<string | null>(null);
   const [snapFeed, setSnapFeed] = useState<SnapFeed | null>(null);
   const [isCinemaOpen, setIsCinemaOpen] = useState(false);
+  /** Açık oyun (tam ekran iframe). null = kapalı. */
+  const [activeGame, setActiveGame] = useState<GameEntry | null>(null);
   const [showRadar, setShowRadar] = useState(false);
   const [gardenNews, setGardenNews] = useState(false);
   const cinemaInnerBackRef = useRef<(() => boolean) | null>(null);
@@ -308,6 +311,10 @@ export const App: React.FC = () => {
     if (!currentUser) return;
 
     const closeTopmost = (): boolean => {
+      if (activeGame) {
+        setActiveGame(null);
+        return true;
+      }
       if (isEditorOpen) {
         setIsEditorOpen(false);
         return true;
@@ -331,7 +338,7 @@ export const App: React.FC = () => {
       // Açık pencere yok:
       // - Alt sekmedeysek ana ekrana dön (işlenmiş sayılır)
       // - Ana ekrandaysak false döndür → native taraf uygulamayı arkaya alır
-      if (isEditorOpen || selectedLetter || isCinemaOpen) return true;
+      if (isEditorOpen || selectedLetter || isCinemaOpen || activeGame) return true;
       if (activeTab !== 'home') {
         setActiveTab('home');
         return true;
@@ -343,7 +350,7 @@ export const App: React.FC = () => {
       unregister();
       uninstall();
     };
-  }, [currentUser, isEditorOpen, selectedLetter, isCinemaOpen, activeTab]);
+  }, [currentUser, isEditorOpen, selectedLetter, isCinemaOpen, activeTab, activeGame]);
 
   const loadSnapFeed = async () => {
     if (!currentUser) return;
@@ -556,8 +563,8 @@ export const App: React.FC = () => {
               partnerName={partnerName}
             />
 
-            {/* Hızlı erişim: Bahçe · Sinema · Anlar */}
-            <div className="grid grid-cols-3 gap-2">
+            {/* Hızlı erişim: Bahçe · Sinema · Anlar · Oyunlar */}
+            <div className="grid grid-cols-4 gap-2">
               <button
                 onClick={() => {
                   playHaptic(20);
@@ -587,6 +594,17 @@ export const App: React.FC = () => {
               >
                 <span className="text-xl">📸</span>
                 <span className="text-[10px] font-bold text-berry-900">Anlar</span>
+              </button>
+              <button
+                onClick={() => {
+                  playHaptic(25);
+                  setActiveTab('games');
+                }}
+                className="relative flex flex-col items-center gap-1 py-3 rounded-2xl bg-white/85 border border-violet-200 shadow-xs active:scale-95 transition-transform"
+              >
+                <span className="text-xl">🎮</span>
+                <span className="text-[10px] font-bold text-berry-900">Oyunlar</span>
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white" />
               </button>
             </div>
 
@@ -919,6 +937,17 @@ export const App: React.FC = () => {
         {/* Bahçe: Günün sorusu · Zaman kapsülleri · Şarkılarımız · Duygu havası (demo) */}
         {activeTab === 'garden' && <GardenView currentUserId={currentUser} />}
 
+        {/* Oyunlar: eklediğimiz oyunların listesi (tıklayınca tam ekran açılır) */}
+        {activeTab === 'games' && (
+          <GamesList
+            currentUserId={currentUser}
+            onOpen={(game) => {
+              playHaptic(30);
+              setActiveGame(game);
+            }}
+          />
+        )}
+
         {/* Anılar: Anlık · Günlük · Hayvanlar · Sinema · Radar */}
         {activeTab === 'memories' && (
           <div className="flex flex-col space-y-4">
@@ -1012,6 +1041,15 @@ export const App: React.FC = () => {
             />
           </div>
         </div>
+      )}
+
+      {/* Oyun oynatıcı — tam ekran iframe (Escape / geri tuşu kapatır) */}
+      {activeGame && (
+        <GamePlayer
+          game={activeGame}
+          currentUserId={currentUser}
+          onClose={() => setActiveGame(null)}
+        />
       )}
 
       {/* Yeni an / sinema bildirimi */}

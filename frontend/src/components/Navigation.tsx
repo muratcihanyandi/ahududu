@@ -1,8 +1,8 @@
 import React from 'react';
-import { Home, Feather, MessageCircleHeart, Sparkles, Flower2 } from 'lucide-react';
+import { Home, Feather, MessageCircleHeart, Sparkles, Flower2, Gamepad2 } from 'lucide-react';
 import { playHaptic } from '../services/haptics';
 
-export type TabType = 'home' | 'letters' | 'chat' | 'garden' | 'memories';
+export type TabType = 'home' | 'letters' | 'chat' | 'garden' | 'games' | 'memories';
 
 interface NavigationProps {
   activeTab: TabType;
@@ -22,8 +22,8 @@ interface NavigationProps {
 }
 
 /**
- * Alt navigasyon — HER ZAMAN 5 tuş.
- *   1. Ana sayfa   2. Mektuplar   3. Sohbet   4. Bahçe   5. Anılar
+ * Alt navigasyon — 6 tuş.
+ *   1. Ana sayfa   2. Mektuplar   3. Sohbet   4. Bahçe   5. Oyunlar   6. Anılar
  * Sinema, Neredeyiz? ve bahçe alt bölümleri sayfa içinden açılır.
  */
 const TABS: {
@@ -31,10 +31,11 @@ const TABS: {
   label: string;
   icon: React.ElementType;
 }[] = [
-  { id: 'home', label: 'Ana sayfa', icon: Home },
-  { id: 'letters', label: 'Mektuplar', icon: Feather },
+  { id: 'home', label: 'Ana', icon: Home },
+  { id: 'letters', label: 'Mektup', icon: Feather },
   { id: 'chat', label: 'Sohbet', icon: MessageCircleHeart },
   { id: 'garden', label: 'Bahçe', icon: Flower2 },
+  { id: 'games', label: 'Oyunlar', icon: Gamepad2 },
   { id: 'memories', label: 'Anılar', icon: Sparkles },
 ];
 
@@ -62,24 +63,24 @@ const TabButton: React.FC<TabButtonProps> = ({
       <button
         onClick={() => onSelect(tab.id)}
         aria-label={tab.label}
-        className={`relative flex flex-1 flex-col items-center justify-center py-1.5 rounded-2xl transition-all duration-200 ${
+        className={`relative flex flex-1 min-w-0 flex-col items-center justify-center py-1.5 rounded-2xl transition-all duration-200 ${
           isActive
             ? 'bg-gradient-to-r from-berry-500 to-rose-500 text-white shadow-md shadow-berry-500/25'
             : 'text-stone-500 active:text-berry-700'
         }`}
       >
-        <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.2]' : 'stroke-[1.8]'}`} />
-        <span className="text-[9.5px] font-semibold mt-0.5 tracking-tight whitespace-nowrap">
+        <Icon className={`w-[18px] h-[18px] ${isActive ? 'stroke-[2.2]' : 'stroke-[1.8]'}`} />
+        <span className="text-[8.5px] font-semibold mt-0.5 tracking-tight whitespace-nowrap">
           {tab.label}
         </span>
 
         {badge > 0 && (
-          <span className="absolute top-0 right-2 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-bold flex items-center justify-center shadow-xs ring-2 ring-white">
+          <span className="absolute top-0 right-1 min-w-[15px] h-[15px] px-1 rounded-full bg-rose-600 text-white text-[8.5px] font-bold flex items-center justify-center shadow-xs ring-2 ring-white">
             {badge}
           </span>
         )}
         {dot && (
-          <span className="absolute top-1 right-3 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white animate-pulse" />
+          <span className="absolute top-1 right-2 w-1.5 h-1.5 rounded-full bg-amber-500 ring-2 ring-white animate-pulse" />
         )}
       </button>
     );
@@ -89,25 +90,25 @@ const TabButton: React.FC<TabButtonProps> = ({
     <button
       onClick={() => onSelect(tab.id)}
       aria-label={tab.label}
-      className={`relative flex flex-col items-center justify-center py-2 px-2.5 rounded-2xl transition-all duration-200 ${
+      className={`relative flex flex-1 min-w-0 flex-col items-center justify-center py-1.5 px-1 rounded-xl transition-all duration-200 ${
         isActive
           ? 'bg-gradient-to-r from-berry-500 to-rose-500 text-white shadow-md shadow-berry-500/25 scale-105'
           : 'text-stone-500 hover:text-berry-700'
       }`}
     >
-      <Icon className={`w-5 h-5 ${isActive ? 'stroke-[2.2]' : 'stroke-[1.8]'}`} />
-      <span className="text-[9.5px] font-semibold mt-0.5 tracking-tight whitespace-nowrap">
+      <Icon className={`w-[18px] h-[18px] ${isActive ? 'stroke-[2.2]' : 'stroke-[1.8]'}`} />
+      <span className="text-[8.5px] font-semibold mt-0.5 tracking-tight whitespace-nowrap">
         {tab.label}
       </span>
 
       {badge > 0 && (
-        <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-bold flex items-center justify-center shadow-xs">
+        <span className="absolute -top-0.5 right-0.5 min-w-[15px] h-[15px] px-1 rounded-full bg-rose-600 text-white text-[8.5px] font-bold flex items-center justify-center shadow-xs">
           {badge}
         </span>
       )}
 
       {dot && (
-        <span className="absolute top-1 right-1.5 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white animate-pulse" />
+        <span className="absolute top-1 right-2 w-1.5 h-1.5 rounded-full bg-amber-500 ring-2 ring-white animate-pulse" />
       )}
     </button>
   );
@@ -171,7 +172,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       className="fixed inset-x-3 z-40 max-w-md mx-auto"
       style={{ bottom: 'calc(0.75rem + var(--safe-bottom, 0px))' }}
     >
-      <div className="bg-white/92 backdrop-blur-xl rounded-3xl p-1.5 shadow-xl shadow-berry-900/10 border border-rose-100 flex items-center justify-around">
+      <div className="bg-white/92 backdrop-blur-xl rounded-3xl p-1.5 shadow-xl shadow-berry-900/10 border border-rose-100 flex items-center justify-around gap-0.5">
         {items.map(({ tab, isActive, badge, dot }) => (
           <TabButton
             key={tab.id}
