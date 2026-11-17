@@ -44,10 +44,14 @@ class ChatMessage(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     sender = Column(String(50), nullable=False)
-    message_type = Column(String(30), default="text") # text, image, video, voice, walkie_talkie, nudge
+    message_type = Column(String(30), default="text") # text, image, video, voice, walkie_talkie, nudge, konum, anket, etkinlik
     content = Column(Text, nullable=True)
     media_url = Column(String(500), nullable=True)
     duration = Column(Integer, default=0) # Voice note duration in seconds
+    # "Konum" mesajı: haritada açılabilmesi için koordinatlar doğrudan saklanır.
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    place_name = Column(String(200), nullable=True)
     created_at = Column(DateTime(timezone=True), default=now_utc)
 
 class GalleryItem(Base):
@@ -183,6 +187,11 @@ class CinemaRoom(Base):
     cover_url = Column(String(1000), nullable=True)
     poster_url = Column(String(1000), nullable=True)
     kind = Column(String(30), default="film")             # film, dizi, klip, video
+    # Film sitelerinden çözülen GERÇEK akış adresi (HLS). Doluysa perde bunu
+    # kendi oynatıcısında açar; boşsa embed_url / video_url kullanılır.
+    stream_url = Column(String(1500), nullable=True)
+    #: Akışa erişirken gereken Referer (embed oynatıcısının adresi).
+    stream_referer = Column(String(1000), nullable=True)
     created_by = Column(String(50), default="murat")
     is_playing = Column(Boolean, default=False)
     is_active = Column(Boolean, default=False)

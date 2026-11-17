@@ -49,6 +49,49 @@ export const cinemaVideoUrl = (url: string): string => {
   return clean;
 };
 
+/**
+ * Film siteleri iframe içinde X-Frame-Options engeli koyduğunda
+ * sunucu proxy'si üzerinden sayfayı açar. YouTube / Vimeo zaten gömülebildiği
+ * için doğrudan kullanılır.
+ */
+export const cinemaProxyUrl = (url?: string | null): string => {
+  if (!url) return '';
+  const clean = url.trim();
+  if (
+    clean.includes('youtube.com/embed/') ||
+    clean.includes('youtube-nocookie.com/embed/') ||
+    clean.includes('player.vimeo.com/') ||
+    clean.includes('dailymotion.com/embed/') ||
+    clean.includes('player.bilibili.com/') ||
+    clean.includes('ok.ru/videoembed/') ||
+    clean.includes('streamable.com/e/')
+  ) {
+    return clean;
+  }
+  return `${BASE_URL}/api/cinema/proxy?url=${encodeURIComponent(clean)}`;
+};
+
+/**
+ * Film sitelerinden çözülen HLS akışını sunucu üzerinden oynatılabilir adrese
+ * çevirir.
+ *
+ * CDN'ler tarayıcıya CORS başlığı vermiyor ve Referer istiyor; ayrıca segmentler
+ * `.jpg` kılığında geliyor. Bu yüzden master/alt playlist/segmentlerin hepsi
+ * `/api/cinema/hls` üzerinden geçer. Sunucu m3u8 içindeki alt adresleri de bu
+ * proxy'ye çevirir, böylece perde kendi oynatıcısında (senkron) oynatabilir.
+ */
+export const cinemaHlsUrl = (
+  streamUrl?: string | null,
+  referer?: string | null
+): string => {
+  if (!streamUrl) return '';
+  const clean = streamUrl.trim();
+  // Zaten proxy'lenmiş adres: dokunma (çift sarmalamayı önler).
+  if (clean.includes('/api/cinema/hls?')) return clean;
+  const ref = referer ? `&referer=${encodeURIComponent(referer)}` : '';
+  return `${BASE_URL}/api/cinema/hls?url=${encodeURIComponent(clean)}${ref}`;
+};
+
 export const api = {
   // Profiles
   async getProfiles(): Promise<UserProfile[]> {
@@ -146,9 +189,22 @@ export const api = {
   },
 
   // Chat
-  async getChatMessages(limit = 50): Promise<ChatMessage[]> {
-    const res = await fetch(`${BASE_URL}/api/chat/messages?limit=${limit}`);
+  /**
+   * Sohbet geçmişini sayfa sayfa getirir.
+   * `beforeId` verilirse o mesajdan DAHA ESKİ olanlar gelir (yukarı kaydırma).
+   */
+  async getChatMessages(limit = 50, beforeId?: number): Promise<ChatMessage[]> {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (beforeId != null) params.set('before_id', String(beforeId));
+    const res = await fetch(`${BASE_URL}/api/chat/messages?${params.toString()}`);
     return res.json();
+  },
+
+  /** Toplam mesaj sayısı (geçmişin başı bilgisi için). */
+  async getChatMessageCount(): Promise<number> {
+    const res = await fetch(`${BASE_URL}/api/chat/count`);
+    const data = await res.json();
+    return Number(data?.total ?? 0);
   },
 
   async sendChatMessage(data: {
@@ -157,12 +213,17 @@ export const api = {
     content?: string;
     media_url?: string;
     duration?: number;
+    /** Yalnızca "konum" mesajları için: paylaşılan konumun koordinatları. */
+    latitude?: number;
+    longitude?: number;
+    place_name?: string;
   }): Promise<ChatMessage> {
     const res = await fetch(`${BASE_URL}/api/chat/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
+    if (!res.ok) throw new Error(`Mesaj gönderilemedi (${res.status})`);
     return res.json();
   },
 
@@ -170,7 +231,8 @@ export const api = {
   async listGallery(album?: string): Promise<GalleryItem[]> {
     const url = album ? `${BASE_URL}/api/gallery?album=${encodeURIComponent(album)}` : `${BASE_URL}/api/gallery`;
     const res = await fetch(url);
-    return res.json();
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
   },
 
   async addGalleryItem(data: {
@@ -278,7 +340,10 @@ export const api = {
   },
 
   // Media Upload
-  async uploadMedia(file: File, category = 'general'): Promise<{ url: string; filename: string }> {
+  async uploadMedia(
+    file: File,
+    category = 'general'
+  ): Promise<{ url: string; filename: string; [key: string]: unknown }> {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('media_category', category);
@@ -286,13 +351,21 @@ export const api = {
       method: 'POST',
       body: formData,
     });
-    return res.json();
+    if (!res.ok) throw new Error(`Yükleme başarısız (${res.status})`);
+    const data = await res.json();
+    if (!data || !data.url) throw new Error('Yükleme yanıtı geçersiz');
+    return data;
   },
 
   // System Version
   async getSystemVersion(): Promise<{ app_name: string; version: string; build_id?: string }> {
     const res = await fetch(`${BASE_URL}/api/system/version?t=${Date.now()}`);
     return res.json();
+  },
+
+  /** Sohbette gönderilen belge/bağlantı için: sunucunun tam adresi. */
+  absoluteUrl(url?: string | null): string {
+    return mediaUrl(url);
   },
 
   // ----------------------------------------------------------------------
@@ -468,6 +541,10 @@ export const api = {
   async resolveCinemaLink(videoUrl: string): Promise<{
     source: string; video_url: string; embed_url?: string | null;
     kind: string; poster_url?: string | null;
+    /** Film sitelerinden çözülen GERÇEK akış adresi (HLS). */
+    stream_url?: string | null;
+    /** Akışa erişirken gereken Referer (embed oynatıcısının adresi). */
+    stream_referer?: string | null;
     page_url?: string | null; page_title?: string | null;
   }> {
     const res = await fetch(`${BASE_URL}/api/cinema/resolve`, {
@@ -497,6 +574,13 @@ export const api = {
     kind?: string;
     cover_url?: string;
     poster_url?: string;
+    /** Sunucunun `/resolve` ile bulduğu, perdeye gömülebilir oynatıcı adresi.
+     *  Verilmezse sunucu adresi bir kez daha çözmeye çalışır (yavaş yol). */
+    embed_url?: string | null;
+    /** Film sitelerinden çözülen gerçek HLS akışı (perde kendi oynatıcısında açar). */
+    stream_url?: string | null;
+    stream_referer?: string | null;
+    source?: string;
   }): Promise<CinemaRoom> {
     const res = await fetch(`${BASE_URL}/api/cinema`, {
       method: 'POST',

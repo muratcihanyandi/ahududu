@@ -45,6 +45,17 @@ COLUMN_ADDITIONS = {
         ("is_deleted", "BOOLEAN DEFAULT FALSE"),
         ("deleted_at", "TIMESTAMP WITH TIME ZONE"),
     ],
+    # Sohbet: "Konum" mesajı (ataç → Konum) için koordinatlar
+    "chat_messages": [
+        ("latitude", "DOUBLE PRECISION"),
+        ("longitude", "DOUBLE PRECISION"),
+        ("place_name", "VARCHAR(200)"),
+    ],
+    # Sinema: film sitelerinden çözülen gerçek HLS akışı (kara ekran düzeltmesi)
+    "cinema_rooms": [
+        ("stream_url", "VARCHAR(1500)"),
+        ("stream_referer", "VARCHAR(1000)"),
+    ],
 }
 
 

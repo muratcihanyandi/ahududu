@@ -38,15 +38,73 @@ export interface LoveLetter {
   deleted_at?: string;
 }
 
+/**
+ * Sohbet mesajı türleri.
+ *
+ * - `konum`   : haritada açılan konum baloncuğu (latitude/longitude/place_name)
+ * - `belge`   : ataç → Belge ile gönderilen dosya (media_url + content = dosya adı)
+ * - `kisi`    : ataç → Kişi ile gönderilen kişi kartı (content = JSON)
+ * - `anket`   : ataç → Anket (content: 1. satır soru, kalanı seçenekler)
+ * - `etkinlik`: ataç → Etkinlik (content: 1. satır başlık, kalanı ayrıntı + tarih)
+ */
+export type ChatMessageType =
+  | 'text'
+  | 'image'
+  | 'video'
+  | 'voice'
+  | 'walkie_talkie'
+  | 'nudge'
+  | 'konum'
+  | 'belge'
+  | 'kisi'
+  | 'anket'
+  | 'etkinlik';
+
 export interface ChatMessage {
   id: number;
   sender: UserId;
-  message_type: 'text' | 'image' | 'video' | 'voice' | 'walkie_talkie' | 'nudge';
+  message_type: ChatMessageType;
   content?: string;
   media_url?: string;
   duration?: number;
+  /** Konum mesajları için (paylaşılan konum) */
+  latitude?: number | null;
+  longitude?: number | null;
+  place_name?: string | null;
   created_at: string;
 }
+
+export interface ChatContactCard {
+  name: string;
+  phone: string;
+  note?: string;
+}
+
+/** Sohbette paylaşılan bir kişi kartı (content JSON olarak saklanır). */
+export const encodeContact = (card: ChatContactCard): string =>
+  JSON.stringify({
+    name: (card.name || '').slice(0, 80),
+    phone: (card.phone || '').slice(0, 40),
+    note: (card.note || '').slice(0, 200),
+  });
+
+/** Bozuk/eski bir kişi kartı yüzünden sohbet çökmesin. */
+export const decodeContact = (raw?: string): ChatContactCard | null => {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && (parsed.name || parsed.phone)) {
+      return {
+        name: String(parsed.name || 'Kişi'),
+        phone: String(parsed.phone || ''),
+        note: parsed.note ? String(parsed.note) : '',
+      };
+    }
+  } catch {
+    /* düz metin olarak saklanmışsa aşağıda ele alınır */
+  }
+  return { name: raw.trim().slice(0, 80) || 'Kişi', phone: '', note: '' };
+};
 
 export interface GalleryItem {
   id: number;
@@ -192,6 +250,10 @@ export interface CinemaRoom {
   video_url: string;
   source: string;
   embed_url?: string;
+  /** Film sitelerinden çözülen GERÇEK HLS akışı (perde kendi oynatıcısında açar). */
+  stream_url?: string | null;
+  /** Akışa erişirken gereken Referer (embed oynatıcısının adresi). */
+  stream_referer?: string | null;
   cover_url?: string;
   poster_url?: string;
   kind: string;

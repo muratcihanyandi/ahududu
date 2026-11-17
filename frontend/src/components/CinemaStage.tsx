@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, Loader2, Film,
+  Clapperboard, ExternalLink,
 } from 'lucide-react';
 import { CinemaRoom } from '../types';
-import { mediaUrl } from '../services/api';
+import { api, mediaUrl, cinemaProxyUrl, cinemaHlsUrl } from '../services/api';
 import { playHaptic } from '../services/haptics';
 import {
   PlaybackState,
@@ -12,9 +13,11 @@ import {
   compensateLatency,
   expectedPosition,
   formatTime,
+  looksLikeYouTubeLink,
 } from '../services/cinemaSync';
 import {
   AdapterEvents,
+  HLSPlayerAdapter,
   HTML5PlayerAdapter,
   PlayerAdapter,
   VimeoPlayerAdapter,
@@ -22,6 +25,7 @@ import {
   detectPlayerSource,
   extractYouTubeId,
   extractYouTubeStart,
+  isPlayableEmbedUrl,
   vimeoApiUrl,
 } from '../services/youtubePlayer';
 
@@ -36,7 +40,10 @@ import {
  *   - Late-join: oynatıcı hazır olana kadar durum bekletilir.
  *   - Programatik çağrıların yankısı adaptör içinde susturulur.
  *
- * Tasarım (perde, alt bar, yükleniyor/tepki görünümü) aynen korunur.
+ * Film siteleri (fullhdfilmizlesene gibi) kendi sayfalarını çerçeve içinde
+ * açmaz. Bu yüzden onlar için "sahne" akışı vardır: kullanıcı siteyi kendi
+ * tarayıcısında gezip DOĞRU videoyu açar, paylaştığı adresi "Sahneye al" ile
+ * perdeye koyar. Tek dokunuş olduğu için video kilitlenmez.
  */
 export interface CinemaStageProps {
   room: CinemaRoom;
@@ -48,9 +55,13 @@ export interface CinemaStageProps {
   onReady?: (duration: number) => void;
   /** Ağ gecikmesi (ms) — ping/pong ile ölçülür. */
   latencyMs?: number;
+  /** Kullanıcının sahneye aldığı yeni video: salon kaydı güncellendiğinde. */
+  onRoomChanged?: (room: CinemaRoom) => void;
 }
 
 const TICK_MS = 1000;
+/** iframe kaynaklarında perdenin "hazırlanıyor"da takılma emniyeti (ms). */
+const FRAME_LOAD_TIMEOUT_MS = 8000;
 
 export const CinemaStage: React.FC<CinemaStageProps> = ({
   room,
@@ -60,16 +71,27 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   onUserSeek,
   onReady,
   latencyMs = 120,
+  onRoomChanged,
 }) => {
   const source = useMemo(
     () =>
       detectPlayerSource({
         video_url: room.video_url,
         embed_url: room.embed_url,
+        stream_url: room.stream_url,
         source: room.source,
         kind: room.kind,
       }),
-    [room.video_url, room.embed_url, room.source, room.kind]
+    [room.video_url, room.embed_url, room.stream_url, room.source, room.kind]
+  );
+
+  /**
+   * Film sitesinden çözülen akış, sunucu proxy'sinden geçirilir.
+   * CDN'ler CORS başlığı vermediği ve Referer istediği için zorunlu.
+   */
+  const hlsSrc = useMemo(
+    () => (room.stream_url ? cinemaHlsUrl(room.stream_url, room.stream_referer) : ''),
+    [room.stream_url, room.stream_referer]
   );
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -83,6 +105,183 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(room.duration || 0);
   const [blockedAutoplay, setBlockedAutoplay] = useState(false);
+  /**
+   * iframe tabanlı kaynaklar (Vimeo, senkronsuz gömme) `onReady` bildirmez.
+   * Bu yüzden iframe'in `load` olayını kendimiz dinliyoruz; aksi halde
+   * "Perde hazırlanıyor" perdesi yüklenmiş videonun ÜSTÜNDE sonsuza kadar
+   * kalıyordu (ekran yükleniyor'da takılı görünüyordu).
+   */
+  const [frameLoaded, setFrameLoaded] = useState(false);
+  /** Site çerçeve içinde açılmayı reddediyorsa kullanıcıya çıkış yolu sunulur. */
+  const [frameStuck, setFrameStuck] = useState(false);
+  const [loadingFaded, setLoadingFaded] = useState(false);
+  const [stageDrawerOpen, setStageDrawerOpen] = useState(false);
+
+  /* ------------------------------------------------------------------ */
+  /* Eksik akışı kendiliğinden onar                                      */
+  /* ------------------------------------------------------------------ */
+  /**
+   * Film sitesi odalarında gerçek akış (`stream_url`) yoksa salon siteyi
+   * gösterip "kara ekran"a düşüyordu. Eski sürümden kalmış odalar ve akışı
+   * çözülememiş kayıtlar bu durumda kalıyor.
+   *
+   * Burada bir kez sunucudan akışı yeniden çözmesini isteyip odayı güncelliyoruz.
+   * Kullanıcı hiçbir şey yapmak zorunda kalmadan perde açılıyor.
+   */
+  const repairTriedRef = useRef(false);
+  const [repairing, setRepairing] = useState(false);
+
+  useEffect(() => {
+    repairTriedRef.current = false;
+  }, [room.id]);
+
+  useEffect(() => {
+    // Yalnızca: film sitesi kaydı, akış yok, onarım denenmemiş.
+    if (source !== 'unsupported' || room.stream_url || repairTriedRef.current) return;
+    if (!room.video_url || !/^https?:\/\//i.test(room.video_url)) return;
+    repairTriedRef.current = true;
+    setRepairing(true);
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const resolved = await api.resolveCinemaLink(room.video_url);
+        if (cancelled) return;
+        if (!resolved?.stream_url) {
+          setRepairing(false);
+          return;
+        }
+        // Sunucu odayı günceller; akışla birlikte yeni kayıt gelir.
+        const updated = await api.createCinemaRoom({
+          title: room.title,
+          video_url: resolved.video_url || room.video_url,
+          created_by: room.created_by,
+          kind: resolved.kind,
+          stream_url: resolved.stream_url,
+          stream_referer: resolved.stream_referer || undefined,
+          source: resolved.source,
+        });
+        if (cancelled || !updated?.id) {
+          setRepairing(false);
+          return;
+        }
+        onRoomChanged?.(updated);
+      } catch (e) {
+        console.error('Akış onarılamadı', e);
+      } finally {
+        if (!cancelled) setRepairing(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [source, room.id, room.video_url, room.stream_url, room.title, room.created_by, onRoomChanged]);
+
+  const isFrameSource = source === 'vimeo' || source === 'unsupported';
+  /** Perdeye konabilecek adres */
+  const frameUrl = room.embed_url || room.video_url || '';
+  const playableFrame = isPlayableEmbedUrl(frameUrl);
+
+  /** Film siteleri (X-Frame-Options engelleyen siteler) sunucu proxy'si ile açılır */
+  const finalFrameUrl = useMemo(() => {
+    if (!frameUrl) return '';
+    if (source === 'vimeo') return vimeoApiUrl(frameUrl);
+    if (playableFrame) return frameUrl;
+    return cinemaProxyUrl(frameUrl);
+  }, [frameUrl, source, playableFrame]);
+
+  useEffect(() => {
+    setLoadingFaded(false);
+    // İframe yüklenmesi gecikse bile 1.5 sn sonra loading perdesini kaldır:
+    // Kullanıcı arkadaki sayfayı hemen görsün, donup kalmasın ve rahatça aşağı kaydırabilsin.
+    const t = window.setTimeout(() => setLoadingFaded(true), 1500);
+    return () => window.clearTimeout(t);
+  }, [room.id, frameUrl]);
+
+  /** Sitenin kendi HTML sayfası olduğunda sahne rehberi üstte yardımcı çubuk olarak sunulur */
+  const isGenericSite = source === 'unsupported';
+
+  /* ------------------------------------------------------------------ */
+  /* "Sahne": siteyi tarayıcıda gez, doğru videoyu seç, perdeye al       */
+  /* ------------------------------------------------------------------ */
+  const [stageInput, setStageInput] = useState('');
+  const [stageBusy, setStageBusy] = useState(false);
+  const [stageNote, setStageNote] = useState<string | null>(null);
+
+  /**
+   * Kullanıcı bu sahnede videoyu DEĞİŞTİRDİYSE oynatıcıya "başka biri
+   * dokunmadı" bilgisini vermeliyiz: yeni oynatıcı hazır olurken gelen eski
+   * duraklatma/gizli komutlar aksi halde kontrolü ele geçirebilir.
+   */
+  const stagedRef = useRef(false);
+  /** Kullanıcının seçtiği sahne: oynatıcı hazır olunca çalışacak başlatıcı. */
+  const pendingStartRef = useRef<(() => void) | null>(null);
+  /** Sahne yeni değişti: ilk durum çeki (0 saniye, oynuyor) uygulanacak. */
+  const freshSceneRef = useRef(false);
+  /** Otomatik oynatma engellendi mi? (interval yankısız okusun)
+   *  Not: tick bu bayrağa göre atlanmaz — sesi açık oynatma yalnızca kullanıcı
+   *  dokunuşunda yapılır; burada durum yalnızca izlenir. */
+  const blockedAutoplayRef = useRef(false);
+  blockedAutoplayRef.current = blockedAutoplay;
+  /** Tick içinden güncel durum okunabilsin (kapanışta eski değer kalmasın). */
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  /**
+   * Kullanıcının yapıştırdığı linki perdeye koyar.
+   *
+   * Tek dokunuşla çalıştığı için (kullanıcı da tıkladı) tarayıcının otomatik
+   * oynatma engeli aşılmış olur; oynat/duraklat düğmeleri normal çalışır.
+   */
+  const handleStageVideo = async (raw: string = stageInput) => {
+    const text = (raw || '').trim();
+    if (!text || stageBusy) return;
+    // Film sitesi linki (sayfa adresi) perdeye doğrudan konamaz: kullanıcıya
+    // "siteyi aç, doğru videoyu bul" yolu gösterilir. Sahte "bulundu" olmasın.
+    if (!looksLikeYouTubeLink(text)) {
+      setStageNote('Bu bir site linki. Önce siteyi açıp filmi başlat, sonra videosunun bağlantısını paylaş.');
+      return;
+    }
+    setStageBusy(true);
+    setStageNote(null);
+    playHaptic(20);
+    try {
+      const resolved = await api.resolveCinemaLink(text);
+      const room2 = await api.createCinemaRoom({
+        title: room.title,
+        video_url: resolved.video_url || text,
+        created_by: room.created_by,
+        kind: resolved.kind,
+        embed_url: resolved.embed_url || undefined,
+        source: resolved.source,
+      });
+      stagedRef.current = true;
+      freshSceneRef.current = true;
+      setStageInput('');
+      // Sunucu kaydı bu sahneye geçti: perde yeni video ile kurulur (room.id
+      // değişir → oynatıcı yeniden bağlanır ve kullanıcı dokunuşunun içinde
+      // oynatma başlatılır).
+      if (room2 && room2.id) {
+        onRoomChanged?.(room2);
+      } else {
+        setStageNote('Sahne güncellenemedi. Lütfen tekrar dene.');
+      }
+      playHaptic(30);
+    } catch (e) {
+      console.error('Sahne alınamadı', e);
+      setStageNote('Bağlantı okunamadı. Videoyu tarayıcıda açıp adres çubuğundan kopyala.');
+    } finally {
+      setStageBusy(false);
+    }
+  };
+
+  /** Tarayıcıda siteyi/doğru videoyu aç: film siteleri iframe içinde açılmaz. */
+  const openOutside = (url: string) => {
+    if (!url) return;
+    playHaptic(15);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
 
   /** Kullanıcı eylemlerini sunucuya yayınla (kendi yankımızı susturur). */
   const publishPlayPause = useCallback(
@@ -108,6 +307,12 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         if (dur > 0) setDuration(dur);
         engineRef.current?.markReady();
         if (dur > 0) onReady?.(dur);
+        // Kullanıcının seçtiği sahne: oynatıcı hazır olur olmaz başlat.
+        const start = pendingStartRef.current;
+        if (start) {
+          pendingStartRef.current = null;
+          start();
+        }
       },
       onDuration: (dur) => {
         if (dur > 0) setDuration(dur);
@@ -147,10 +352,38 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       // Teşhis kancası: sahne sahibi oynatıcıya erişebilsin (test/geliştirme).
       (window as any).__ahududuCinemaPlayer = created;
       if (created.isReady()) engine.markReady();
+
+      // Kullanıcı bu video sahnesini kendisi seçtiyse (dokunuşun içindeyiz):
+      // video otomatik oynatma engeline düşmeden başlasın, düğmeler çalışsın.
+      if (stagedRef.current) {
+        stagedRef.current = false;
+        const start = () => {
+          publishPlayPause(true);
+          if (created.kind === 'html5' || created.kind === 'hls') {
+            const video = videoRef.current;
+            if (video) video.play().catch(() => setMuted(true));
+          } else if (created.kind === 'youtube') {
+            const yt = created as YouTubePlayerAdapter;
+            yt.setMuted(false);
+            setMuted(false);
+            yt.play();
+          }
+        };
+        if (created.isReady()) start();
+        else pendingStartRef.current = start;
+      } else if (pendingStartRef.current) {
+        // Önceki deneme sahnesinde oynatıcı henüz kurulmadan geldi: şimdi.
+        const start = pendingStartRef.current;
+        pendingStartRef.current = null;
+        start();
+      }
     };
 
     if (source === 'html5' && videoRef.current) {
       attach(new HTML5PlayerAdapter(videoRef.current, events));
+    } else if (source === 'hls' && videoRef.current) {
+      // Film sitesinden çözülen akış: hls.js / yerleşik HLS ile oynat.
+      attach(new HLSPlayerAdapter(videoRef.current, hlsSrc, events));
     } else if (source === 'youtube') {
       const videoId =
         extractYouTubeId(room.embed_url || '') || extractYouTubeId(room.video_url || '');
@@ -173,8 +406,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       attach(new VimeoPlayerAdapter(iframeRef.current, events));
     }
 
-    return () => {
-      destroyed = true;
+    return () => {      destroyed = true;
       engine.detach();
       adapter?.destroy?.();
       if ((window as any).__ahududuCinemaPlayer === adapter) {
@@ -184,9 +416,30 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       setReady(false);
       setError(null);
       setBlockedAutoplay(false);
+      setFrameLoaded(false);
+      setFrameStuck(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, room.id]);
+  }, [source, room.id, hlsSrc]);
+
+  /* ------------------------------------------------------------------ */
+  /* iframe kaynakları: yükleme takılı kalmasın                          */
+  /* ------------------------------------------------------------------ */
+  useEffect(() => {
+    setFrameLoaded(false);
+    setFrameStuck(false);
+    if (!isFrameSource) return;
+    // Bazı siteler çerçeveyi reddederken `load` bile vermez: perde sonsuza
+    // kadar "hazırlanıyor" kalmasın diye emniyet süresi koyuyoruz.
+    const timer = window.setTimeout(() => setFrameStuck(true), FRAME_LOAD_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [isFrameSource, frameUrl]);
+
+  /** iframe yüklendi: "Perde hazırlanıyor" perdesini kaldır. */
+  const handleFrameLoad = () => {
+    setFrameLoaded(true);
+    setFrameStuck(false);
+  };
 
   /* ------------------------------------------------------------------ */
   /* Sunucu/partner durumu değişti → motora ver                          */
@@ -195,14 +448,18 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     const engine = engineRef.current;
     if (!engine) return;
     engine.setLatency(latencyMs);
+    // Sahne değiştiyse durum SIFIRDAN başlar: eski filmin saniyesi yenisine
+    // uygulanırsa video ortadan başlar ya da anında "bitti" görünür.
+    const fresh = freshSceneRef.current;
+    if (fresh) freshSceneRef.current = false;
     engine.applyState(
       compensateLatency(
         {
-          position: state.position,
-          isPlaying: state.isPlaying,
-          duration: state.duration || duration || undefined,
+          position: fresh ? 0 : state.position,
+          isPlaying: fresh ? true : state.isPlaying,
+          duration: fresh ? undefined : state.duration || duration || undefined,
         },
-        latencyMs
+        fresh ? 0 : latencyMs
       )
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -212,10 +469,25 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   /* Periyodik düzeltme + zaman göstergesi                               */
   /* ------------------------------------------------------------------ */
   useEffect(() => {
+    // Otomatik oynatma engellendiyse 1 sn'lik denetim sürekli play deneyip
+    // deneyip sessizce bozmasın: düğme "oynat" gösterir, kullanıcı dokunur.
     const timer = window.setInterval(() => {
       const engine = engineRef.current;
       if (!engine) return;
-      engine.tick();
+      if (blockedAutoplayRef.current && stateRef.current.isPlaying) {
+        // Otomatik oynatma engellendi: düğme "oynat" göstersin; sekme sessizce
+        // oynamaya çalışıp durumu bozmasın. Duraklat/sarma yine çalışır.
+        // YouTube'da yeşil "sesi aç" düğmesi zaten doğru yolu sunuyor.
+        const adapter = engine.getAdapter();
+        if (adapter && adapter.kind !== 'youtube') {
+          adapter.pause();
+          publishPlayPause(false);
+        } else {
+          engine.tick();
+        }
+      } else if (!stagedRef.current) {
+        engine.tick();
+      }
       const adapter = engine.getAdapter();
       if (adapter) {
         setCurrentTime(adapter.getTime());
@@ -236,11 +508,31 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     const playing = !state.isPlaying;
     const adapter = adapterNow();
     if (adapter) {
-      if (playing) adapter.play();
-      else adapter.pause();
+      if (playing) {
+        adapter.play();
+        // Oynatma engelliyse "sesi aç" düğmesi referansı kaybolmasın.
+        setBlockedAutoplay(false);
+      } else {
+        adapter.pause();
+      }
     }
     publishPlayPause(playing);
   };
+
+  /** Perde yüzeyine dokunuş: tek dokunuşla oynat / duraklat. */
+  const handleSurfaceTap = () => {
+    playHaptic(12);
+    togglePlay();
+  };
+
+  /**
+   * YouTube'un kendi gömülü oynatıcısı her tıklamayı kendisi de işler
+   * (kendi play/pause düğmesi, videonun kendisi). Üstüne bir de bizim
+   * saydam "dokun → oynat/duraklat" katmanımız binince tek dokunuş iki kez
+   * uygulanıyor ve birbirini iptal ediyordu: "videoyu başlatıyorum ama
+   * oynamıyor". Bu yüzden YouTube'da perde yüzeyine dokunma katmanı
+   * kaldırıldı; kontrol alt bardan ve YouTube'un kendi düğmelerinden yapılır.
+   */
 
   const seekTo = (next: number) => {
     const target = clampPosition(next, duration || state.duration);
@@ -282,38 +574,157 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         />
       )}
 
+      {/* ---- HLS: film sitesinden çözülen akış (hls.js kaynağı kendisi bağlar) ---- */}
+      {source === 'hls' && (
+        <video
+          ref={videoRef}
+          playsInline
+          preload="auto"
+          className={`absolute inset-0 w-full h-full object-contain transition-all duration-700 ${
+            state.isPlaying ? '' : 'opacity-60 blur-[1px] scale-[1.01]'
+          }`}
+          muted={muted}
+        />
+      )}
+
       {/* ---- YouTube: IFrame Player API kapsayıcısı ---- */}
       {source === 'youtube' && <div ref={embedHostRef} className="absolute inset-0 w-full h-full" />}
 
       {/* ---- Vimeo: postMessage API'li iframe ---- */}
-      {source === 'vimeo' && (
-        <iframe
-          ref={iframeRef}
-          src={vimeoApiUrl(room.embed_url || room.video_url)}
-          className="absolute inset-0 w-full h-full border-0"
-          allow="autoplay; fullscreen; picture-in-picture"
-          allowFullScreen
-          title={room.title}
-        />
+      {source === 'vimeo' && playableFrame && (
+        <div
+          className="absolute inset-0 w-full h-full overflow-y-auto overscroll-contain select-auto touch-pan-y"
+          style={{ WebkitOverflowScrolling: 'touch', overflowY: 'auto' }}
+        >
+          <iframe
+            ref={iframeRef}
+            src={vimeoApiUrl(frameUrl)}
+            className="w-full h-full border-0 select-auto touch-pan-y"
+            style={{
+              width: '100%',
+              height: '100%',
+              minHeight: '100%',
+              border: 0,
+              overflow: 'auto',
+              WebkitOverflowScrolling: 'touch',
+              touchAction: 'pan-y',
+            }}
+            scrolling="yes"
+            allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+            allowFullScreen
+            onLoad={handleFrameLoad}
+            title={room.title}
+          />
+        </div>
       )}
 
-      {/* ---- Bilinmeyen gömme: senkronsuz düz iframe (perde boş kalmasın) ---- */}
+      {/* ---- Web sitesi / genel gömme: kullanıcının sitede rahatça gezinmesi ve aşağı kaydırması için ---- */}
       {source === 'unsupported' && (
-        <iframe
-          src={room.embed_url || room.video_url}
-          className="absolute inset-0 w-full h-full border-0"
-          allow="autoplay; fullscreen; picture-in-picture"
-          allowFullScreen
-          title={room.title}
+        <div
+          className="absolute inset-0 w-full h-full overflow-y-auto overscroll-contain select-auto touch-pan-y"
+          style={{ WebkitOverflowScrolling: 'touch', overflowY: 'auto' }}
+        >
+          <iframe
+            ref={iframeRef}
+            src={finalFrameUrl}
+            className="w-full h-full border-0 select-auto touch-pan-y"
+            style={{
+              width: '100%',
+              height: '100%',
+              minHeight: '100%',
+              border: 0,
+              overflow: 'auto',
+              WebkitOverflowScrolling: 'touch',
+              touchAction: 'pan-y',
+            }}
+            scrolling="yes"
+            allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+            allowFullScreen
+            onLoad={handleFrameLoad}
+            title={room.title}
+          />
+        </div>
+      )}
+
+      {/* ---- Perde yüzeyi: dokun - oynat / duraklat ---- */}
+      {(source === 'html5' || source === 'hls') && (
+        <button
+          type="button"
+          aria-label={state.isPlaying ? 'Duraklat' : 'Oynat'}
+          onClick={handleSurfaceTap}
+          className="absolute inset-0 z-10 bg-transparent"
         />
       )}
 
-      {!ready && !error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-cinema-950/70">
+      {/* Yükleme perdesi: videonun ÜSTÜNDE takılı kalmasın.
+          pointer-events-none sayesinde kullanıcı arkadaki siteyi gördüğü an hemen dokunabilir ve kaydırabilir. */}
+      {!ready && !error && !(isFrameSource && frameLoaded) && !loadingFaded && (
+        <div className="absolute inset-0 z-[15] pointer-events-none flex flex-col items-center justify-center gap-3 bg-cinema-950/70 transition-opacity duration-500">
           <Loader2 className="w-10 h-10 text-amber-300 animate-spin" />
           <p className="text-amber-100/80 text-xs font-semibold tracking-[0.2em] uppercase">
             Perde hazırlanıyor
           </p>
+        </div>
+      )}
+
+      {/* ---- SAHNE: siteyi tarayıcıda gez, doğru videoyu seç, perdeye al ----
+           Kullanıcının sitede gezinmesini ve aşağı kaydırmasını engellemez.
+           Üstte kompakt bir yardımcı çubuk ve sahne kutusu olarak durur. */}
+      {isGenericSite && repairing && !error && (
+        <div className="absolute inset-0 z-[18] flex flex-col items-center justify-center gap-3 bg-cinema-950/95 text-center px-8">
+          <Loader2 className="w-10 h-10 text-amber-300 animate-spin" />
+          <p className="text-amber-100 font-serif text-sm font-bold">Film perdeye hazırlanıyor…</p>
+          <p className="text-amber-100/60 text-[11px] max-w-xs leading-snug">
+            Sitedeki gerçek video akışı aranıyor. Birkaç saniye sürebilir 🎬
+          </p>
+        </div>
+      )}
+
+      {isGenericSite && !repairing && !error && (
+        <div className="absolute top-2 inset-x-2 z-20 flex flex-col items-center gap-1.5 pointer-events-none">
+          <div className="w-full max-w-xl flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 rounded-2xl bg-cinema-950/85 backdrop-blur-md border border-amber-300/30 text-white shadow-xl pointer-events-auto">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Clapperboard className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span className="text-[10px] font-medium text-amber-100 truncate">
+                Önce sitede gez, doğru videoyu bul 🎬
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => openOutside(room.video_url)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-400 text-cinema-950 text-[10px] font-bold active:scale-95"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Siteyi tarayıcıda aç
+              </button>
+            </div>
+          </div>
+
+          <div className="w-full max-w-xl px-3 py-2 rounded-2xl bg-cinema-950/90 backdrop-blur-md border border-amber-300/20 text-white shadow-xl pointer-events-auto flex items-center gap-2">
+            <textarea
+              value={stageInput}
+              onChange={(e) => setStageInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleStageVideo();
+              }}
+              rows={1}
+              placeholder="https://www.youtube.com/watch?v=..."
+              className="flex-1 px-3 py-1.5 rounded-xl bg-white/10 border border-amber-200/30 text-white text-[11px] resize-none focus:outline-none focus:ring-1 focus:ring-amber-400 placeholder:text-white/40"
+            />
+            <button
+              onClick={() => handleStageVideo()}
+              disabled={stageBusy}
+              className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-gradient-to-r from-amber-400 to-rose-400 text-cinema-950 text-[11px] font-bold disabled:opacity-60 active:scale-95 shrink-0"
+            >
+              {stageBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+              {stageBusy ? 'Sahneye alınıyor…' : 'Sahneye al 🎬'}
+            </button>
+          </div>
+          {stageNote && (
+            <div className="px-3 py-1 rounded-xl bg-cinema-950/95 border border-amber-300/30 pointer-events-auto">
+              <p className="text-[10px] leading-snug text-amber-200/90">{stageNote}</p>
+            </div>
+          )}
         </div>
       )}
 
@@ -347,8 +758,12 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         </button>
       )}
 
-      {/* Sinema alt barı */}
-      <div className="absolute inset-x-0 bottom-0 z-20 px-4 pb-3 pt-10 bg-gradient-to-t from-black/90 via-black/50 to-transparent">
+      {/* Sinema alt barı (YouTube'da gizli: kendi kontrol çubuğu var) */}
+      <div
+        className={`absolute inset-x-0 bottom-0 z-20 px-4 pb-3 pt-10 bg-gradient-to-t from-black/90 via-black/50 to-transparent ${
+          source === 'youtube' ? 'hidden' : ''
+        }`}
+      >
         <div className="flex items-center gap-3 max-w-3xl mx-auto">
           <button
             onClick={() => {

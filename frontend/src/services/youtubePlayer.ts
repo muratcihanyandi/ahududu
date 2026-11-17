@@ -3,9 +3,10 @@
  * ----------------------------------
  * Üç kaynak tek arayüzle (`PlayerAdapter`) yönetilir:
  *
- *   1. HTML5  → doğrudan mp4 / m3u8 / medya kütüphanesi linki (tam senkron)
- *   2. YouTube→ IFrame Player API (https://www.youtube.com/iframe_api, YT.Player)
- *   3. Vimeo  → player.js postMessage API (best-effort, YouTube öncelikli)
+ *   1. HTML5  → doğrudan mp4 / medya kütüphanesi linki (tam senkron)
+ *   2. HLS    → film sitelerinden çözülen akış (hls.js veya yerleşik HLS)
+ *   3. YouTube→ IFrame Player API (https://www.youtube.com/iframe_api, YT.Player)
+ *   4. Vimeo  → player.js postMessage API (best-effort, YouTube öncelikli)
  *
  * YouTube akışı (WatchSync yaklaşımı):
  *   - `onReady`  → son state uygulanır (late-join ready-gate)
@@ -20,7 +21,7 @@
  * (senkronsuz) görüntülemeye düşer — salon boş kalmaz.
  */
 
-import { SUPPRESS_ECHO_MS, type PlayerAdapter } from './cinemaSync';
+import { SUPPRESS_ECHO_MS, shouldRestartBeforePlay, type PlayerAdapter } from './cinemaSync';
 
 export type { PlayerAdapter } from './cinemaSync';
 
@@ -77,7 +78,7 @@ abstract class BaseAdapter {
 /* ------------------------------------------------------------------ */
 
 export class HTML5PlayerAdapter extends BaseAdapter implements PlayerAdapter {
-  readonly kind = 'html5' as const;
+  readonly kind: PlayerAdapter['kind'] = 'html5';
 
   private ready = false;
   private seeking = false;
@@ -416,6 +417,9 @@ export interface YouTubeAdapterOptions {
 export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
   readonly kind = 'youtube' as const;
 
+  /** Sahne değişince oynatıcıyı yeniden kurmak için güncel video kimliği. */
+  videoId: string;
+
   private player: any = null;
   private ready = false;
   private buffering = false;
@@ -428,9 +432,12 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
   private muted = false;
   private autoplayCheckTimer: number | null = null;
   private destroyed = false;
+  /** Oynat komutu işe yaramazsa kaç kez yeniden denendi (sonsuz döngü olmasın). */
+  private playRetries = 0;
 
   constructor(private options: YouTubeAdapterOptions) {
     super();
+    this.videoId = options.videoId;
   }
 
   /** Olay köprüsü: adaptörün dışarıya bildirimleri. */
@@ -495,12 +502,44 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
     }, 1500);
   }
 
+  /**
+   * OYNAT komutu geldi ama oynatıcı bir işe yaramadıysa en fazla 3 kez dener.
+   *
+   * "Düğme çalışmıyor" şikayetinin sesli nedeni: otomatik oynatma engellendi,
+   * sesi açtıktan sonraki programatik playVideo() yine susturuldu (tarayıcı
+   * kullanıcı hareketi istiyor). O durumda düğme "oynat" gösterir; play() çoğu
+   * kez dokunuşun içinde çağrıldığı için bu denemeler genellikle başarılıdır.
+   */
+  private verifyPlaying(): void {
+    if (this.destroyed) return;
+    const state = this.stateValue();
+    if (state === 1 || state === 3) {
+      this.playRetries = 0;
+      return;
+    }
+    if (this.playRetries >= 3) {
+      this.playRetries = 0;
+      // Son çare: oynatıcı hâlâ duruyorsa kullanıcıya "dokunarak başlat" sun.
+      if (this.stateValue() !== 1) this.events.onAutoplayBlocked?.();
+      return;
+    }
+    this.playRetries += 1;
+    this.suppress(500);
+    try {
+      this.player?.playVideo?.();
+    } catch {
+      /* yok say */
+    }
+    window.setTimeout(() => this.verifyPlaying(), 700);
+  }
+
   private handleStateChange(event: any): void {
     const state = event?.data;
     if (state === 1) {
       // PLAYING
       this.ended = false;
       this.seeking = false;
+      this.playRetries = 0;
       if (this.buffering) {
         this.buffering = false;
         this.events.onBuffering?.(false);
@@ -510,7 +549,9 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
       // PAUSED
       if (!this.isSuppressed() && !this.ended) this.events.onUserPause?.();
     } else if (state === 3) {
-      // BUFFERING
+      // BUFFERING — bu da "oynuyor" sayılır; düğme duraklat göstermeli.
+      this.ended = false;
+      this.playRetries = 0;
       if (!this.buffering) {
         this.buffering = true;
         this.events.onBuffering?.(true);
@@ -590,8 +631,15 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
   play(): void {
     if (!this.player) return;
     this.suppress();
+    this.playRetries = 0;
     try {
+      // Bitmiş videoda playVideo() bazen hiçbir şey yapmaz: önce başa sar.
+      if (shouldRestartBeforePlay(this.ended || this.stateValue() === 0, this.getTime(), this.duration)) {
+        this.ended = false;
+        this.player.seekTo(0, true);
+      }
       this.player.playVideo();
+      window.setTimeout(() => this.verifyPlaying(), 800);
     } catch {
       /* yok say */
     }
@@ -675,7 +723,122 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
 }
 
 /* ------------------------------------------------------------------ */
-/* Vimeo (best-effort, postMessage)                                    */
+/* 2) HLS adaptörü (film sitelerinden çözülen akış)                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * HLS akışını `<video>` üstünde oynatır.
+ *
+ * Neden ayrı bir adaptör?
+ * -----------------------
+ * Film sitelerinin akışı ikiye ayrılıyor:
+ *   - Safari/iOS'un kendi HLS desteği (video.src = m3u8 yeterli),
+ *   - Android WebView / Chrome: yerleşik HLS yok, `hls.js` şart.
+ *
+ * Senkron davranışı (oynat/duraklat/sarma/hız) HTML5 adaptörüyle aynıdır;
+ * bu yüzden `HTML5PlayerAdapter`'ı genişletiyoruz — sadece kaynağı biz
+ * bağlıyoruz. Böylece `SyncEngine` hiçbir değişiklik görmez.
+ */
+export class HLSPlayerAdapter extends HTML5PlayerAdapter {
+  readonly kind = 'hls' as const;
+  private hls: any = null;
+  private disposed = false;
+
+  constructor(
+    private videoEl: HTMLVideoElement,
+    private src: string,
+    events: AdapterEvents
+  ) {
+    super(videoEl, events);
+    void this.attachSource(events);
+  }
+
+  private async attachSource(events: AdapterEvents): Promise<void> {
+    const video = this.videoEl;
+
+    // 1) Yerleşik HLS (iOS/Safari): doğrudan kaynak yeterli.
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = this.src;
+      return;
+    }
+
+    // 2) hls.js (Android WebView, Chrome, Windows). Paket ayrı yüklensin:
+    //    yalnızca gerektiğinde indirilir, ilk açılışı yavaşlatmaz.
+    try {
+      const mod: any = await import('hls.js');
+      const Hls = mod?.default ?? mod?.Hls ?? mod;
+      if (this.disposed) return;
+      if (!Hls || typeof Hls.isSupported !== 'function' || !Hls.isSupported()) {
+        // Son çare: tarayıcıya doğrudan ver (bazı durumlarda kendi çözer).
+        video.src = this.src;
+        return;
+      }
+
+      const hls = new Hls({
+        // Perde içinde küçük tampon: senkron sapmasını azaltır.
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        enableWorker: true,
+        lowLatencyMode: false,
+        // Hatalarda birkaç kez kendini toparlasın (CDN dalgalanmaları).
+        manifestLoadingMaxRetry: 4,
+        levelLoadingMaxRetry: 4,
+        fragLoadingMaxRetry: 6,
+      });
+      this.hls = hls;
+
+      hls.on(Hls.Events.ERROR, (_evt: unknown, data: any) => {
+        if (!data) return;
+        if (data.fatal) {
+          // Ölümcül hata: kurtarmayı dene, olmuyorsa kullanıcıya söyle.
+          if (data.type === 'networkError') {
+            try { hls.startLoad(); return; } catch { /* yok say */ }
+          } else if (data.type === 'mediaError') {
+            try { hls.recoverMediaError(); return; } catch { /* yok say */ }
+          }
+          events.onError?.('Film akışı yüklenemedi. Bağlantıyı kontrol edip tekrar dene 🎬');
+        }
+      });
+
+      // Süre öğrenildiğinde perde ilerleme çubuğu dolsun.
+      hls.on(Hls.Events.LEVEL_LOADED, () => {
+        const dur = video.duration;
+        if (Number.isFinite(dur) && dur > 0) events.onDuration?.(dur);
+      });
+
+      hls.loadSource(this.src);
+      hls.attachMedia(video);
+    } catch (err) {
+      console.error('hls.js yüklenemedi', err);
+      events.onError?.('Film akışı oynatılamadı 🎬');
+    }
+  }
+
+  getSrc(): string {
+    return this.src;
+  }
+
+  destroy(): void {
+    this.disposed = true;
+    try {
+      this.hls?.destroy?.();
+    } catch {
+      /* yok say */
+    }
+    this.hls = null;
+    // Üst sınıfın olay dinleyicilerini çöz.
+    super.destroy();
+    try {
+      this.videoEl.removeAttribute('src');
+      this.videoEl.load();
+    } catch {
+      /* yok say */
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 3) Vimeo (best-effort, postMessage)                                 */
 /* ------------------------------------------------------------------ */
 
 export const VIMEO_ORIGIN = 'https://player.vimeo.com';
@@ -897,23 +1060,47 @@ export class VimeoPlayerAdapter extends BaseAdapter implements PlayerAdapter {
 /* Kaynak seçimi / fabrika                                             */
 /* ------------------------------------------------------------------ */
 
-export type PlayerSourceKind = 'html5' | 'youtube' | 'vimeo' | 'unsupported';
+export type PlayerSourceKind = 'html5' | 'hls' | 'youtube' | 'vimeo' | 'unsupported';
 
 export interface RoomSource {
   video_url?: string | null;
   embed_url?: string | null;
+  /** Film sitelerinden çözülen GERÇEK akış (HLS) — varsa her zaman öncelikli. */
+  stream_url?: string | null;
   source?: string | null;
   kind?: string | null;
 }
+
+/**
+ * Adres, tarayıcının doğrudan oynatabileceği bir MEDYA dosyası mı?
+ *
+ * ÖNEMLİ: Film sitelerinin sayfa adresleri (ör.
+ * `https://www.fullhdfilmizlesene.now/film/arabalar/`) video DEĞİLDİR. Bu
+ * adresi `<video src>` yapmak kara ekran bırakır. Bu yüzden yalnızca uzantısı
+ * belli dosyalar ve medya kütüphanesi yolları "dosya" sayılır.
+ */
+export const looksLikePlayableFile = (url?: string | null): boolean => {
+  const clean = (url || '').trim();
+  if (!clean) return false;
+  if (clean.startsWith('blob:') || clean.startsWith('data:video/')) return true;
+  if (clean.includes('/api/media/file/') || clean.includes('/api/media/')) return true;
+  const path = clean.split('#')[0].split('?')[0];
+  return /\.(mp4|webm|m4v|mov|ogv|ogg|mkv|m3u8|ts|mpd)$/i.test(path);
+};
 
 /** Odanın hangi oynatıcıyla açılacağını belirler (saf fonksiyon). */
 export const detectPlayerSource = (room: RoomSource): PlayerSourceKind => {
   const videoUrl = room.video_url || '';
   const embed = room.embed_url || '';
+  const stream = (room.stream_url || '').trim();
   const source = (room.source || '').toLowerCase();
-  const isFileUrl = /\.(mp4|webm|m4v|mov|ogv|ogg|mkv|m3u8|ts)(\?|$)/i.test(videoUrl)
-    || videoUrl.includes('/api/media/')
-    || room.kind === 'file';
+
+  // 0) Film sitesinden çözülen gerçek akış: perde kendi oynatıcısında açar.
+  //    Bu, "kara ekran" hatasının düzeltmesidir — site sayfası değil, video.
+  if (stream) return 'hls';
+
+  const isFileUrl =
+    looksLikePlayableFile(videoUrl) || room.kind === 'file';
 
   // 1) Doğrudan oynatılabilen dosya her zaman kazanır (mp4, m3u8, yükleme).
   if (isFileUrl) return 'html5';
@@ -925,9 +1112,15 @@ export const detectPlayerSource = (room: RoomSource): PlayerSourceKind => {
   // 3) Vimeo postMessage API'si (best-effort).
   if (embed.toLowerCase().includes('player.vimeo.com')) return 'vimeo';
 
-  // 4) Bilinmeyen iframe: senkron yok, düz gömme gösterilir.
-  if (embed) return 'unsupported';
-  if (videoUrl) return 'html5';
+  // 4) Gömülebilir oynatıcı adresi: senkron yok, düz gömme gösterilir.
+  //    Yalnızca GERÇEKTEN gömülebilir oynatıcılar buraya gelir; film sitesinin
+  //    sayfası asla iframe'e konmaz (frame içinde açılmaz → kara ekran).
+  if (embed && isPlayableEmbedUrl(embed)) return 'unsupported';
+
+  // 5) YouTube/vimeo SAYFA adresi (gömme adresi değil) → tanınan oynatıcı.
+  if (extractYouTubeId(videoUrl)) return 'youtube';
+  if (videoUrl.toLowerCase().includes('vimeo.com/')) return 'vimeo';
+
   return 'unsupported';
 };
 
@@ -936,4 +1129,33 @@ export const vimeoApiUrl = (embedUrl: string): string => {
   if (!embedUrl) return '';
   const separator = embedUrl.includes('?') ? '&' : '?';
   return embedUrl.includes('api=1') ? embedUrl : `${embedUrl}${separator}api=1`;
+};
+
+/**
+ * Adres, çerçeve (iframe) içinde açılabilen bir OYNATICI mı?
+ *
+ * Film siteleri kendi HTML sayfalarını `X-Frame-Options: DENY` /
+ * `frame-ancestors` ile çerçeve içinde açmaya izin vermez. Böyle bir adresi
+ * iframe'e koymak boş, sonsuza kadar "yükleniyor" görünen bir perde bırakır.
+ * Bu yüzden gömme kararını bu liste belirler: yalnızca bilinen oynatıcı
+ * adresleri perdeye konur, geri kalanı "dışarıda aç" olarak sunulur.
+ */
+export const PLAYABLE_EMBED_HOSTS = [
+  'youtube.com/embed/',
+  'youtube-nocookie.com/embed/',
+  'player.vimeo.com/',
+  'dailymotion.com/embed/',
+  'player.bilibili.com/',
+  'ok.ru/videoembed/',
+  'streamable.com/e/',
+  'player.twitch.tv/',
+  'clips.twitch.tv/',
+  'facebook.com/plugins/',
+  'instagram.com/',
+];
+
+export const isPlayableEmbedUrl = (url?: string | null): boolean => {
+  const low = (url || '').toLowerCase();
+  if (!low) return false;
+  return PLAYABLE_EMBED_HOSTS.some((host) => low.includes(host));
 };

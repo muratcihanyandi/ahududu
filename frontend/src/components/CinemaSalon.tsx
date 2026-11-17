@@ -15,7 +15,7 @@ import { CinemaCalendar } from './CinemaCalendar';
 import { CinemaStage } from './CinemaStage';
 import {
   PlaybackState, SyncMessage, expectedPosition, clampPosition,
-  shouldCorrect, formatTime, LatencyProbe,
+  shouldCorrect, formatTime, LatencyProbe, looksLikeYouTubeLink,
 } from '../services/cinemaSync';
 
 /* ------------------------------------------------------------------ */
@@ -1089,6 +1089,16 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
         created_by: currentUserId,
         kind: resolved.kind,
         poster_url: resolved.poster_url || undefined,
+        // Sunucunun bulduğu GERÇEK oynatıcı adresi (YouTube/player) mutlaka
+        // gönderilir. Gönderilmezse sunucu film sitesinin kendi HTML sayfasını
+        // iframe'e gömüyordu: site çerçeve içinde açılmadığı için perde sonsuz
+        // "Perde hazırlanıyor" ekranında kalıyordu.
+        embed_url: resolved.embed_url || undefined,
+        // Film sitesinden çözülen GERÇEK akış. Sayfa adresi yerine bu gelirse
+        // perde kendi oynatıcısında oynar: "kara ekran" sorunu biter.
+        stream_url: resolved.stream_url || undefined,
+        stream_referer: resolved.stream_referer || undefined,
+        source: resolved.source,
       });
 
       // Gömme (YouTube, Vimeo...) sitede, video dosyası doğrudan perdede oynar.
@@ -1165,6 +1175,14 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
         onReaction={sendReaction}
         onLeave={() => leaveRoom(true)}
         onEnterFullscreen={() => enterCinemaFullscreen()}
+        onRoomChanged={(next) => {
+          // Sahneye alınan yeni video: salon kaydı güncellendi. Oynatıcı
+          // yeniden kurulur; eski filmin saniyesi yenisine taşınmasın.
+          lastRoomRef.current = next.id;
+          setPlayback({ position: 0, isPlaying: true, duration: 0 });
+          setActiveRoom(next);
+          setRooms((prev) => [next, ...prev.filter((r) => r.id !== next.id)]);
+        }}
       />
     );
   }
@@ -1765,6 +1783,8 @@ const CinemaTheater: React.FC<{
   onReaction: (emoji: string) => void;
   onLeave: () => void;
   onEnterFullscreen: () => void;
+  /** Kullanıcı sahneye yeni bir video aldı: salon kaydı güncellendi. */
+  onRoomChanged?: (next: CinemaRoom) => void;
 }> = ({
   room,
   currentUserId,
@@ -1783,6 +1803,7 @@ const CinemaTheater: React.FC<{
   onReaction,
   onLeave,
   onEnterFullscreen,
+  onRoomChanged,
 }) => {
   /* Geri tuşu / Android geri = salonu kapat */
   useEffect(() => {
@@ -1794,6 +1815,10 @@ const CinemaTheater: React.FC<{
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, []);
 
+  const isWebSite =
+    room.kind === 'embed' &&
+    (room.source === 'unsupported' || !looksLikeYouTubeLink(room.video_url || ''));
+
   return (
     <div
       className="fixed inset-0 z-[90] bg-black overflow-hidden select-none animate-[fadeIn_0.4s_ease-out]"
@@ -1802,14 +1827,18 @@ const CinemaTheater: React.FC<{
       {/* Duvarlar, perdeler, projektör */}
       <SalonDecor playing={playback.isPlaying} />
 
-      {/* Perde / ekran çerçevesi */}
+      {/* Perde / ekran çerçevesi: Web sitelerinde ferah gezinti ve rahat kaydırma için geniş perde.
+          z-[16]: perdeler (z-10) ve karakter/tepki şeritleri (z-11) perdenin ÜSTÜNE
+          binmesin. Aksi halde yan perdeler ekranın %12'sini kaplayıp videonun
+          ortasını kesiyor, şeritlerdeki avatarlar ve tepkiler perdenin üstüne
+          düşüyordu: perde küçük görünüyor, film seyredilemiyordu. */}
       <div
-        className="absolute z-[9] rounded-[14px] overflow-hidden"
+        className="absolute z-[16] rounded-[14px] overflow-hidden select-auto"
         style={{
-          left: '12%',
-          right: '12%',
-          top: '13%',
-          bottom: '20%',
+          left: isWebSite ? '3%' : '11.5%',
+          right: isWebSite ? '3%' : '11.5%',
+          top: isWebSite ? '8%' : '11%',
+          bottom: isWebSite ? '10%' : '11%',
           boxShadow:
             '0 0 0 4px rgba(212,175,105,0.35), 0 0 0 10px rgba(40,8,18,0.9), 0 0 70px rgba(255,210,150,0.22), inset 0 0 40px rgba(0,0,0,0.8)',
           background: '#050505',
@@ -1823,6 +1852,7 @@ const CinemaTheater: React.FC<{
           onUserSeek={onUserSeek}
           onReady={onReady}
           latencyMs={latencyMs}
+          onRoomChanged={onRoomChanged}
         />
 
         {/* Kayan yıldız animasyonu (film başlarken) */}

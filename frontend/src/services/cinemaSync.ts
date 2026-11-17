@@ -56,11 +56,12 @@ export interface SyncMessage {
 /* ------------------------------------------------------------------ */
 
 /**
- * Hem <video> hem YouTube IFrame hem de (best-effort) Vimeo oynatıcılarını
- * aynı arayüzle kullanmamızı sağlar. Tüm zamanlar SANİYEDİR.
+ * Hem <video> hem HLS (film sitelerinden çözülen akış) hem YouTube IFrame hem de
+ * (best-effort) Vimeo oynatıcılarını aynı arayüzle kullanmamızı sağlar.
+ * Tüm zamanlar SANİYEDİR.
  */
 export interface PlayerAdapter {
-  readonly kind: 'html5' | 'youtube' | 'vimeo';
+  readonly kind: 'html5' | 'hls' | 'youtube' | 'vimeo';
   /** Oynatıcı hazır mı? (YouTube için onReady gelene kadar false) */
   isReady(): boolean;
   getTime(): number;
@@ -521,6 +522,60 @@ export class SyncEngine {
     this.lastDecision = { action: 'none', drift: 0, target: 0, reason: 'sıfırlandı' };
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* "Sahneye al" — dış tarayıcıda seçilen videoyu perdeye davranışı      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Kullanıcı sitede gezip DOĞRU videoyu kendi açtığında (YouTube uygulamasından
+ * "Paylaş → Bağlantıyı kopyala"), uygulamaya dönen adresi yakalar.
+ *
+ * Yalnızca otomatik oynatma engelini aşan gerçek bir kullanıcı dokunuşuyla
+ * perde değiştiği için video kilitlenip "düğmeler çalışmıyor" durumuna
+ * düşmez. Başka sitelerin linkleri (reklam, sosyal medya) yok sayılır.
+ */
+export const YOUTUBE_VIDEO_ID_RE =
+  /(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
+
+export const extractYouTubeVideoId = (text?: string | null): string | null => {
+  const match = (text || '').match(YOUTUBE_VIDEO_ID_RE);
+  return match ? match[1] : null;
+};
+
+/**
+ * Metin bir YouTube video adresi mi? İki durumu bilerek ayırır:
+ *   - metin yalnızca YouTube adresi (uygulamadan paylaşılan bağlantı),
+ *   - site linkinden ÇIKARILAN gömülü adres (sahte doğrulama).
+ * `allowEmbedded: false` ile "generic site içindeki gömülü youtube adresi"
+ * yakalanmaz; aksi halde film sitesi linki sahte "video bulundu" verirdi.
+ */
+export const looksLikeYouTubeLink = (
+  text?: string | null,
+  opts: { allowEmbedded?: boolean } = {}
+): boolean => {
+  const value = (text || '').trim();
+  if (!value) return false;
+  if (value.length > 2048) return false;
+  const decoded = decodeURIComponent(value);
+  if (opts.allowEmbedded !== false && extractYouTubeVideoId(decoded)) return true;
+  return /(^|[\s])(https?:\/\/)?(www\.|m\.)?(youtube\.com|youtu\.be)\//i.test(decoded);
+};
+
+/**
+ * Gömülü YouTube oynatıcısında video bitince `pauseVideo()` çoğu durumda
+ * yeniden OYNATMAMIZ gerekir (bitmiş videoda playVideo bazen yok sayılır).
+ * Bu yüzden bitmiş oynatıcı "baştan" algılanır ve play() önce seekTo(0) yapar.
+ */
+export const shouldRestartBeforePlay = (
+  ended: boolean,
+  currentTime: number,
+  duration: number
+): boolean => {
+  if (!ended) return false;
+  if (!(duration > 0)) return true;
+  return currentTime >= duration - 0.75;
+};
 
 /* ------------------------------------------------------------------ */
 /* Salon katılımcıları / ev sahibi / buffering                         */

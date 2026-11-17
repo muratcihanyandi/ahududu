@@ -49,11 +49,22 @@ class LoveLetterResponse(BaseModel):
     deleted_at: Optional[datetime] = None
 
 class ChatMessageCreate(BaseModel):
+    """Sohbet mesajı.
+
+    `message_type`:
+      text, image, video, voice, walkie_talkie, nudge
+      konum  -> `latitude` + `longitude` (+ `place_name`); `content` etikettir
+      anket  -> `content` = soru, ilk satır; aşağıdaki satırlar seçenekler
+      etkinlik -> `content` = başlık, ilk satır; kalan satırlar ayrıntı
+    """
     sender: str
     message_type: str = "text"
     content: Optional[str] = None
     media_url: Optional[str] = None
     duration: Optional[int] = 0
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    place_name: Optional[str] = None
 
 class ChatMessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -64,6 +75,9 @@ class ChatMessageResponse(BaseModel):
     media_url: Optional[str]
     duration: Optional[int]
     created_at: datetime
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    place_name: Optional[str] = None
 
 class GalleryItemCreate(BaseModel):
     uploader: str
@@ -290,6 +304,8 @@ class CinemaRoomCreate(BaseModel):
     video_url: str
     source: str = "link"
     embed_url: Optional[str] = None
+    stream_url: Optional[str] = None
+    stream_referer: Optional[str] = None
     cover_url: Optional[str] = None
     poster_url: Optional[str] = None
     kind: Optional[str] = "film"
@@ -303,6 +319,8 @@ class CinemaRoomResponse(BaseModel):
     video_url: str
     source: str
     embed_url: Optional[str]
+    stream_url: Optional[str] = None
+    stream_referer: Optional[str] = None
     cover_url: Optional[str]
     poster_url: Optional[str]
     kind: str
