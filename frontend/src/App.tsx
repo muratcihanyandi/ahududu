@@ -55,6 +55,8 @@ export const App: React.FC = () => {
   const [memorySubTab, setMemorySubTab] = useState<'gallery' | 'notes'>('gallery');
   const [myBattery, setMyBattery] = useState<BatteryStatus | undefined>(undefined);
   const [isPartnerOnline, setIsPartnerOnline] = useState(false);
+  /** Partner'in en son görüldüğü an (ISO). Çevrimiçiyken kullanılmaz. */
+  const [partnerLastSeen, setPartnerLastSeen] = useState<string | null>(null);
   const [snapFeed, setSnapFeed] = useState<SnapFeed | null>(null);
   const [isCinemaOpen, setIsCinemaOpen] = useState(false);
   const [showRadar, setShowRadar] = useState(false);
@@ -222,7 +224,10 @@ export const App: React.FC = () => {
     });
     const unsubPartnerStatus = wsClient.on('partner_status', (d: any) => {
       if (d.user_id === partnerId) {
-        setIsPartnerOnline(Boolean(d.is_online));
+        const online = Boolean(d.is_online);
+        setIsPartnerOnline(online);
+        // Sunucu ayrılırken son görülme zamanını da gönderir; ek istek gerekmez.
+        if (!online && d.last_seen) setPartnerLastSeen(d.last_seen);
       }
     });
 
@@ -369,6 +374,8 @@ export const App: React.FC = () => {
       ]);
 
       setPartnerProfile(partnerProf);
+      // Sohbet başlığındaki "son görülme" ilk açılışta doğru görünsün.
+      if (partnerProf?.last_seen) setPartnerLastSeen(partnerProf.last_seen);
       setDistanceKm(coupleStat.distance_km);
     } catch (e) {
       console.error(e);
@@ -855,6 +862,16 @@ export const App: React.FC = () => {
           <ChatView
             currentUserId={currentUser}
             partnerName={partnerName}
+            isPartnerOnline={isPartnerOnline}
+            partnerLastSeen={partnerLastSeen}
+            onOpenMemories={() => {
+              playHaptic(15);
+              setActiveTab('memories');
+            }}
+            onOpenCinema={() => {
+              playHaptic(20);
+              setIsCinemaOpen(true);
+            }}
           />
         )}
 

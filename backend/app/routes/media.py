@@ -12,23 +12,78 @@ os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {
     # Images
-    "png", "jpg", "jpeg", "webp", "gif",
+    "png", "jpg", "jpeg", "webp", "gif", "heic", "heif", "bmp",
     # Audio (sesli mesaj: webm, mp3, m4a, wav, ogg, aac, caf, amr, 3gp)
-    "webm", "mp3", "wav", "m4a", "ogg", "aac", "caf", "amr", "3gp",
+    "webm", "mp3", "wav", "m4a", "ogg", "aac", "caf", "amr", "3gp", "opus", "oga",
     # Video
-    "mp4", "mov", "mkv"
+    "mp4", "mov", "mkv", "m4v", "webm", "avi", "3gp", "ts",
+    # Belge (sohbette ataç → Belge): pdf, office, metin, arşiv
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "csv",
+    "json", "rtf", "odt", "ods", "odp", "epub", "zip", "rar", "7z",
 }
+
+
+def _guess_extension(file: UploadFile) -> str:
+    """Dosya uzantısını tahmin eder.
+
+    Android'de her dosya bir ada sahip olmadığından (`content://` seçicileri
+    bazen adı boş gönderir) MIME türüne de bakılır; hiçbiri yoksa `bin` olur —
+    belge gönderimi asla bozuk bir uzantıyla düşmesin.
+    """
+    name = (file.filename or "").strip()
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext in ALLOWED_EXTENSIONS:
+        return ext
+
+    content_type = (file.content_type or "").lower()
+    mimetypes_map = {
+        "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+        "image/gif": "gif", "image/heic": "heic", "image/heif": "heif",
+        "audio/webm": "webm", "audio/mpeg": "mp3", "audio/mp4": "m4a",
+        "audio/x-m4a": "m4a", "audio/wav": "wav", "audio/ogg": "ogg",
+        "audio/aac": "aac", "audio/amr": "amr",
+        "video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm",
+        "video/x-matroska": "mkv", "video/3gpp": "3gp",
+        "application/pdf": "pdf",
+        "application/msword": "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "application/vnd.ms-excel": "xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+        "application/vnd.ms-powerpoint": "ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+        "text/plain": "txt", "text/csv": "csv", "text/markdown": "md",
+        "application/json": "json", "application/rtf": "rtf",
+        "application/epub+zip": "epub",
+        "application/zip": "zip",
+        "application/vnd.rar": "rar", "application/x-rar-compressed": "rar",
+        "application/x-7z-compressed": "7z",
+        "application/vnd.oasis.opendocument.text": "odt",
+        "application/vnd.oasis.opendocument.spreadsheet": "ods",
+        "application/vnd.oasis.opendocument.presentation": "odp",
+    }
+    if content_type in mimetypes_map:
+        return mimetypes_map[content_type]
+    if ext:
+        # Tanımadığımız ama dosya adı olan bir uzantı: yine de sakla.
+        return "".join(ch for ch in ext if ch.isalnum())[:10] or "bin"
+    if "image" in content_type:
+        return "png"
+    if "audio" in content_type:
+        return "webm"
+    if "video" in content_type:
+        return "mp4"
+    return "bin"
+
 
 @router.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
-    media_category: str = Form("general") # letters, chat, gallery, voice
+    media_category: str = Form("general") # letters, chat, gallery, voice, document
 ):
-    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "bin"
-    if ext not in ALLOWED_EXTENSIONS:
-        ext = "png" if "image" in file.content_type else ("webm" if "audio" in file.content_type else "bin")
-    
-    unique_filename = f"{uuid.uuid4().hex}_{media_category}.{ext}"
+    ext = _guess_extension(file)
+    safe_category = "".join(ch for ch in media_category if ch.isalnum() or ch in "-_")[:24] or "general"
+
+    unique_filename = f"{uuid.uuid4().hex}_{safe_category}.{ext}"
     dest_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
     
     async with aiofiles.open(dest_path, "wb") as buffer:
@@ -40,7 +95,8 @@ async def upload_file(
         "success": True,
         "filename": unique_filename,
         "url": media_url,
-        "content_type": file.content_type
+        "content_type": file.content_type,
+        "original_name": file.filename or unique_filename,
     }
 
 @router.get("/file/{filename}", response_model=None)
@@ -55,17 +111,32 @@ async def get_file(filename: str, request: Request):
     if not media_type:
         media_type = "application/octet-stream"
 
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=86400",
+        # Telefondaki WebView/Capacitor kabuğundan erişim için
+        "Access-Control-Allow-Origin": "*",
+        "X-Content-Type-Options": "nosniff",
+    }
+    # Sohbette gönderilen BELGE (pdf, docx, zip...) tarayıcıda sayfa olarak
+    # AÇILMAZ; indirilir. Aksi hâlde HTML içeren bir dosya uygulama içinde
+    # çalışabilirdi.
+    if not (
+        media_type.startswith("image/")
+        or media_type.startswith("video/")
+        or media_type.startswith("audio/")
+        or media_type == "application/pdf"
+        or media_type.startswith("text/")
+        or media_type in ("application/json", "application/epub+zip")
+    ):
+        headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
+
     # Sinema Salonu ve Android WebView videoyu PARÇA PARÇA (Range) ister.
     # Range desteklenmezse video ilerlemez, sarma çalışmaz, bazen siyah kalır.
     return FileResponse(
         file_path,
         media_type=media_type,
-        headers={
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=86400",
-            # Telefondaki WebView/Capacitor kabuğundan erişim için
-            "Access-Control-Allow-Origin": "*",
-        },
+        headers=headers,
     )
 
 

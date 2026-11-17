@@ -32,7 +32,7 @@ from backend.app.schemas import (
     TicketRequest,
     CalendarImport,
 )
-from backend.app.routes.cinema import resolve_video
+from backend.app.routes.cinema import resolve_link_deep
 from backend.app.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/api/cinema/calendar", tags=["cinema-calendar"])
@@ -182,7 +182,7 @@ async def next_showtime(viewer: Optional[str] = None, db: AsyncSession = Depends
 
 @router.post("", response_model=None)
 async def create_showtime(payload: ShowtimeCreate, db: AsyncSession = Depends(get_db)):
-    resolved = resolve_video(payload.video_url)
+    resolved = await resolve_link_deep(payload.video_url)
     show = CinemaShowtime(
         title=payload.title.strip(),
         description=payload.description,
@@ -219,7 +219,7 @@ async def update_showtime(showtime_id: int, payload: ShowtimeUpdate, db: AsyncSe
 
     data = payload.model_dump(exclude_unset=True)
     if "video_url" in data and data["video_url"]:
-        resolved = resolve_video(data["video_url"])
+        resolved = await resolve_link_deep(data["video_url"])
         show.video_url = resolved["video_url"]
         show.embed_url = resolved.get("embed_url")
         show.source = resolved["source"]
@@ -341,7 +341,7 @@ async def open_showtime(
     if booked and payload.user_id not in booked:
         raise HTTPException(status_code=403, detail="Önce bilet almalısın 🎟️")
 
-    resolved = resolve_video(show.video_url)
+    resolved = await resolve_link_deep(show.video_url)
     room = await db.get(CinemaRoom, show.room_id) if show.room_id else None
     if not room:
         room = CinemaRoom(
@@ -431,7 +431,7 @@ async def import_calendar(payload: CalendarImport, db: AsyncSession = Depends(ge
 
     created = []
     for item in payload.showtimes:
-        resolved = resolve_video(item.video_url)
+        resolved = await resolve_link_deep(item.video_url)
         show = CinemaShowtime(
             title=item.title.strip(),
             description=item.description,
@@ -506,7 +506,7 @@ async def auto_schedule(payload: dict, db: AsyncSession = Depends(get_db)):
             show_date = date.fromisoformat(f"{month}-01").replace(day=1) + timedelta(days=release_day - 1)
         except ValueError:
             show_date = date.fromisoformat(f"{month}-01")
-        resolved = resolve_video(film.get("video_url") or film.get("url") or "")
+        resolved = await resolve_link_deep(film.get("video_url") or film.get("url") or "")
         show = CinemaShowtime(
             title=(film.get("title") or "Film").strip(),
             description=film.get("description"),

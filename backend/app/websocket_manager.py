@@ -33,16 +33,41 @@ class ConnectionManager:
             if websocket in self.active_connections[user_id]:
                 self.active_connections[user_id].remove(websocket)
                 logger.info(f"User '{user_id}' disconnected. Remaining: {len(self.active_connections[user_id])}")
-        
+
         # If no more connections for this user, notify partner
         if not self.active_connections.get(user_id):
             partner_id = settings.partner_of(user_id)
             import asyncio
-            asyncio.create_task(self.send_to_user(partner_id, {
-                "type": "partner_status",
-                "user_id": user_id,
-                "is_online": False
-            }))
+            asyncio.create_task(self._announce_offline(user_id, partner_id))
+
+    async def _announce_offline(self, user_id: str, partner_id: str):
+        """Bağlantı kapandı: son görülme zamanını kaydet ve partner'e bildir.
+
+        "Son görülme" yalnızca batarya/konum güncellemelerinde tazelenirse,
+        uygulama kapatıldığında saat saatlerce eski kalırdı. Bu yüzden en son
+        bağlantı düştüğünde de zamanı yazıyoruz ve aynı bildirimde gönderiyoruz;
+        partner'in ekranı ek bir istek yapmadan doğru saati gösterir.
+        """
+        last_seen_iso = None
+        try:
+            from backend.app.database import AsyncSessionLocal
+            from backend.app.models import UserProfile, now_utc
+
+            async with AsyncSessionLocal() as db:
+                profile = await db.get(UserProfile, user_id)
+                if profile:
+                    profile.last_seen = now_utc()
+                    await db.commit()
+                    last_seen_iso = profile.last_seen.isoformat()
+        except Exception as e:  # noqa: BLE001 - durum bildirimi asla düşmesin
+            logger.warning(f"Could not persist last_seen for '{user_id}': {e}")
+
+        await self.send_to_user(partner_id, {
+            "type": "partner_status",
+            "user_id": user_id,
+            "is_online": False,
+            "last_seen": last_seen_iso,
+        })
 
     async def send_to_user(self, user_id: str, message: dict):
         connections = self.active_connections.get(user_id, [])

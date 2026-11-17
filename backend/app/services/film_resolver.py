@@ -28,7 +28,7 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
-REQUEST_TIMEOUT = 15.0
+REQUEST_TIMEOUT = 5.0
 MAX_HTML_BYTES = 3_000_000
 
 # Film siteleri bot koruması (Cloudflare vb.) kullanır. Gerçek bir tarayıcı
@@ -53,9 +53,22 @@ BROWSER_HEADERS = {
     "Connection": "keep-alive",
 }
 
-VIDEO_FILE_RE = re.compile(r"https?://[^\s\"'<>\\]+?\.(?:mp4|webm|m3u8|mov|m4v)(?:\?[^\s\"'<>\\]*)?", re.I)
+VIDEO_FILE_RE = re.compile(
+    r"https?://[^\s\"'<>\\]+?\.(?:mp4|webm|m3u8|mov|m4v)(?:\?[^\s\"'<>\\]*)?(?![\w])",
+    re.I,
+)
 # Göreli video yolları: "/video/film.mp4", "video/film.m3u8"
-RELATIVE_FILE_RE = re.compile(r"[\"'](/[^\"'<>\s]+?\.(?:mp4|webm|m3u8|mov|m4v)(?:\?[^\"'<>\s]*)?)[\"']", re.I)
+RELATIVE_FILE_RE = re.compile(
+    r"[\"'](/[^\"'<>\s]+?\.(?:mp4|webm|m3u8|mov|m4v)(?:\?[^\"'<>\s]*)?)[\"']",
+    re.I,
+)
+# Manifest / simge / site dosyaları video SANILMAMALI.
+# Gerçek olay: "site.webmanifest" içindeki "site.webm" dizgesi video sanılıp
+# perde boş kalıyordu (film sayfası yerine site.webm açılıyordu).
+NOT_VIDEO_RE = re.compile(
+    r"(?:manifest|favicon|\.svg|\.png|\.jpe?g|\.webp|\.gif|\.css|\.js|\.json|\.ico|\.woff2?)(?:\?|$)",
+    re.I,
+)
 IFRAME_RE = re.compile(r"<iframe[^>]+src=[\"']([^\"']+)[\"']", re.I)
 EMBED_RE = re.compile(r"<embed[^>]+src=[\"']([^\"']+)[\"']", re.I)
 # Film siteleri gerçek oynatıcıyı iframe'in data-src'sinde tutar (JS ile yüklenir)
@@ -107,16 +120,18 @@ def extract_candidates(html: str, page_url: str) -> List[dict]:
             return
         if absolute.rstrip("/") == page_url.rstrip("/"):
             return
+        # Manifest/simge/CSS gibi dosyalar video değildir. Dikkat: sayfada
+        # "site.webmanifest" yazarken VIDEO_FILE_RE ondan "site.webm" kesiyor
+        # (uzantı eşleşmesi). Bu yüzden eşleşmenin DEVAMI da denetlenir.
+        if kind == "file" and NOT_VIDEO_RE.search(absolute.split("?")[0]):
+            return
         seen.add(absolute)
         found.append({"url": absolute, "kind": kind, "score": score})
 
-    # 0) Sayfaya gömülü YouTube / Vimeo oynatıcıları (film sitelerinde çok yaygın)
-    #    JSON içinde "https:\/\/www.youtube.com\/embed\/ID" biçiminde de gelebilir.
-    normalized = html.replace("\\/", "/")
-    for video_id in YOUTUBE_EMBED_RE.findall(normalized):
-        add(f"https://www.youtube.com/embed/{video_id}?rel=0&modestbranding=1", "embed", 90)
-    for video_id in VIMEO_EMBED_RE.findall(normalized):
-        add(f"https://player.vimeo.com/video/{video_id}?dnt=1", "embed", 90)
+    # Film sitelerindeki YouTube/Vimeo bağlantıları FRAGMANDIR (trailer).
+    # Kullanıcı filmin kendisini izlemek istediği için sayfadaki YouTube fragmanları
+    # asla tam film videosu olarak seçilmez. Yalnızca doğrudan video dosyaları (.mp4, .m3u8)
+    # veya gerçek video stream oynatıcıları taranır.
 
     # 1) Doğrudan video dosyaları (en iyi)
     for match in VIDEO_FILE_RE.findall(html):
@@ -163,7 +178,7 @@ async def _fetch_with_curl(page_url: str) -> tuple[int, str]:
         return 0, ""
 
     args = [
-        curl, "-sL", "--compressed", "--max-time", "15",
+        curl, "-sL", "--compressed", "--max-time", "6",
         "-A", USER_AGENT,
         "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "-H", "Accept-Language: tr-TR,tr;q=0.9,en;q=0.8",
@@ -179,7 +194,7 @@ async def _fetch_with_curl(page_url: str) -> tuple[int, str]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=20)
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=8)
         text = stdout.decode("utf-8", errors="replace")
         match = re.search(r"__HTTP_(\d{3})__\s*$", text)
         status = int(match.group(1)) if match else 0

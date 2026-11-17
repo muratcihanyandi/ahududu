@@ -8,16 +8,32 @@ import {
   Mic,
   Trash2,
   Loader2,
+  FileText,
+  MapPin,
+  CalendarDays,
+  UserRound,
+  ListChecks,
+  X,
 } from 'lucide-react';
-import { ChatMessage, UserId, USERS, partnerOf } from '../types';
+import { ChatMessage, ChatMessageType, UserId, USERS, partnerOf, encodeContact, decodeContact } from '../types';
 import { api, mediaUrl } from '../services/api';
 import { wsClient } from '../services/websocket';
 import { playHaptic, soundEngine } from '../services/haptics';
 import { clearAllNotifications, notifyMessage } from '../services/notifications';
+import { registerBackHandler } from '../services/backButton';
+import { ChatAttachPanel, ContactDraft, IMAGE_ACCEPT, CAMERA_ACCEPT } from './ChatAttachPanel';
 
 interface ChatViewProps {
   currentUserId: UserId;
   partnerName: string;
+  /** Partner şu an bağlı mı? (WebSocket `partner_status`) */
+  isPartnerOnline?: boolean;
+  /** Partner'in son görülme zamanı (ISO). Çevrimiçiyken kullanılmaz. */
+  partnerLastSeen?: string | null;
+  /** Ataç panelindeki "Anılar" kısayolu. */
+  onOpenMemories?: () => void;
+  /** Ataç panelindeki "Sinema" kısayolu. */
+  onOpenCinema?: () => void;
 }
 
 /** Ses kaydı için en kısa süre (saniye) — kazara dokunuşlar boşa gitmesin. */
@@ -33,6 +49,49 @@ const TAP_TO_RECORD_MS = 450;
 const CANCEL_DRAG_PX = 60;
 /** Kayıt balonunun sola kayabileceği en fazla mesafe (px). */
 const MAX_DRAG_PX = 132;
+
+/**
+ * Bir seferde yüklenecek mesaj sayfası.
+ *
+ * Sohbet geçmişi on binlerce mesaj olabildiği için (WhatsApp aktarımı) hepsi
+ * birden indirilmez: en son sayfa açılır, yukarı kaydırdıkça eskileri istenir.
+ */
+const PAGE_SIZE = 60;
+
+/** Dosya seçicinin hangi iş için açıldığı (galeri / kamera / belge). */
+type PickKind = 'galeri' | 'camera' | 'belge';
+
+const PICK_ACCEPT: Record<PickKind, string> = {
+  galeri: IMAGE_ACCEPT,
+  camera: CAMERA_ACCEPT,
+  belge: '*/*',
+};
+
+/**
+ * Belge seçicisi, Android'de TÜM dosyaları listeler. Sonraki seçim küçük
+ * resimler için yine görsel seçiciyi açsın diye kısa süre sonra sıfırlanır.
+ */
+const DOCUMENT_PICK_RESET_MS = 4000;
+
+/** Dosya boyutunu "1,4 MB" gibi gösterir. */
+const formatFileSize = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`;
+};
+
+/**
+ * Belge türü etiketi: "pdf" → "PDF", "belge" (uzantısız) → "DOSYA".
+ * Hem dosya adından hem de sunucunun sakladığı addan çalışır.
+ */
+const fileKindOf = (name?: string | null, fallback = 'DOSYA'): string => {
+  const clean = (name || '').split(/[?#]/)[0];
+  const parts = clean.split('.');
+  const raw = parts.length > 1 ? parts[parts.length - 1] : '';
+  const label = raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  return label ? label.slice(0, 5) : fallback;
+};
 
 /** Saniyeyi "1:05" biçimine çevirir. */
 const formatDuration = (totalSeconds: number): string => {
@@ -80,6 +139,36 @@ const DayDivider: React.FC<{ date: Date }> = ({ date }) => (
   </div>
 );
 
+/**
+ * "Son görülme" metni — her zaman tarih ve saat olarak yazılır:
+ *     Son görülme 17.11.2026 03:34
+ *
+ * Göreli ifade ("az önce", "25 dk önce") bilerek kullanılmaz: hangi an
+ * olduğunu net gösterir ve yazı dakikalar geçtikçe değişmez.
+ *
+ * Sunucu saati UTC'dir; burada cihazın yerel saatine çevrilir.
+ */
+const formatLastSeen = (iso: string | null): string => {
+  if (!iso) return 'son görülme bilinmiyor';
+  // PostgreSQL "…Z" ile gönderir; bazı sürücüler (SQLite) saat dilimi ekini
+  // atlar — o durumda tarayıcı değeri YEREL saat sanıp 3 saat kaydırırdı.
+  // Ek yoksa UTC olduğunu açıkça belirtiyoruz.
+  const hasZone = /(?:[Zz]|[+-]\d{2}:?\d{2})$/.test(iso.trim());
+  const seen = new Date(hasZone ? iso : `${iso}Z`);
+  if (Number.isNaN(seen.getTime())) return 'son görülme bilinmiyor';
+
+  const date = seen.toLocaleDateString('tr-TR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+  const time = seen.toLocaleTimeString('tr-TR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `Son görülme ${date} ${time}`;
+};
+
 /** Kayıt sırasında oynayan minik dalga. */
 const RecordingWave: React.FC = () => (
   <span className="flex h-5 flex-1 items-end justify-center gap-[3px] overflow-hidden">
@@ -100,12 +189,25 @@ const RecordingWave: React.FC = () => (
 export const ChatView: React.FC<ChatViewProps> = ({
   currentUserId,
   partnerName,
+  isPartnerOnline = false,
+  partnerLastSeen = null,
+  onOpenMemories,
+  onOpenCinema,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [playingAudioId, setPlayingAudioId] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  /** Daha eski sayfa var mı? (geçmiş sayfa sayfa yüklenir) */
+  const [hasMoreOlder, setHasMoreOlder] = useState(false);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  /** Ataç → alttan açılan paylaşım paneli açık mı? */
+  const [isAttachOpen, setIsAttachOpen] = useState(false);
+  /** Galeri ızgarasını her panel açılışında tazelemek için. */
+  const [attachRefreshKey, setAttachRefreshKey] = useState(0);
+  /** Anket baloncuğunda oy verilen mesaj (bu oturum için). */
+  const [votedPolls, setVotedPolls] = useState<Record<number, number>>({});
 
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -114,6 +216,77 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
   const toastTimerRef = useRef<number | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  messagesRef.current = messages;
+  const isLoadingOlderRef = useRef(false);
+  /** Yukarı kaydırınca çalışacak "eski sayfayı yükle" fonksiyonu. */
+  const loadOlderRef = useRef<() => Promise<void>>(async () => {});
+  /** Dosya seçici hangi iş için açıldı? (accept süzgeci buna göre değişir) */
+  const pickKindRef = useRef<PickKind>('galeri');
+  /** Belge seçicinin "her dosya" modunu normal görsel süzgecine döndüren zamanlayıcı. */
+  const pickResetTimerRef = useRef<number | null>(null);
+  /** Yükleme biterken panel hâlâ açıksa galeri karelerini tazele. */
+  const attachOpenRef = useRef(false);
+
+  /**
+   * Paylaşım panelini aç/kapat.
+   *
+   * GERÇEK durum önce ref'te tutulur: aynı karede iki dokunuş (ör. panel
+   * kapanmadan hızlı çift dokunuş) art arda işlense bile panel ters yönde
+   * açılıp kapanmaz — her zaman bir kere açık olur.
+   */
+  const openAttachPanel = useCallback(() => {
+    if (attachOpenRef.current) return;
+    attachOpenRef.current = true;
+    setAttachRefreshKey((key) => key + 1);
+    setIsAttachOpen(true);
+    // Panel açılınca klavye kapansın: altlık panel tam görünsün.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+  }, []);
+
+  const closeAttachPanel = useCallback(() => {
+    attachOpenRef.current = false;
+    setIsAttachOpen(false);
+  }, []);
+
+  const toggleAttach = useCallback(() => {
+    if (attachOpenRef.current) closeAttachPanel();
+    else openAttachPanel();
+  }, [closeAttachPanel, openAttachPanel]);
+
+  /** Panel kapatılırken dosya seçiciyi de eski hâline döndür. */
+  useEffect(() => {
+    if (isAttachOpen) return;
+    if (pickResetTimerRef.current !== null) {
+      window.clearTimeout(pickResetTimerRef.current);
+      pickResetTimerRef.current = null;
+    }
+    pickKindRef.current = 'galeri';
+    setAttachRefreshKey((key) => key + 1);
+  }, [isAttachOpen]);
+
+  // Panelin gerçek durumunu HER render'da yansıt (effect değil: effect
+  // sırası, kapanma effect'inin ref'i geri yazmasına yol açabilirdi).
+  attachOpenRef.current = isAttachOpen;
+
+  /** Panelden bir dosya seçimi başlat (galeri / kamera / belge). */
+  const handlePickFile = useCallback((kind: PickKind) => {
+    const input = fileInputRef.current;
+    if (!input) return;
+    pickKindRef.current = kind;
+    if (pickResetTimerRef.current !== null) window.clearTimeout(pickResetTimerRef.current);
+    input.value = '';
+    try {
+      input.click();
+    } catch (e) {
+      console.warn('[Ahududu] Dosya seçici açılamadı', e);
+    }
+    // Eski WebView'ler accept'i geç uygulayabilir: bir sonraki açılış için sıfırla.
+    pickResetTimerRef.current = window.setTimeout(() => {
+      pickResetTimerRef.current = null;
+      if (pickKindRef.current === 'belge') pickKindRef.current = 'galeri';
+    }, DOCUMENT_PICK_RESET_MS);
+  }, []);
 
   /** Kısa bir bilgi baloncuğu göster (teknik terimsiz, sıcak dil). */
   const showToast = useCallback((text: string) => {
@@ -201,6 +374,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!scroller) return;
     atBottomRef.current =
       scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 56;
+
+    // Geçmiş uzun olabilir (on binlerce mesaj): yukarıya yaklaşınca
+    // bir önceki sayfayı iste.
+    if (scroller.scrollTop < 240) void loadOlderRef.current();
   }, []);
 
   /** Klavye açılıp kapandığında son mesaj görünür kalsın. */
@@ -228,9 +405,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   /** Sohbet penceresinde mevcut mesajları yükle (en alta konumlanır). */
   const loadMessages = useCallback(async () => {
     try {
-      const data = await api.getChatMessages(50);
+      const data = await api.getChatMessages(PAGE_SIZE);
       const list = Array.isArray(data) ? data : [];
       setMessages(list);
+      setHasMoreOlder(list.length >= PAGE_SIZE);
       // İki aşamalı: yerleşim oturduktan sonra da en alta in.
       window.requestAnimationFrame(() => scrollToBottom());
       window.setTimeout(() => scrollToBottom(), 120);
@@ -238,6 +416,53 @@ export const ChatView: React.FC<ChatViewProps> = ({
       console.error(e);
     }
   }, [scrollToBottom]);
+
+  /**
+   * Yukarı kaydırınca bir önceki sayfayı yükle.
+   *
+   * Geçmiş on binlerce mesaj olabilir; hepsini birden indirmek yerine
+   * sayfa sayfa çekiyoruz. Eski mesajlar listenin BAŞINA eklendiği için
+   * kaydırma konumu korunur (kullanıcı yerinden sıçramaz).
+   */
+  useEffect(() => {
+    loadOlderRef.current = async () => {
+      if (!hasMoreOlder || isLoadingOlderRef.current) return;
+      const scroller = scrollRef.current;
+      const first = messagesRef.current[0];
+      if (!scroller || !first) return;
+
+      isLoadingOlderRef.current = true;
+      setIsLoadingOlder(true);
+      const prevHeight = scroller.scrollHeight;
+      const prevTop = scroller.scrollTop;
+      try {
+        const data = await api.getChatMessages(PAGE_SIZE, first.id);
+        const list = Array.isArray(data) ? data : [];
+        if (!list.length) {
+          setHasMoreOlder(false);
+          return;
+        }
+        setHasMoreOlder(list.length >= PAGE_SIZE);
+        // Eski sayfayı başa ekle; aynı mesaj iki kez girmesin.
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id));
+          const fresh = list.filter((m) => !seen.has(m.id));
+          return [...fresh, ...prev];
+        });
+        // Yerleşim oturduktan sonra kaydırma konumunu sabitle.
+        window.requestAnimationFrame(() => {
+          const el = scrollRef.current;
+          if (!el) return;
+          el.scrollTop = el.scrollHeight - prevHeight + prevTop;
+        });
+      } catch (e) {
+        console.error('Eski mesajlar yüklenemedi', e);
+      } finally {
+        isLoadingOlderRef.current = false;
+        setIsLoadingOlder(false);
+      }
+    };
+  }, [hasMoreOlder]);
 
   useEffect(() => {
     loadMessages();
@@ -286,7 +511,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
             ? '📷 Fotoğraf gönderdi'
             : msg.message_type === 'video'
               ? '🎬 Video gönderdi'
-              : '🎙️ Sesli mesaj gönderdi';
+              : msg.message_type === 'konum'
+                ? `📍 Konum gönderdi${msg.place_name ? `: ${msg.place_name}` : ''}`
+                : msg.message_type === 'belge'
+                  ? `📄 Belge gönderdi${msg.content ? `: ${msg.content}` : ''}`
+                  : msg.message_type === 'kisi'
+                    ? '👤 Kişi gönderdi'
+                    : msg.message_type === 'anket'
+                      ? `📊 Anket: ${(msg.content || '').split('\n')[0]}`
+                      : msg.message_type === 'etkinlik'
+                        ? `📅 Etkinlik: ${(msg.content || '').split('\n')[0]}`
+                        : '🎙️ Sesli mesaj gönderdi';
       await notifyMessage({
         title: partnerName,
         body: body.slice(0, 120),
@@ -317,32 +552,141 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
 
+  /* ------------------------------------------------------------------ */
+  /* Ataç panelinden paylaşımlar: konum · kişi · anket · etkinlik       */
+  /* ------------------------------------------------------------------ */
+
+  /** Gönderilen mesajı listeye ekle ve en alta in. */
+  const appendSentMessage = useCallback(
+    (msg: ChatMessage) => {
+      setMessages((prev) => [...prev, msg]);
+      scrollToBottom('smooth');
+    },
+    [scrollToBottom]
+  );
+
+  const shareLocation = useCallback(
+    async (place: { latitude: number; longitude: number; place_name: string }) => {
+      const lat = Number(place.latitude);
+      const lon = Number(place.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        throw new Error('Geçersiz konum');
+      }
+      // Sunucu "konum" mesajı için koordinat ister; ad her zaman bir etiket olsun.
+      const label = (place.place_name || '').trim() || 'Konumum';
+      const newMsg = await api.sendChatMessage({
+        sender: currentUserId,
+        message_type: 'konum',
+        content: label,
+        latitude: lat,
+        longitude: lon,
+        place_name: label,
+      });
+      appendSentMessage(newMsg);
+    },
+    [appendSentMessage, currentUserId]
+  );
+
+  const shareContact = useCallback(
+    async (contact: ContactDraft) => {
+      const newMsg = await api.sendChatMessage({
+        sender: currentUserId,
+        message_type: 'kisi',
+        content: encodeContact({
+          name: contact.name,
+          phone: contact.phone,
+          note: contact.note,
+        }),
+      });
+      appendSentMessage(newMsg);
+    },
+    [appendSentMessage, currentUserId]
+  );
+
+  const sharePoll = useCallback(
+    async (question: string, options: string[]) => {
+      const newMsg = await api.sendChatMessage({
+        sender: currentUserId,
+        message_type: 'anket',
+        content: [question, ...options].join('\n'),
+      });
+      appendSentMessage(newMsg);
+    },
+    [appendSentMessage, currentUserId]
+  );
+
+  const shareEvent = useCallback(
+    async (event: { title: string; date: string; time: string; details: string }) => {
+      const newMsg = await api.sendChatMessage({
+        sender: currentUserId,
+        message_type: 'etkinlik',
+        content: [event.title, event.date, event.time, event.details].join('\n'),
+      });
+      appendSentMessage(newMsg);
+    },
+    [appendSentMessage, currentUserId]
+  );
+
+  /**
+   * Galeri / Kamera / Belge seçimi.
+   *
+   * Tür dosyanın kendisinden anlaşılır (belge seçicisi görsel de seçebilir):
+   * video → video, ses → sesli mesaj, görsel → fotoğraf, geri kalan → belge.
+   */
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
+    const input = e.target;
+    const files = input.files;
     if (!files || files.length === 0) return;
     const file = files[0];
+    const kind = pickKindRef.current;
     setIsUploading(true);
+    playHaptic(20);
 
     try {
-      const uploadRes = await api.uploadMedia(file, 'chat');
-      const isVideo = file.type.startsWith('video');
-      const isAudio = file.type.startsWith('audio');
-      const msgType = isVideo ? 'video' : isAudio ? 'voice' : 'image';
+      const mime = (file.type || '').toLowerCase();
+      const isVideo = mime.startsWith('video');
+      const isAudio = mime.startsWith('audio');
+      const isImage = mime.startsWith('image');
+      const msgType: ChatMessageType = isVideo
+        ? 'video'
+        : isAudio
+          ? 'voice'
+          : isImage
+            ? 'image'
+            : 'belge';
+
+      const uploadRes = await api.uploadMedia(file, msgType === 'belge' ? 'belge' : 'chat');
 
       const newMsg = await api.sendChatMessage({
         sender: currentUserId,
         message_type: msgType,
         media_url: uploadRes.url,
+        // Belgede ad lazım; sunucu/ad boşsa kategoriden bir etiket üretilir.
+        content:
+          msgType === 'belge'
+            ? file.name?.trim() || `Belge (${formatFileSize(file.size) || kind})`
+            : undefined,
       });
 
-      setMessages((prev) => [...prev, newMsg]);
-      scrollToBottom('smooth');
+      appendSentMessage(newMsg);
+      if (msgType === 'belge') showToast('Belge gönderildi 📄');
+      // Panel hâlâ açıksa ızgaradaki yeni kare hemen görünsün.
+      if (attachOpenRef.current) setAttachRefreshKey((key) => key + 1);
     } catch (err) {
       console.error(err);
       showToast('Dosya yüklenemedi, tekrar dener misin?');
     } finally {
       setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (pickResetTimerRef.current !== null) {
+        window.clearTimeout(pickResetTimerRef.current);
+        pickResetTimerRef.current = null;
+      }
+      pickKindRef.current = 'galeri';
+      if (input) {
+        input.value = '';
+        // <input type=file>'in accept süzgeci seçimden hemen sonra normaline dönsün.
+        input.setAttribute('accept', PICK_ACCEPT.galeri);
+      }
     }
   };
 
@@ -765,6 +1109,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
     []
   );
 
+  /* ------------------------------------------------------------------ */
+  /* Ataç paneli: geri tuşu, odak ve dışarı dokunma                     */
+  /* ------------------------------------------------------------------ */
+
+  /** Android geri tuşu açık paneli kapatır (uygulamadan çıkmasın). */
+  useEffect(() => {
+    if (!isAttachOpen) return;
+    const unregister = registerBackHandler(() => {
+      closeAttachPanel();
+      return true;
+    });
+    return unregister;
+  }, [isAttachOpen, closeAttachPanel]);
+
   const hasText = inputText.trim().length > 0;
   const showTapControls = isRecording && tapMode;
   const dragProgress = Math.min(1, Math.abs(dragX) / CANCEL_DRAG_PX);
@@ -791,8 +1149,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
             {partnerName}
           </h3>
           <span className="flex items-center gap-1 text-[10px] font-medium text-berry-600/90">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.15)]" />
-            Kalplerimiz bağlı
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                isPartnerOnline
+                  ? 'bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.15)]'
+                  : 'bg-stone-400 shadow-[0_0_0_2px_rgba(120,113,108,0.12)]'
+              }`}
+            />
+            {isPartnerOnline ? 'çevrimiçi' : formatLastSeen(partnerLastSeen)}
           </span>
         </div>
         <Heart
@@ -816,12 +1180,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <p className="font-serif text-sm font-semibold text-berry-900">
               İlk mesajı sen yaz
             </p>
-            <p className="mt-0.5 text-[11px] text-stone-500">
-              Burada sadece ikimiz varız 💞
-            </p>
           </div>
         ) : (
           <div className="mt-auto flex w-full flex-col">
+            {/* Geçmiş sayfa sayfa yüklenir: yukarı çıkınca eski mesajlar gelir. */}
+            {isLoadingOlder && (
+              <div className="flex items-center justify-center py-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-berry-400" />
+                <span className="ml-1.5 text-[10px] font-medium text-stone-500">
+                  Eski mesajlar geliyor…
+                </span>
+              </div>
+            )}
+            {!hasMoreOlder && messages.length > PAGE_SIZE && (
+              <div className="flex items-center justify-center py-2">
+                <span className="rounded-full bg-white/70 px-3 py-1 text-[10px] font-semibold text-berry-700/70 backdrop-blur-xs">
+                  Sohbetimizin başındasın 💞
+                </span>
+              </div>
+            )}
             {messages.map((msg, index) => {
             const isMe = msg.sender === currentUserId;
             const created = new Date(msg.created_at);
@@ -830,6 +1207,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
             const isVoice =
               (msg.message_type === 'voice' || msg.message_type === 'walkie_talkie') &&
               Boolean(msg.media_url);
+            const type = (msg.message_type || 'text') as ChatMessageType;
+            const isStructured =
+              type === 'konum' ||
+              type === 'belge' ||
+              type === 'kisi' ||
+              type === 'anket' ||
+              type === 'etkinlik';
+            // Yapılı mesajlarda metin kendi kartı içinde çizilir.
+            const showPlainText = Boolean(msg.content) && !isStructured;
 
             return (
               <React.Fragment key={msg.id}>
@@ -840,22 +1226,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     isMe ? 'items-end' : 'items-start'
                   } animate-[popIn_0.18s_ease-out]`}
                 >
+                  {/* Tek bir balon çökse bile sohbetin tamamı ayakta kalsın. */}
+                  <MessageBoundary>
                   <div
                     className={`max-w-[80%] rounded-2xl px-3.5 py-2 shadow-[0_1px_3px_rgba(190,24,93,0.08)] ${
+                      isStructured ? 'max-w-[86%]' : ''
+                    } ${
                       isMe
                         ? 'rounded-br-md bg-gradient-to-br from-berry-500 to-rose-500 text-white'
                         : 'rounded-bl-md border border-rose-100/90 bg-white text-stone-800'
                     }`}
                   >
                     {/* Metin */}
-                    {msg.content && (
+                    {showPlainText && (
                       <p className="select-text whitespace-pre-wrap text-[13.5px] leading-relaxed">
                         {msg.content}
                       </p>
                     )}
 
                     {/* Fotoğraf */}
-                    {msg.message_type === 'image' && msg.media_url && (
+                    {type === 'image' && msg.media_url && (
                       <img
                         src={mediaUrl(msg.media_url)}
                         alt="Fotoğraf"
@@ -864,13 +1254,41 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     )}
 
                     {/* Video */}
-                    {msg.message_type === 'video' && msg.media_url && (
+                    {type === 'video' && msg.media_url && (
                       <video
                         src={mediaUrl(msg.media_url)}
                         controls
                         className="mt-1 max-h-56 w-full rounded-xl"
                       />
                     )}
+
+                    {/* Konum — haritada açılır */}
+                    {type === 'konum' && <LocationBubble msg={msg} isMe={isMe} />}
+
+                    {/* Belge — indirilen dosya */}
+                    {type === 'belge' && msg.media_url && (
+                      <DocumentBubble msg={msg} isMe={isMe} />
+                    )}
+
+                    {/* Kişi kartı */}
+                    {type === 'kisi' && <ContactBubble msg={msg} isMe={isMe} />}
+
+                    {/* Anket */}
+                    {type === 'anket' && (
+                      <PollBubble
+                        msg={msg}
+                        isMe={isMe}
+                        myVote={votedPolls[msg.id] ?? null}
+                        onVote={(optionIndex) => {
+                          playHaptic(18);
+                          setVotedPolls((prev) => ({ ...prev, [msg.id]: optionIndex }));
+                          showToast('Oyun kaydedildi 🗳️');
+                        }}
+                      />
+                    )}
+
+                    {/* Etkinlik */}
+                    {type === 'etkinlik' && <EventBubble msg={msg} isMe={isMe} />}
 
                     {/* Sesli mesaj */}
                     {isVoice && msg.media_url && (
@@ -915,12 +1333,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         isMe ? 'text-white/75' : 'text-stone-400'
                       }`}
                     >
-                      {created.toLocaleTimeString('tr-TR', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                      {Number.isNaN(created.getTime())
+                        ? ''
+                        : created.toLocaleTimeString('tr-TR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
                     </span>
                   </div>
+                  </MessageBoundary>
                 </div>
               </React.Fragment>
             );
@@ -940,7 +1361,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           type="file"
           ref={fileInputRef}
           onChange={handleFileUpload}
-          accept="image/*,video/*,audio/*"
+          accept={IMAGE_ACCEPT}
           className="hidden"
         />
 
@@ -1020,13 +1441,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ) : (
           <div className="flex items-center gap-2">
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={toggleAttach}
               disabled={isUploading}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-rose-200/60 bg-white text-stone-500 transition-colors hover:bg-rose-50 disabled:opacity-50"
-              title="Fotoğraf veya video ekle"
-              aria-label="Fotoğraf veya video ekle"
+              aria-expanded={isAttachOpen}
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors disabled:opacity-50 ${
+                isAttachOpen
+                  ? 'border-berry-200 bg-rose-50 text-berry-700'
+                  : 'border-rose-200/60 bg-white text-stone-500 hover:bg-rose-50'
+              }`}
+              title="Ekle: galeri, kamera, konum, kişi, belge, anket, etkinlik"
+              aria-label="Dosya ve konum ekle"
             >
-              <Paperclip className="h-4 w-4" />
+              {isAttachOpen ? (
+                <X className="h-4 w-4" />
+              ) : (
+                <Paperclip className="h-4 w-4" />
+              )}
             </button>
 
             <input
@@ -1081,6 +1511,43 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
       </div>
 
+      {/* Ataç → alttan açılan paylaşım paneli:
+          Galeri · Kamera · Konum · Kişi · Belge · Anket · Etkinlik
+          ve hemen ALTLARINDA galerideki fotoğraflar. */}
+      {isAttachOpen && (
+        <ErrorBoundary
+          fallback={
+            <div className="shrink-0 border-t border-rose-100 bg-white px-4 py-3 text-center">
+              <p className="text-[11px] font-semibold text-stone-600">
+                Paylaşım paneli açılamadı.
+              </p>
+              <button
+                type="button"
+                onClick={closeAttachPanel}
+                className="mt-1.5 rounded-full bg-berry-500 px-3 py-1 text-[11px] font-bold text-white"
+              >
+                Kapat
+              </button>
+            </div>
+          }
+          onError={(error) => console.error('[Ahududu] Ataç paneli hatası', error)}
+        >
+          <ChatAttachPanel
+            currentUserId={currentUserId}
+            refreshKey={attachRefreshKey}
+            onRequestClose={closeAttachPanel}
+            onPickFile={handlePickFile}
+            onShareLocation={shareLocation}
+            onShareContact={shareContact}
+            onSharePoll={sharePoll}
+            onShareEvent={shareEvent}
+            onOpenMemories={onOpenMemories}
+            onOpenCinema={onOpenCinema}
+            showToast={showToast}
+          />
+        </ErrorBoundary>
+      )}
+
       {/* Kısa bilgi baloncuğu */}
       {toast && (
         <div className="pointer-events-none absolute inset-x-4 bottom-20 z-20 flex justify-center">
@@ -1090,6 +1557,289 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
       )}
     </div>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Crash guard'lar                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Tek bir öğe (bir balon ya da panel) çökerse yalnızca o öğe kaybolsun.
+ * Sohbetin tamamı — ve dolayısıyla uygulama — ayakta kalsın.
+ */
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode; fallback?: React.ReactNode; onError?: (e: unknown) => void },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    this.props.onError?.(error);
+  }
+
+  render() {
+    if (this.state.failed) return this.props.fallback ?? null;
+    return this.props.children;
+  }
+}
+
+/** Bir balonu izole eder: çökerse yerinde sade bir "gösterilemedi" satırı kalır. */
+const MessageBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <ErrorBoundary
+    fallback={
+      <div className="max-w-[80%] rounded-2xl border border-rose-100 bg-white px-3.5 py-2 text-[11px] italic text-stone-400">
+        Bu mesaj gösterilemedi 💌
+      </div>
+    }
+    onError={(error) => console.warn('[Ahududu] Mesaj balonu çizilemedi', error)}
+  >
+    {children}
+  </ErrorBoundary>
+);
+
+/* ------------------------------------------------------------------ */
+/* Paylaşılan balonlar: konum · belge · kişi · anket · etkinlik       */
+/* ------------------------------------------------------------------ */
+
+/** Konum: dokununca Google Haritalar'da açılır. */
+const LocationBubble: React.FC<{ msg: ChatMessage; isMe: boolean }> = ({ msg, isMe }) => {
+  const lat = typeof msg.latitude === 'number' ? msg.latitude : null;
+  const lon = typeof msg.longitude === 'number' ? msg.longitude : null;
+  const hasCoords = lat !== null && lon !== null;
+  const label = (msg.place_name || msg.content || '').trim();
+  const mapsUrl = hasCoords
+    ? `https://www.google.com/maps?q=${lat},${lon}`
+    : label
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(label)}`
+      : '';
+
+  return (
+    <a
+      href={mapsUrl || undefined}
+      target="_blank"
+      rel="noreferrer"
+      className={`mt-1 block overflow-hidden rounded-xl ${
+        isMe ? 'bg-white/15' : 'bg-rose-50'
+      } ${mapsUrl ? 'active:scale-[0.99]' : ''}`}
+    >
+      <span className="relative flex h-24 items-center justify-center overflow-hidden">
+        {/* Harita rozeti: gerçek harita karesi yerine canlı bir renk geçişi */}
+        <span
+          className="absolute inset-0"
+          style={{
+            background:
+              'radial-gradient(circle at 28% 32%, rgba(16,185,129,0.22), transparent 52%), radial-gradient(circle at 76% 68%, rgba(56,189,248,0.22), transparent 52%), linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%)',
+          }}
+        />
+        <span
+          className="absolute inset-0 opacity-60"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(255,255,255,0.75) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.75) 1px, transparent 1px)',
+            backgroundSize: '22px 22px',
+          }}
+        />
+        <span className="relative flex flex-col items-center">
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-emerald-600 shadow-md">
+            <MapPin className="h-5 w-5" />
+          </span>
+        </span>
+      </span>
+      <span className="block px-2.5 pb-2 pt-1.5">
+        <span className="block text-[11.5px] font-bold">Konumum</span>
+        <span className="block truncate text-[10.5px] opacity-80">
+          {label || (hasCoords ? `${lat}, ${lon}` : 'Konum paylaşıldı')}
+        </span>
+        <span className="mt-0.5 flex items-center gap-1 text-[9.5px] font-semibold opacity-70">
+          <MapPin className="h-3 w-3" />
+          Haritada aç
+        </span>
+      </span>
+    </a>
+  );
+};
+
+/** Belge: adı + boyutu + türü; dokununca indirilir/açılır. */
+const DocumentBubble: React.FC<{ msg: ChatMessage; isMe: boolean }> = ({ msg, isMe }) => {
+  const url = mediaUrl(msg.media_url);
+  // Sunucu dosyayı "<uuid>_belge.<uzantı>" olarak saklar: uzantı buradan gelir.
+  const kind = fileKindOf(msg.media_url, 'DOSYA');
+  const name = (msg.content || '').trim() || `Belge.${kind.toLowerCase()}`;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      download
+      className={`mt-1 flex w-[230px] max-w-full items-center gap-2.5 rounded-xl px-2.5 py-2 ${
+        isMe ? 'bg-white/15' : 'bg-violet-50'
+      } active:scale-[0.99]`}
+    >
+      <span
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+          isMe ? 'bg-white/25' : 'bg-violet-100 text-violet-600'
+        }`}
+      >
+        <FileText className="h-4 w-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[11.5px] font-semibold">{name}</span>
+        <span className="block text-[9.5px] font-bold uppercase tracking-wide opacity-70">
+          {kind} · aç / indir
+        </span>
+      </span>
+    </a>
+  );
+};
+
+/** Kişi kartı: ad + telefon; arama uygulamasında açılır. */
+const ContactBubble: React.FC<{ msg: ChatMessage; isMe: boolean }> = ({ msg, isMe }) => {
+  const card = decodeContact(msg.content);
+  if (!card) return null;
+  const tel = card.phone.replace(/[^\d+*#]/g, '');
+  return (
+    <a
+      href={tel ? `tel:${tel}` : undefined}
+      className={`mt-1 flex w-[220px] max-w-full flex-col gap-1.5 rounded-xl px-2.5 py-2 ${
+        isMe ? 'bg-white/15' : 'bg-blue-50'
+      } ${tel ? 'active:scale-[0.99]' : ''}`}
+    >
+      <span className="flex items-center gap-2">
+        <span
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+            isMe ? 'bg-white/25' : 'bg-blue-100 text-blue-600'
+          } text-[12px] font-bold`}
+        >
+          {(card.name || '?').trim().charAt(0).toLocaleUpperCase('tr-TR')}
+        </span>
+        <span className="min-w-0">
+          <span className="block truncate text-[11.5px] font-bold">{card.name}</span>
+          <span className="block truncate text-[10px] tabular-nums opacity-80">
+            {card.phone || 'Numara yok'}
+          </span>
+        </span>
+        <UserRound className="ml-auto h-3.5 w-3.5 shrink-0 opacity-70" />
+      </span>
+      {card.note && (
+        <span className="block text-[10px] italic opacity-80">{card.note}</span>
+      )}
+    </a>
+  );
+};
+
+/** Anket: soru + seçenekler. Oyun seçimi sohbette toplanır. */
+const PollBubble: React.FC<{
+  msg: ChatMessage;
+  isMe: boolean;
+  myVote: number | null;
+  onVote: (optionIndex: number) => void;
+}> = ({ msg, isMe, myVote, onVote }) => {
+  const lines = (msg.content || '').split('\n');
+  const question = (lines[0] || '').trim() || 'Anket';
+  const options = lines.slice(1).map((line) => line.trim()).filter(Boolean).slice(0, 6);
+  return (
+    <div className={`mt-1 w-[230px] max-w-full ${isMe ? '' : ''}`}>
+      <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide opacity-80">
+        <ListChecks className="h-3 w-3" /> Anket
+      </span>
+      <span className="mt-0.5 block select-text whitespace-pre-wrap text-[13px] font-semibold leading-snug">
+        {question}
+      </span>
+      <div className="mt-1.5 space-y-1">
+        {options.map((option, index) => {
+          const chosen = myVote === index;
+          return (
+            <button
+              key={`${index}-${option}`}
+              type="button"
+              onClick={() => onVote(index)}
+              aria-pressed={chosen}
+              className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] font-medium transition-colors ${
+                chosen
+                  ? isMe
+                    ? 'bg-white text-berry-700'
+                    : 'bg-berry-500 text-white'
+                  : isMe
+                    ? 'bg-white/15'
+                    : 'bg-white/90 text-stone-700'
+              }`}
+            >
+              <span
+                className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border ${
+                  chosen ? 'border-current' : 'border-current/40'
+                }`}
+              >
+                {chosen && <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+              </span>
+              <span className="min-w-0 flex-1 break-words">{option}</span>
+            </button>
+          );
+        })}
+      </div>
+      <span className="mt-1 block text-[9.5px] opacity-70">
+        {myVote === null ? 'Oyunu seç, ikimiz de görelim' : 'Oyunu seçtin ❤️'}
+      </span>
+    </div>
+  );
+};
+
+/** Etkinlik: başlık + tarih/saat + not. */
+const EventBubble: React.FC<{ msg: ChatMessage; isMe: boolean }> = ({ msg, isMe }) => {
+  const lines = (msg.content || '').split('\n');
+  const title = (lines[0] || '').trim() || 'Etkinlik';
+  const date = (lines[1] || '').trim();
+  const time = (lines[2] || '').trim();
+  const details = (lines[3] || '').trim();
+  const [y, m, d] = date.split('-').map(Number);
+  const prettyDate =
+    y && m && d
+      ? new Date(y, m - 1, d).toLocaleDateString('tr-TR', {
+          day: 'numeric',
+          month: 'long',
+          weekday: 'short',
+        })
+      : date;
+  const isoForCalendar =
+    y && m && d
+      ? `${date.replace(/-/g, '')}T${(time || '21:00').replace(':', '')}00`
+      : '';
+  const calendarUrl = isoForCalendar
+    ? `https://www.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(
+        title
+      )}&dates=${isoForCalendar}/${isoForCalendar}${
+        details ? `&details=${encodeURIComponent(details)}` : ''
+      }`
+    : '';
+
+  return (
+    <a
+      href={calendarUrl || undefined}
+      target="_blank"
+      rel="noreferrer"
+      className={`mt-1 block w-[230px] max-w-full rounded-xl px-2.5 py-2 ${
+        isMe ? 'bg-white/15' : 'bg-pink-50'
+      } ${calendarUrl ? 'active:scale-[0.99]' : ''}`}
+    >
+      <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide opacity-80">
+        <CalendarDays className="h-3 w-3" /> Etkinlik
+      </span>
+      <span className="mt-0.5 block select-text text-[12.5px] font-semibold leading-snug">
+        {title}
+      </span>
+      <span className="mt-1 flex items-center gap-1 text-[10.5px] font-medium">
+        <CalendarDays className="h-3 w-3 shrink-0" />
+        {prettyDate || 'Tarih yok'}
+        {time ? ` · ${time}` : ''}
+      </span>
+      {details && (
+        <span className="mt-0.5 block text-[10.5px] opacity-80">{details}</span>
+      )}
+    </a>
   );
 };
 
