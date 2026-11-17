@@ -1,6 +1,17 @@
-# 🍓 Ahududu — Bizim Dünyamız
+# Ahududu — Çift Uygulaması
 
-Murat ve Sevgilisi için özel olarak geliştirilmiş, romantik, samimi ve teknik karmaşıklıktan tamamen arındırılmış çift uygulaması.
+İki telefon, bir saat ve tek bir sunucu. Murat ve Selin için yazılmış, kendi
+kendine barındırılan bir çift uygulaması.
+
+> Bu proje bir ürün değil, gerçek kullanıcısı olan bir yazılım. İki kişi her gün
+> kullanıyor: balmumu mühürlü el yazısı mektuplar, bas-konuş telsiz, canlı konum,
+> Galaxy Watch 7 / Watch Ultra entegrasyonu ve S-Pen basınç hassasiyetli çizim.
+
+```
+Android (Capacitor)  ──┐
+Wear OS tarayıcı     ──┼──►  FastAPI (:33470)  ──►  PostgreSQL
+Web arayüzü          ──┘        WebSocket + REST
+```
 
 ---
 
@@ -10,7 +21,25 @@ Murat ve Sevgilisi için özel olarak geliştirilmiş, romantik, samimi ve tekni
 
 ---
 
-## ✨ Öne Çıkan Özellikler
+## Neden teknik olarak ilginç
+
+Bu bir "aşk temalı CRUD uygulaması" değil. İçinde çözülmesi gereken gerçek
+problemler var:
+
+| Problem | Çözüm |
+|---|---|
+| **S-Pen basınç hassasiyeti** | Pointer Events `pressure` alanı doğrudan kullanılır; çizgi kalınlığı basınca göre değişir. |
+| **Saatte dairesel ekran** | `/watch` rotası ayrı bir düzen: dairesel kırpma, güvenli alan içinde yerleşim, dokunma hedefleri 44 px üstü. |
+| **Uzaktan titreşim deseni** | Telefon ve saat aynı desen dizisini Vibration API ile çalar; WebSocket olayı ile tetiklenir. |
+| **Sıfır yeniden kurulum** | APK bir kez kurulur; arayüz ve iş mantığı sunucudan güncellenir. Yeni özellik için karşı tarafa yeni APK göndermek gerekmez. |
+| **Pil/şarj durumu paylaşımı** | Battery Status API + WebSocket; karşı tarafın bataryası ana ekranda canlı görünür. |
+| **Konum ve mesafe** | İki cihazın koordinatlarından haversine mesafe hesabı, pil bilgisiyle birlikte tek yayında. |
+| **Anket oylarının iki tarafta işaretlenmesi** | Oylar sunucuda tutulur; oy verildiğinde WebSocket ile karşı tarafa anlık yayınlanır. |
+| **Sohbette ataç paneli** | Gerçek galeri kareleri ile konum/kişi/belge/anket/etkinlik; panel altlık olarak kayarak açılır, geri tuşuyla kapanır. |
+
+---
+
+## Özellikler
 
 ### 1. 💌 Balmumu Mühürlü Romantik Mektuplar & S-Pen Tuvali
 - **Mektuplar asla kaybolmaz:** Silme işlemi mektubu **arşive** taşır (kayıt veritabanından
@@ -143,10 +172,15 @@ Script cihazı bulur, Ahududu.apk dosyasını kurar ve uygulamayı açar.
 Cihaz bağlanamazsa ekrandaki IP:port ile tekrar çalıştırılır (port her
 yeniden bağlanmada değişebilir).
 
-### Raspberry Pi 5 & CasaOS
-- **Port:** `33470` (API, WebSocket ve Web arayüzü tek porttan sunulur).
-- **Veritabanı:** Raspberry Pi 5 üzerindeki yerel PostgreSQL (`ahududu` veritabanı).
-- **Docker İmajı:** `ghcr.io/muratcihanyandi/ahududu:latest` (ARM64 native).
+| Katman | Teknoloji |
+|---|---|
+| Backend | FastAPI + SQLAlchemy |
+| Gerçek zamanlı | WebSocket (tek port) |
+| Veritabanı | PostgreSQL |
+| Mobil | Capacitor (Android) |
+| Web | React + Vite |
+| Saat | Wear OS tarayıcı (`/watch`) |
+| Dağıtım | Docker (ARM64 native), CasaOS, Cloudflare Tunnel |
 
 ### Tek Komutla Dağıtım
 ```bash
