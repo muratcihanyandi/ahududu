@@ -228,11 +228,34 @@ WGSL["common"] = `// Comum às famílias de geometria: utilitários + bindings g
 @group(0) @binding(2) var sClamp: sampler;   // linear, clamp
 @group(0) @binding(3) var tNoise: texture_2d<f32>;   // ruído ladrilhável 512²: R,G = fbm de valor (2 sementes), B = celular, A = ruído branco
 @group(0) @binding(4) var tNoise3: texture_3d<f32>;  // ruído 3D 64³ ladrilhável: R = fbm perlin, G = worley fbm, B = worley fino, A = perlin fino
-@group(0) @binding(5) var tHeight: texture_2d<f32>;  // altura do terreno (m), 1 m/texel em volta do circuito
+// altura do terreno (m), 1 m/texel em volta do circuito
+@group(0) @binding(5) var tHeight: texture_2d<f32>;
 @group(0) @binding(6) var tZone: texture_2d<f32>;    // zonas (ver 11_worldmap.js)
 // mapas do mundo: F.wm = (x0, z0, tamanhoX, tamanhoZ) em metros
 fn wmIn(xz: vec2f) -> bool { let p = xz - F.wm.xy; return p.x >= 0.0 && p.y >= 0.0 && p.x <= F.wm.z && p.y <= F.wm.w; }
-fn wmHeight(xz: vec2f) -> f32 { return textureSampleLevel(tHeight, sClamp, (xz - F.wm.xy + 0.5) / vec2f(textureDimensions(tHeight)), 0.0).r; }
+// Altura do terreno: rgba16float (R = altura + H_OFF). rgba16float é filtrável em
+// qualquer GPU; r32float exigiria float32-filterable, que a maioria dos celulares
+// não tem (o jogo não abria no celular por causa disso).
+const H_OFF: f32 = 512.0;
+#ifdef HEIGHT_BILINEAR
+fn wmHeight(xz: vec2f) -> f32 {
+  let dims = textureDimensions(tHeight);
+  let uv = (xz - F.wm.xy + 0.5) / vec2f(dims);
+  let p = uv * vec2f(dims) - 0.5;
+  let f = floor(p);
+  let t = clamp(p - f, vec2f(0.0), vec2f(1.0));
+  let maxI = vec2i(dims) - 1;
+  let i0 = clamp(vec2i(f), vec2i(0), maxI);
+  let i1 = clamp(vec2i(f) + 1, vec2i(0), maxI);
+  let h00 = textureLoad(tHeight, vec2i(i0.x, i0.y), 0).r;
+  let h10 = textureLoad(tHeight, vec2i(i1.x, i0.y), 0).r;
+  let h01 = textureLoad(tHeight, vec2i(i0.x, i1.y), 0).r;
+  let h11 = textureLoad(tHeight, vec2i(i1.x, i1.y), 0).r;
+  return mix(mix(h00, h10, t.x), mix(h01, h11, t.x), t.y) - H_OFF;
+}
+#else
+fn wmHeight(xz: vec2f) -> f32 { return textureSampleLevel(tHeight, sClamp, (xz - F.wm.xy + 0.5) / vec2f(textureDimensions(tHeight)), 0.0).r - H_OFF; }
+#endif
 fn wmZone(xz: vec2f) -> vec4f { if (!wmIn(xz)) { return vec4f(1.0, 0.0, 1.0, 0.0); } return textureSampleLevel(tZone, sClamp, ((xz - F.wm.xy) * 2.0 + 0.5) / vec2f(textureDimensions(tZone)), 0.0); }
 `;
 WGSL["cube_light"] = `// Iluminação direta simplificada para o cubemap de ambiente (sombra só do mapa estático).
@@ -2854,22 +2877,35 @@ const GAME = { ready: false, mode: Q.get('scene') || 'game', capture: Q.has('cap
 GAME.ui = Q.has('ui') ? Q.get('ui') !== '0' : !(Q.has('cap') || Q.has('perf') || Q.has('replay') || Q.has('auto') || Q.has('scene') || navigator.webdriver);
 // Tempo em vetor tipado (escrita por quadro sem caixa na heap): RT[0] = tempo acumulado (s), RT[1] = dt do quadro renderizado, RT[2] = dt pedido ao jogo
 const RT = new Float64Array([0, 1 / 60, 1 / 60, 0]);   // RT[3] = intervalo real do último quadro (ms), para as estatísticas
-const G = { dev: null, ctx: null, fmt: 'bgra8unorm', W: 0, H: 0, hasTS: false, canvas: null };
+const G = { dev: null, ctx: null, fmt: 'bgra8unorm', W: 0, H: 0, hasTS: false, hasF32Filter: true, canvas: null };
 
 async function gpuInit() {
-  if (!navigator.gpu) throw new Error('WebGPU indisponível neste navegador.');
+  if (!navigator.gpu) throw new Error('Bu tarayıcı WebGPU desteklemiyor. Android\'de Chrome 121+ ya da Edge deneyin.');
   const ad = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!ad) throw new Error('Nenhum adaptador WebGPU.');
+  if (!ad) throw new Error('WebGPU adaptörü bulunamadı (grafik hızlandırma kapalı olabilir).');
   const feats = [];
   // 'timestamp-query' é pedido na medição de desempenho (?perf) e no jogo aberto por uma pessoa (benchmark e estatísticas
   // mostram o tempo de GPU quando o navegador permite); ?nots desliga. Captura, poses e testes continuam sem o recurso.
   for (const f of ['float32-filterable', 'rg11b10ufloat-renderable'].concat((Q.has('perf') || GAME.ui) && !Q.has('nots') ? ['timestamp-query'] : [])) if (ad.features.has(f)) feats.push(f);
-  if (!ad.features.has('float32-filterable')) throw new Error('GPU sem float32-filterable.');
+  // float32-filterable ZORUNLU DEĞİL: mobil GPU'ların çoğunda yok ve bu yüzden
+  // oyun açılmıyordu. Yerine shader'da elle bilineer okuma var (bkz. common.wgsl).
+  G.hasF32Filter = ad.features.has('float32-filterable');
   G.hasTS = feats.includes('timestamp-query');
-  G.dev = await ad.requestDevice({
-    requiredFeatures: feats,
-    requiredLimits: { maxColorAttachmentBytesPerSample: Math.min(64, ad.limits.maxColorAttachmentBytesPerSample), maxSampledTexturesPerShaderStage: 24, maxBufferSize: ad.limits.maxBufferSize, maxTextureDimension2D: 8192 }
-  });
+  // Sınırlar: adaptörün desteklediğinden fazlasını istemek cihazı düşürür
+  // (bazı mobil GPU'larda dokulu bind grubu limiti 16'dır). Desteğin üstüne çıkmıyoruz.
+  const lim = ad.limits;
+  const req = { maxColorAttachmentBytesPerSample: Math.min(64, lim.maxColorAttachmentBytesPerSample), maxBufferSize: lim.maxBufferSize };
+  if (lim.maxSampledTexturesPerShaderStage > 24) req.maxSampledTexturesPerShaderStage = 24;
+  if (lim.maxTextureDimension2D > 8192) req.maxTextureDimension2D = 8192;
+  let dev;
+  try {
+    dev = await ad.requestDevice({ requiredFeatures: feats, requiredLimits: req });
+  } catch (e) {
+    // Sınır isteği reddedildiyse varsayılan sınırlarla tekrar dene
+    console.warn('[gpu] istenen sınırlar reddedildi, varsayılanlarla deneniyor:', e.message);
+    dev = await ad.requestDevice({ requiredFeatures: feats });
+  }
+  G.dev = dev;
   G.dev.addEventListener('uncapturederror', e => { console.error('GPU: ' + e.error.message); G.lastErr = e.error.message; });
   G.canvas = document.getElementById('c');
   const res = (Q.get('res') || '').split('x');
@@ -3566,15 +3602,41 @@ function forestAt(x, z) {
 }
 
 // ---- 11_worldmap.js
-// Mapas do mundo na GPU (em volta do circuito): altura (r32float, 1 m/texel) e zonas (rgba8, 0,5 m/texel).
-// zona: R = distância à borda do asfalto ([-8,+24] m → 0..1) | G = brita (distância assinada à borda, ±8 m; >0.5 = dentro)
-//       B = grama alta/rústica 0..1 (0 = aparada junto à pista) | A = piso de concreto/boxes (distância assinada ±8 m; >0.5 = dentro)
+// Mapas do mundo na GPU (em volta do circuito): altura e zonas (rgba8, 0,5 m/texel).
+// Altura em 'rgba16float' (R = altura + H_OFF, em metros), e NÃO 'r32float': a
+// maioria das GPUs móveis não tem o recurso float32-filterable, e sem ele r32float
+// não pode ser filtrado (nem convive com o amostrador filtrante do grupo 0), o que
+// impedia o jogo de abrir no celular. rgba16float é filtrável em todo lugar.
 const WM = { height: null, zone: null, x0: 0, z0: 0, sx: 1, sz: 1, zw: 0, zh: 0, zdata: null };
+const H_OFF = 512;   // deslocamento para manter as alturas positivas (m)
+// float32 → half (IEEE 754 binary16), arredondamento ao mais próximo
+const _f2hBuf = new Float32Array(1), _f2hU32 = new Uint32Array(_f2hBuf.buffer);
+function floatToHalf(v) {
+  _f2hBuf[0] = v;
+  const x = _f2hU32[0], sign = (x >>> 16) & 0x8000;
+  let exp = (x >>> 23) & 0xff, man = x & 0x7fffff;
+  if (exp === 0xff) return sign | 0x7c00 | (man ? 0x200 : 0);      // Inf / NaN
+  let e = exp - 127 + 15;
+  if (e >= 0x1f) return sign | 0x7c00;                             // taşma → Inf
+  if (e <= 0) {                                                    // normal altı / sıfır
+    if (e < -10) return sign;
+    man |= 0x800000;
+    const shift = 14 - e;
+    let h = (man + (1 << (shift - 1))) >>> shift;
+    return sign | h;
+  }
+  man = (man + 0x1000) >>> 13;                                     // yuvarla (11 bit mantis)
+  if (man === 0x400) { man = 0; e++; if (e >= 0x1f) return sign | 0x7c00; }
+  return sign | (e << 10) | man;
+}
 function worldMapBuild() {
   const dev = G.dev;
   WM.x0 = HF.x0; WM.z0 = HF.z0; WM.sx = HF.w - 1; WM.sz = HF.h - 1;
-  WM.height = mkTex(HF.w, HF.h, 'r32float', TU.TB | TU.CD);
-  dev.queue.writeTexture({ texture: WM.height }, HF.d, { bytesPerRow: HF.w * 4 }, [HF.w, HF.h]);
+  // RGBA16F: mevcut veriyi yarı duyarlıklı float'a çevir (R = yükseklik, G/B/A = 0)
+  const n = HF.w * HF.h, half = new Uint16Array(n * 4);
+  for (let i = 0; i < n; i++) half[i * 4] = floatToHalf(HF.d[i] + H_OFF);
+  WM.height = mkTex(HF.w, HF.h, 'rgba16float', TU.TB | TU.CD);
+  dev.queue.writeTexture({ texture: WM.height }, half, { bytesPerRow: HF.w * 8 }, [HF.w, HF.h]);
   const zw = WM.zw = (HF.w - 1) * 2 + 1, zh = WM.zh = (HF.h - 1) * 2 + 1, z = WM.zdata = new Uint8Array(zw * zh * 4), loc = new Float64Array(4);
   const enc = (v, lo, hi) => Math.round(sat((v - lo) / (hi - lo)) * 255);
   for (let j = 0; j < zh; j++) for (let i = 0; i < zw; i++) {
@@ -3604,6 +3666,9 @@ function worldMapBuild() {
 const SHADOW_RES = 2048, SHADOW_S_RES = 4096, ENV_RES = 512, ENV_MIPS = 7, SKY_W = 4096, SKY_H = 1024, VOL_DIST = 220;
 const SKY_EL0 = -0.14, SKY_ELR = PI / 2 + 0.14;
 const SH_DEFS = { SHADOW_RES: SHADOW_RES + '.0', ENV_MIPS: ENV_MIPS + '.0', ENV_MIP_K: (ENV_RES * 2 / (PI * 1.5)).toFixed(2), VOL_DIST: VOL_DIST + '.0', SKY_EL0: SKY_EL0.toFixed(5), SKY_ELR: SKY_ELR.toFixed(5) };
+// A altura do terreno usa rgba16float (filtrável em qualquer GPU), então não há
+// mais caminho especial para dispositivos sem float32-filterable. HEIGHT_BILINEAR
+// fica disponível para forçar o caminho de textureLoad (testes/máquinas exóticas).
 const KIND = { GBUF: 0, SHADOW: 1, CUBE: 2 };
 
 // ---- struct Frame: lista de campos gera o WGSL e os deslocamentos ----
@@ -3630,7 +3695,7 @@ const frMat = (n, m, idx) => FR.data.set(m, FR.o[n] + (idx || 0) * 16);
 const _bglCache = {};
 function reflectBGLs(code) {
   const groups = [];
-  const re = /@group\((\d+)\)\s*@binding\((\d+)\)\s*var(<uniform>)?\s+(\w+)\s*:\s*([\w<>, ]+);(.*)/g; let m;
+  const re = /@group\((\d+)\)\s*@binding\((\d+)\)\s*var(<uniform>)?\s+(\w+)\s*:\s*([\w<>, -]+);(.*)/g; let m;
   while ((m = re.exec(code))) {
     const g = +m[1], b = +m[2], ty = m[5].trim(), e = { binding: b, visibility: 3 };
     if (m[3]) e.buffer = { type: 'uniform', hasDynamicOffset: /@dyn/.test(m[6]) };
@@ -3638,7 +3703,10 @@ function reflectBGLs(code) {
     else if (ty === 'sampler_comparison') e.sampler = { type: 'comparison' };
     else {
       const t = {}; e.texture = t;
-      t.sampleType = ty.includes('depth') ? 'depth' : ty.includes('<u32>') ? 'uint' : 'float';
+      // Nota: a altura do terreno agora é rgba16float (filtrável em todo lugar),
+      // então o binding 5 volta a ser 'float' normal em qualquer dispositivo.
+      t.sampleType = ty.includes('depth') ? 'depth' : ty.includes('<u32>') ? 'uint'
+        : ty.includes('unfilterable-float') ? 'unfilterable-float' : 'float';
       t.viewDimension = ty.includes('cube') ? 'cube' : ty.includes('_3d') ? '3d' : ty.includes('2d_array') ? '2d-array' : '2d';
     }
     (groups[g] = groups[g] || []).push(e);

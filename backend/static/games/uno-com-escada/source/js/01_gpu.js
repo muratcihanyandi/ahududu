@@ -8,22 +8,35 @@ const GAME = { ready: false, mode: Q.get('scene') || 'game', capture: Q.has('cap
 GAME.ui = Q.has('ui') ? Q.get('ui') !== '0' : !(Q.has('cap') || Q.has('perf') || Q.has('replay') || Q.has('auto') || Q.has('scene') || navigator.webdriver);
 // Tempo em vetor tipado (escrita por quadro sem caixa na heap): RT[0] = tempo acumulado (s), RT[1] = dt do quadro renderizado, RT[2] = dt pedido ao jogo
 const RT = new Float64Array([0, 1 / 60, 1 / 60, 0]);   // RT[3] = intervalo real do último quadro (ms), para as estatísticas
-const G = { dev: null, ctx: null, fmt: 'bgra8unorm', W: 0, H: 0, hasTS: false, canvas: null };
+const G = { dev: null, ctx: null, fmt: 'bgra8unorm', W: 0, H: 0, hasTS: false, hasF32Filter: true, canvas: null };
 
 async function gpuInit() {
-  if (!navigator.gpu) throw new Error('WebGPU indisponível neste navegador.');
+  if (!navigator.gpu) throw new Error('Bu tarayıcı WebGPU desteklemiyor. Android\'de Chrome 121+ ya da Edge deneyin.');
   const ad = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!ad) throw new Error('Nenhum adaptador WebGPU.');
+  if (!ad) throw new Error('WebGPU adaptörü bulunamadı (grafik hızlandırma kapalı olabilir).');
   const feats = [];
   // 'timestamp-query' é pedido na medição de desempenho (?perf) e no jogo aberto por uma pessoa (benchmark e estatísticas
   // mostram o tempo de GPU quando o navegador permite); ?nots desliga. Captura, poses e testes continuam sem o recurso.
   for (const f of ['float32-filterable', 'rg11b10ufloat-renderable'].concat((Q.has('perf') || GAME.ui) && !Q.has('nots') ? ['timestamp-query'] : [])) if (ad.features.has(f)) feats.push(f);
-  if (!ad.features.has('float32-filterable')) throw new Error('GPU sem float32-filterable.');
+  // float32-filterable ZORUNLU DEĞİL: mobil GPU'ların çoğunda yok ve bu yüzden
+  // oyun açılmıyordu. Yerine shader'da elle bilineer okuma var (bkz. common.wgsl).
+  G.hasF32Filter = ad.features.has('float32-filterable');
   G.hasTS = feats.includes('timestamp-query');
-  G.dev = await ad.requestDevice({
-    requiredFeatures: feats,
-    requiredLimits: { maxColorAttachmentBytesPerSample: Math.min(64, ad.limits.maxColorAttachmentBytesPerSample), maxSampledTexturesPerShaderStage: 24, maxBufferSize: ad.limits.maxBufferSize, maxTextureDimension2D: 8192 }
-  });
+  // Sınırlar: adaptörün desteklediğinden fazlasını istemek cihazı düşürür
+  // (bazı mobil GPU'larda dokulu bind grubu limiti 16'dır). Desteğin üstüne çıkmıyoruz.
+  const lim = ad.limits;
+  const req = { maxColorAttachmentBytesPerSample: Math.min(64, lim.maxColorAttachmentBytesPerSample), maxBufferSize: lim.maxBufferSize };
+  if (lim.maxSampledTexturesPerShaderStage > 24) req.maxSampledTexturesPerShaderStage = 24;
+  if (lim.maxTextureDimension2D > 8192) req.maxTextureDimension2D = 8192;
+  let dev;
+  try {
+    dev = await ad.requestDevice({ requiredFeatures: feats, requiredLimits: req });
+  } catch (e) {
+    // Sınır isteği reddedildiyse varsayılan sınırlarla tekrar dene
+    console.warn('[gpu] istenen sınırlar reddedildi, varsayılanlarla deneniyor:', e.message);
+    dev = await ad.requestDevice({ requiredFeatures: feats });
+  }
+  G.dev = dev;
   G.dev.addEventListener('uncapturederror', e => { console.error('GPU: ' + e.error.message); G.lastErr = e.error.message; });
   G.canvas = document.getElementById('c');
   const res = (Q.get('res') || '').split('x');

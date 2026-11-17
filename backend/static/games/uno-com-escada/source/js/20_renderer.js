@@ -2,6 +2,9 @@
 const SHADOW_RES = 2048, SHADOW_S_RES = 4096, ENV_RES = 512, ENV_MIPS = 7, SKY_W = 4096, SKY_H = 1024, VOL_DIST = 220;
 const SKY_EL0 = -0.14, SKY_ELR = PI / 2 + 0.14;
 const SH_DEFS = { SHADOW_RES: SHADOW_RES + '.0', ENV_MIPS: ENV_MIPS + '.0', ENV_MIP_K: (ENV_RES * 2 / (PI * 1.5)).toFixed(2), VOL_DIST: VOL_DIST + '.0', SKY_EL0: SKY_EL0.toFixed(5), SKY_ELR: SKY_ELR.toFixed(5) };
+// A altura do terreno usa rgba16float (filtrável em qualquer GPU), então não há
+// mais caminho especial para dispositivos sem float32-filterable. HEIGHT_BILINEAR
+// fica disponível para forçar o caminho de textureLoad (testes/máquinas exóticas).
 const KIND = { GBUF: 0, SHADOW: 1, CUBE: 2 };
 
 // ---- struct Frame: lista de campos gera o WGSL e os deslocamentos ----
@@ -28,7 +31,7 @@ const frMat = (n, m, idx) => FR.data.set(m, FR.o[n] + (idx || 0) * 16);
 const _bglCache = {};
 function reflectBGLs(code) {
   const groups = [];
-  const re = /@group\((\d+)\)\s*@binding\((\d+)\)\s*var(<uniform>)?\s+(\w+)\s*:\s*([\w<>, ]+);(.*)/g; let m;
+  const re = /@group\((\d+)\)\s*@binding\((\d+)\)\s*var(<uniform>)?\s+(\w+)\s*:\s*([\w<>, -]+);(.*)/g; let m;
   while ((m = re.exec(code))) {
     const g = +m[1], b = +m[2], ty = m[5].trim(), e = { binding: b, visibility: 3 };
     if (m[3]) e.buffer = { type: 'uniform', hasDynamicOffset: /@dyn/.test(m[6]) };
@@ -36,7 +39,10 @@ function reflectBGLs(code) {
     else if (ty === 'sampler_comparison') e.sampler = { type: 'comparison' };
     else {
       const t = {}; e.texture = t;
-      t.sampleType = ty.includes('depth') ? 'depth' : ty.includes('<u32>') ? 'uint' : 'float';
+      // Nota: a altura do terreno agora é rgba16float (filtrável em todo lugar),
+      // então o binding 5 volta a ser 'float' normal em qualquer dispositivo.
+      t.sampleType = ty.includes('depth') ? 'depth' : ty.includes('<u32>') ? 'uint'
+        : ty.includes('unfilterable-float') ? 'unfilterable-float' : 'float';
       t.viewDimension = ty.includes('cube') ? 'cube' : ty.includes('_3d') ? '3d' : ty.includes('2d_array') ? '2d-array' : '2d';
     }
     (groups[g] = groups[g] || []).push(e);
