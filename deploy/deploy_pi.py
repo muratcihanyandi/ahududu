@@ -25,6 +25,9 @@ import urllib.request
 
 import paramiko
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import config  # noqa: E402  (deploy/config.py: parola koda yazılmaz)
+
 # Ensure safe printing on Windows terminals
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -32,7 +35,8 @@ if sys.platform == 'win32':
 
 PI_HOST = os.getenv("AHUDUDU_PI_HOST", "192.168.2.170")
 PI_USER = os.getenv("AHUDUDU_PI_USER", "murat")
-PI_PASS = os.getenv("AHUDUDU_PI_PASS", "3366")
+# SSH parolası koda YAZILMAZ (depo herkese açık): ortam değişkeni ya da .env
+PI_PASS = ""   # deploy_to_pi() içinde config.require_password_or_exit() ile doldurulur
 PORT = int(os.getenv("AHUDUDU_PORT", "33470"))
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -147,6 +151,8 @@ def run_ssh_command(ssh, cmd, sudo=False, timeout=1800, check=False):
 
 def deploy_to_pi():
     step(f"Raspberry Pi 5'e bağlanılıyor ({PI_HOST})")
+    global PI_PASS
+    PI_PASS = config.require_password_or_exit()   # parola yalnızca ortamdan / .env'den
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=15)

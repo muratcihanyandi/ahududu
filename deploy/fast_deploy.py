@@ -23,14 +23,18 @@ import urllib.request
 
 import paramiko
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import config  # noqa: E402  (deploy/config.py: parola koda yazılmaz)
+
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-PI_HOST = os.getenv("AHUDUDU_PI_HOST", "192.168.2.170")
-PI_USER = os.getenv("AHUDUDU_PI_USER", "murat")
-PI_PASS = os.getenv("AHUDUDU_PI_PASS", "3366")
-PORT = int(os.getenv("AHUDUDU_PORT", "33470"))
-CONTAINER = os.getenv("AHUDUDU_CONTAINER", "ahududu-app")
+PI_HOST = config.pi_host()
+PI_USER = config.pi_user()
+# SSH parolası koda YAZILMAZ: ortam değişkeni ya da .env
+PI_PASS = ""   # main() içinde config.require_password_or_exit() ile doldurulur
+PORT = config.pi_port()
+CONTAINER = config.container_name()
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(ROOT_DIR, "frontend")
@@ -89,6 +93,8 @@ def make_tarball() -> str:
 
 def deploy(build_id: str) -> None:
     step(f"Statik dosyalar canlı konteynere kopyalanıyor ({PI_HOST})")
+    global PI_PASS
+    PI_PASS = config.require_password_or_exit()   # parola yalnızca ortamdan / .env'den
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=15)
