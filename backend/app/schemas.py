@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 from datetime import datetime
 
 class UserProfileSchema(BaseModel):
@@ -78,6 +78,16 @@ class ChatMessageResponse(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     place_name: Optional[str] = None
+    # Yalnızca "anket" mesajlarında dolu gelir: seçenek başına oy sayısı.
+    votes: Optional[List[int]] = None
+    # Bu anket mesajına oy verenler: {voter: option_index}
+    voters: Optional[Dict[str, int]] = None
+
+
+class PollVoteRequest(BaseModel):
+    """Anket oyu: kişi başına tek oy; tekrar oy verilirse oyu değiştirir."""
+    voter: str
+    option_index: int
 
 class GalleryItemCreate(BaseModel):
     uploader: str

@@ -197,7 +197,17 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
   onOpenCinema,
   showToast,
 }) => {
-  const [sheet, setSheet] = useState<SheetKind | null>(null);
+  const [sheet, setSheetRaw] = useState<SheetKind | null>(null);
+  /**
+   * Seçili formun ANLIK değeri. Aynı karede iki dokunuş (kutuya bas → form
+   * zaten açıksa kapat) eski durum fonksiyonuyla yanlış yöne gidebildiği için
+   * gerçek değeri ref'te tutuyoruz.
+   */
+  const sheetSyncRef = useRef<SheetKind | null>(null);
+  const setSheet = (value: SheetKind | null) => {
+    sheetSyncRef.current = value;
+    setSheetRaw(value);
+  };
   const [photos, setPhotos] = useState<GalleryItem[]>([]);
   const [photosLoading, setPhotosLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -258,7 +268,7 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
       onPickFile(action);
       return;
     }
-    setSheet((prev) => (prev === action ? null : action));
+    setSheet(sheetSyncRef.current === action ? null : action);
   };
 
   /** Async işi "meşgul" durumuyla çalıştırır; panel yok olsa bile çökmez. */
@@ -266,8 +276,11 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
     if (busy) return;
     setBusy(true);
     try {
+      // work() içinde gönderilen satırlar (konum/kişi/anket/etkinlik) listeye
+      // eklenir ama altlık panel sohbeti kapattığı için sonraki adım zorlaşır:
+      // gönderim başarılıysa panel otomatik kapanır.
       await work();
-      if (mountedRef.current) setSheet(null);
+      onRequestClose();
     } catch (e) {
       console.error('[Ahududu] Paylaşım hatası', e);
       showToast(
@@ -276,6 +289,7 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
           : 'Gönderemedik, bir daha dener misin? 💌'
       );
     } finally {
+      // Panel kapanmış olabilir; kapanmış bileşende state yazmayalım.
       if (mountedRef.current) setBusy(false);
     }
   };
@@ -384,9 +398,23 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
   return (
     <div
       data-chat-attach-panel="true"
-      className="relative z-20 shrink-0 animate-[attachSheetIn_0.22s_cubic-bezier(0.22,1,0.36,1)] border-t border-rose-100 bg-white/97 backdrop-blur-xl shadow-[0_-10px_28px_-14px_rgba(190,24,93,0.28)]"
+      className="relative z-20 shrink-0 rounded-t-[22px] border-t border-rose-100 bg-white/97 backdrop-blur-xl shadow-[0_-10px_28px_-14px_rgba(190,24,93,0.28)]"
     >
-      {/* Üstteki tutamak: dokununca panel kapanır (kaçış yolu) */}
+      {/*
+       * Kapatma her an, panel kayarken bile tek dokunuş uzaklıkta olmalı:
+       * bu düğme kayarak hareket eden kabuğun (translateY) DIŞINDA durur,
+       * böylece animasyon sürerken de dokunuşu alır.
+       */}
+      <button
+        type="button"
+        onClick={onRequestClose}
+        aria-label="Paneli tamamen kapat"
+        className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-stone-100/95 text-stone-500 shadow-sm active:scale-95"
+      >
+        <X className="h-4 w-4" />
+      </button>
+
+      {/* Üstteki tutamak: aşağı sürüklemek gibi dokunmak da paneli kapatır. */}
       <button
         type="button"
         onClick={onRequestClose}

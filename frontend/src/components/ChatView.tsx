@@ -73,6 +73,13 @@ const PICK_ACCEPT: Record<PickKind, string> = {
  */
 const DOCUMENT_PICK_RESET_MS = 4000;
 
+/**
+ * Ataç panelinin alttan kayma süresi (ms). Kapanış animasyonu bu süre bitince
+ * paneli DOM'dan kaldırır; CSS geçişiyle (index.css `.chat-attach-sheet`)
+ * aynı değeri kullanır.
+ */
+const ATTACH_SHEET_EXIT_MS = 260;
+
 /** Dosya boyutunu "1,4 MB" gibi gösterir. */
 const formatFileSize = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '';
@@ -204,10 +211,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
   /** Ataç → alttan açılan paylaşım paneli açık mı? */
   const [isAttachOpen, setIsAttachOpen] = useState(false);
+  /**
+   * Panel ekranda görünür mü? Kapanırken kayarak inmesi için DOM'da biraz
+   * daha kalır (`isAttachOpen` false olur, animasyon bitince bu da false olur).
+   */
+  const [isAttachMounted, setIsAttachMounted] = useState(false);
   /** Galeri ızgarasını her panel açılışında tazelemek için. */
   const [attachRefreshKey, setAttachRefreshKey] = useState(0);
-  /** Anket baloncuğunda oy verilen mesaj (bu oturum için). */
-  const [votedPolls, setVotedPolls] = useState<Record<number, number>>({});
+  /** Oyu sunucuya giderken bekleyen anket mesajları (çift dokunuşu önler). */
+  const [pendingVotes, setPendingVotes] = useState<Record<number, boolean>>({});
 
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -227,6 +239,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const pickResetTimerRef = useRef<number | null>(null);
   /** Yükleme biterken panel hâlâ açıksa galeri karelerini tazele. */
   const attachOpenRef = useRef(false);
+  /** Panelin kapanış animasyonu bitince DOM'dan kaldırılması için zamanlayıcı. */
+  const attachUnmountTimerRef = useRef<number | null>(null);
+  /** Panel açılırken bir kare beklemek için (kayma animasyonunun başlangıcı). */
+  const [attachRaised, setAttachRaised] = useState(false);
 
   /**
    * Paylaşım panelini aç/kapat.
@@ -238,7 +254,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const openAttachPanel = useCallback(() => {
     if (attachOpenRef.current) return;
     attachOpenRef.current = true;
+    // Önceki kapanışın "DOM'dan kaldır" zamanlayıcısı iptal edilsin, yoksa
+    // hızlıca yeniden açılan panel bir anda kaybolabilir.
+    if (attachUnmountTimerRef.current !== null) {
+      window.clearTimeout(attachUnmountTimerRef.current);
+      attachUnmountTimerRef.current = null;
+    }
     setAttachRefreshKey((key) => key + 1);
+    // Önce DOM'a al, sonra bir kare bekle: ezilmiş hâlde başlasın ki
+    // pencere ekranın altından GERÇEKTEN kayarak yükselsin.
+    setIsAttachMounted(true);
     setIsAttachOpen(true);
     // Panel açılınca klavye kapansın: altlık panel tam görünsün.
     (document.activeElement as HTMLElement | null)?.blur?.();
@@ -247,12 +272,70 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const closeAttachPanel = useCallback(() => {
     attachOpenRef.current = false;
     setIsAttachOpen(false);
+    // Kayarak inme bitene kadar DOM'da tut; sonra tamamen kaldır.
+    if (attachUnmountTimerRef.current !== null) {
+      window.clearTimeout(attachUnmountTimerRef.current);
+    }
+    attachUnmountTimerRef.current = window.setTimeout(() => {
+      attachUnmountTimerRef.current = null;
+      setIsAttachMounted(false);
+    }, ATTACH_SHEET_EXIT_MS);
   }, []);
 
   const toggleAttach = useCallback(() => {
     if (attachOpenRef.current) closeAttachPanel();
     else openAttachPanel();
   }, [closeAttachPanel, openAttachPanel]);
+
+  /**
+   * Açılış animasyonu: panel DOM'a "aşağıda" girer, bir sonraki karede
+   * "yukarı"ya geçer; CSS geçişi aradaki hareketi çizer (alttan kayma).
+   *
+   * Bağımlılık YALNIZCA `isAttachMounted`: `isAttachOpen` her "kapat" isteğinde
+   * (ayrıca her render'da ref güncellendiği için) değişse de animasyon yeniden
+   * başlamamalı. Panel kapanacaksa zaten aşağı iner.
+   */
+  useEffect(() => {
+    if (!isAttachMounted) {
+      setAttachRaised(false);
+      return;
+    }
+    setAttachRaised(false);
+    const frame = window.requestAnimationFrame(() => {
+      // İki kare: tarayıcı başlangıç konumunu boyadıktan sonra hedefe geç.
+      window.requestAnimationFrame(() => setAttachRaised(true));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isAttachMounted]);
+
+  /**
+   * Panel açıkken ARKADAKİ sohbet kaymasın.
+   *
+   * Altlık panel görselin dışına çıkmasın diye sohbet listesinin kaydırması
+   * kilitlenir; panel kendi içeriğini kaydırır. Dokunma/hover ile de
+   * "kaydırma" olayı tetiklenmez, bu yüzden kilit yalnızca kaydırmayı durdurur.
+   */
+  useEffect(() => {
+    if (!isAttachOpen) return;
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const previous = scroller.style.overflowY;
+    scroller.style.overflowY = 'hidden';
+    return () => {
+      scroller.style.overflowY = previous;
+    };
+  }, [isAttachOpen]);
+
+  // Bileşen kaybolurken bekleyen zamanlayıcı kalmasın.
+  useEffect(
+    () => () => {
+      if (attachUnmountTimerRef.current) {
+        window.clearTimeout(attachUnmountTimerRef.current);
+        attachUnmountTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   /** Panel kapatılırken dosya seçiciyi de eski hâline döndür. */
   useEffect(() => {
@@ -481,7 +564,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
         void maybeNotify(data.message);
       }
     });
-    return () => unsub();
+
+    // Partner bir ankette oy verdi: işaret ANINDA karşı tarafta da görünsün.
+    const unsubVote = wsClient.on('poll_vote', (data: any) => {
+      const messageId = Number(data?.message_id);
+      if (!Number.isFinite(messageId)) return;
+      const votes = Array.isArray(data?.votes) ? data.votes.map(Number) : null;
+      const voters =
+        data?.voters && typeof data.voters === 'object'
+          ? (Object.fromEntries(
+              Object.entries(data.voters).map(([key, value]) => [key, Number(value)])
+            ) as Record<string, number>)
+          : null;
+      if (!votes || !voters) return;
+
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, votes, voters } : m))
+      );
+      // Partner oyunu verdiğinde küçük bir titreşim (kendi oyumuzda zaten var).
+      if (data?.voter && data.voter !== currentUserId) playHaptic(12);
+    });
+
+    return () => {
+      unsub();
+      unsubVote();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadMessages, scrollToBottom]);
 
@@ -625,6 +732,59 @@ export const ChatView: React.FC<ChatViewProps> = ({
       appendSentMessage(newMsg);
     },
     [appendSentMessage, currentUserId]
+  );
+
+  /**
+   * Anket oyu ver: sunucuya yazılır, sonuç iki tarafta da güncellenir.
+   *
+   * Sunucu hemen yanıtladığı için seçenek ANINDA işaretlenir (iyimser güncelleme);
+   * ardından sunucunun kesin sayıları yazılır. Hata olursa eski hâle dönülür.
+   */
+  const handleVote = useCallback(
+    async (messageId: number, optionIndex: number) => {
+      if (pendingVotes[messageId]) return;
+      playHaptic(18);
+      const before = messagesRef.current.find((m) => m.id === messageId);
+      if (!before) return;
+
+      // İyimser güncelleme: benim oyum bu seçenek.
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== messageId) return m;
+          const voters = { ...(m.voters || {}), [currentUserId]: optionIndex };
+          const counts = [...(m.votes || [])];
+          while (counts.length <= optionIndex) counts.push(0);
+          return { ...m, voters, votes: counts };
+        })
+      );
+      setPendingVotes((prev) => ({ ...prev, [messageId]: true }));
+
+      try {
+        const res = await api.votePoll(messageId, currentUserId, optionIndex);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId ? { ...m, votes: res.votes, voters: res.voters } : m
+          )
+        );
+        showToast('Oyun kaydedildi 🗳️');
+      } catch (e) {
+        console.error('Oy gönderilemedi', e);
+        // Sunucu kabul etmediyse eski oy görünümüne dön.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId ? { ...m, votes: before.votes, voters: before.voters } : m
+          )
+        );
+        showToast('Oyun gitmedi, bir daha dener misin?');
+      } finally {
+        setPendingVotes((prev) => {
+          const next = { ...prev };
+          delete next[messageId];
+          return next;
+        });
+      }
+    },
+    [currentUserId, pendingVotes, showToast]
   );
 
   /**
@@ -1273,17 +1433,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     {/* Kişi kartı */}
                     {type === 'kisi' && <ContactBubble msg={msg} isMe={isMe} />}
 
-                    {/* Anket */}
+                    {/* Anket — oylar sunucuda; karşı taraf da işareti görür */}
                     {type === 'anket' && (
                       <PollBubble
                         msg={msg}
                         isMe={isMe}
-                        myVote={votedPolls[msg.id] ?? null}
-                        onVote={(optionIndex) => {
-                          playHaptic(18);
-                          setVotedPolls((prev) => ({ ...prev, [msg.id]: optionIndex }));
-                          showToast('Oyun kaydedildi 🗳️');
-                        }}
+                        currentUserId={currentUserId}
+                        partnerName={partnerName}
+                        pending={Boolean(pendingVotes[msg.id])}
+                        onVote={(optionIndex) => void handleVote(msg.id, optionIndex)}
                       />
                     )}
 
@@ -1511,41 +1669,65 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
       </div>
 
-      {/* Ataç → alttan açılan paylaşım paneli:
+      {/* Ataç → alttan AÇILAN paylaşım paneli (bottom sheet):
           Galeri · Kamera · Konum · Kişi · Belge · Anket · Etkinlik
-          ve hemen ALTLARINDA galerideki fotoğraflar. */}
-      {isAttachOpen && (
-        <ErrorBoundary
-          fallback={
-            <div className="shrink-0 border-t border-rose-100 bg-white px-4 py-3 text-center">
-              <p className="text-[11px] font-semibold text-stone-600">
-                Paylaşım paneli açılamadı.
-              </p>
-              <button
-                type="button"
-                onClick={closeAttachPanel}
-                className="mt-1.5 rounded-full bg-berry-500 px-3 py-1 text-[11px] font-bold text-white"
-              >
-                Kapat
-              </button>
-            </div>
-          }
-          onError={(error) => console.error('[Ahududu] Ataç paneli hatası', error)}
+          ve hemen ALTLARINDA galerideki fotoğraflar.
+
+          Panel görünür alanın altından kayarak yükselir; üstündeki bant
+          (backdrop) sohbeti hafifçe koyulaştırır ve dokununca kapanır. */}
+      {isAttachMounted && (
+        <div
+          data-chat-attach-layer="true"
+          className="absolute inset-0 z-30 flex flex-col justify-end overflow-hidden"
+          aria-hidden={!isAttachOpen}
         >
-          <ChatAttachPanel
-            currentUserId={currentUserId}
-            refreshKey={attachRefreshKey}
-            onRequestClose={closeAttachPanel}
-            onPickFile={handlePickFile}
-            onShareLocation={shareLocation}
-            onShareContact={shareContact}
-            onSharePoll={sharePoll}
-            onShareEvent={shareEvent}
-            onOpenMemories={onOpenMemories}
-            onOpenCinema={onOpenCinema}
-            showToast={showToast}
+          {/* Arkayı koyulaştır + dokununca kapat */}
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Paneli kapat (arka plan)"
+            onClick={closeAttachPanel}
+            className="chat-attach-backdrop absolute inset-0 cursor-default bg-berry-900/25"
+            style={{ opacity: isAttachOpen ? 1 : 0 }}
           />
-        </ErrorBoundary>
+
+          <div
+            className="chat-attach-sheet relative w-full shrink-0"
+            style={{ transform: isAttachOpen && attachRaised ? 'translateY(0)' : 'translateY(105%)' }}
+          >
+            <ErrorBoundary
+              fallback={
+                <div className="shrink-0 border-t border-rose-100 bg-white px-4 py-3 text-center">
+                  <p className="text-[11px] font-semibold text-stone-600">
+                    Paylaşım paneli açılamadı.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={closeAttachPanel}
+                    className="mt-1.5 rounded-full bg-berry-500 px-3 py-1 text-[11px] font-bold text-white"
+                  >
+                    Kapat
+                  </button>
+                </div>
+              }
+              onError={(error) => console.error('[Ahududu] Ataç paneli hatası', error)}
+            >
+              <ChatAttachPanel
+                currentUserId={currentUserId}
+                refreshKey={attachRefreshKey}
+                onRequestClose={closeAttachPanel}
+                onPickFile={handlePickFile}
+                onShareLocation={shareLocation}
+                onShareContact={shareContact}
+                onSharePoll={sharePoll}
+                onShareEvent={shareEvent}
+                onOpenMemories={onOpenMemories}
+                onOpenCinema={onOpenCinema}
+                showToast={showToast}
+              />
+            </ErrorBoundary>
+          </div>
+        </div>
       )}
 
       {/* Kısa bilgi baloncuğu */}
@@ -1732,18 +1914,36 @@ const ContactBubble: React.FC<{ msg: ChatMessage; isMe: boolean }> = ({ msg, isM
   );
 };
 
-/** Anket: soru + seçenekler. Oyun seçimi sohbette toplanır. */
+/**
+ * Anket: soru + seçenekler + sunucudan gelen oylar.
+ *
+ * Oylar iki tarafta da aynı görünür:
+ *   - Benim oyum  : dolu daire, seçenek vurgulu
+ *   - Karşı oyu   : halka/çizgi (partner oyu işareti), farklı renkte
+ *   - Oy sayısı   : her seçeneğin yanında toplam (2/2 oy verilince "2 oy")
+ */
 const PollBubble: React.FC<{
   msg: ChatMessage;
   isMe: boolean;
-  myVote: number | null;
+  currentUserId: UserId;
+  partnerName: string;
   onVote: (optionIndex: number) => void;
-}> = ({ msg, isMe, myVote, onVote }) => {
+  pending: boolean;
+}> = ({ msg, isMe, currentUserId, partnerName, onVote, pending }) => {
+  const partnerId = partnerOf(currentUserId);
   const lines = (msg.content || '').split('\n');
   const question = (lines[0] || '').trim() || 'Anket';
   const options = lines.slice(1).map((line) => line.trim()).filter(Boolean).slice(0, 6);
+
+  const voters = msg.voters || {};
+  const counts = msg.votes || [];
+  const myVote = typeof voters[currentUserId] === 'number' ? voters[currentUserId] : null;
+  const partnerVote = typeof voters[partnerId] === 'number' ? voters[partnerId] : null;
+  const totalVotes = Object.keys(voters).length;
+  const maxCount = counts.reduce((max, count) => Math.max(max, count), 0);
+
   return (
-    <div className={`mt-1 w-[230px] max-w-full ${isMe ? '' : ''}`}>
+    <div className="mt-1 w-[236px] max-w-full">
       <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide opacity-80">
         <ListChecks className="h-3 w-3" /> Anket
       </span>
@@ -1753,13 +1953,17 @@ const PollBubble: React.FC<{
       <div className="mt-1.5 space-y-1">
         {options.map((option, index) => {
           const chosen = myVote === index;
+          const partnerChose = partnerVote === index;
+          const count = counts[index] ?? 0;
+          const share = maxCount > 0 ? Math.round((count / maxCount) * 100) : 0;
           return (
             <button
               key={`${index}-${option}`}
               type="button"
               onClick={() => onVote(index)}
               aria-pressed={chosen}
-              className={`flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] font-medium transition-colors ${
+              aria-label={`${option} — ${count} oy`}
+              className={`relative flex w-full items-center gap-1.5 overflow-hidden rounded-lg px-2 py-1.5 text-left text-[11px] font-medium transition-colors ${
                 chosen
                   ? isMe
                     ? 'bg-white text-berry-700'
@@ -1767,22 +1971,50 @@ const PollBubble: React.FC<{
                   : isMe
                     ? 'bg-white/15'
                     : 'bg-white/90 text-stone-700'
-              }`}
+              } ${pending ? 'opacity-70' : ''}`}
             >
+              {/* Oy oranı çubuğu: arkada hafif bir dolgu */}
+              {count > 0 && (
+                <span
+                  aria-hidden="true"
+                  className={`absolute inset-y-0 left-0 ${
+                    chosen ? 'bg-current/10' : 'bg-berry-200/40'
+                  }`}
+                  style={{ width: `${share}%` }}
+                />
+              )}
               <span
-                className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border ${
+                className={`relative flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border ${
                   chosen ? 'border-current' : 'border-current/40'
                 }`}
               >
                 {chosen && <span className="h-1.5 w-1.5 rounded-full bg-current" />}
               </span>
-              <span className="min-w-0 flex-1 break-words">{option}</span>
+              <span className="relative min-w-0 flex-1 break-words">{option}</span>
+              {partnerChose && (
+                <span
+                  title={`${partnerName} bu seçeneği işaretledi`}
+                  className={`relative flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[8px] font-bold ${
+                    isMe ? 'bg-white/30' : 'bg-rose-500 text-white'
+                  }`}
+                >
+                  {USERS[partnerId].emoji}
+                </span>
+              )}
+              <span className="relative shrink-0 tabular-nums opacity-75">{count}</span>
             </button>
           );
         })}
       </div>
-      <span className="mt-1 block text-[9.5px] opacity-70">
-        {myVote === null ? 'Oyunu seç, ikimiz de görelim' : 'Oyunu seçtin ❤️'}
+      <span className="mt-1 flex items-center justify-between gap-1 text-[9.5px] opacity-80">
+        <span>
+          {myVote === null
+            ? 'Oyunu seç, ikimiz de görelim'
+            : partnerVote === null
+              ? 'Oyunu seçtin ❤️'
+              : 'ikiniz de oyladınız 💞'}
+        </span>
+        <span className="tabular-nums">{totalVotes}/2 oy</span>
       </span>
     </div>
   );

@@ -244,6 +244,44 @@
   100% { opacity: 1; transform: translateY(0); }
 }
 
+/* ------------------------------------------------------------------
+   Ataç → alttan açılan paylaşım paneli (bottom sheet)
+   Panel, sohbetin altından kayarak yükselir; kapanırken kayarak iner.
+   ------------------------------------------------------------------ */
+.chat-attach-sheet {
+  /* Konum JS ile (translateY) sürülür; hareket bu geçişle çizilir. */
+  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+  /* Alt güvenli alan: jest çubuğunun altında kalmasın. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  border-top-left-radius: 22px;
+  border-top-right-radius: 22px;
+  overflow: hidden;
+}
+
+.chat-attach-backdrop {
+  transition: opacity 260ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Panel içeriği kayarken arkasındaki sohbet sabit kalsın. */
+.chat-attach-sheet .overscroll-contain {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Panelde görünen ilk kareler için: fotoğraf yüklendikçe yumuşak dolsun. */
+.chat-attach-sheet img {
+  background-color: rgba(252, 231, 243, 0.8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-attach-sheet,
+  .chat-attach-backdrop {
+    transition-duration: 1ms;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .chat-wave__bar,
   .chat-rec-dot {

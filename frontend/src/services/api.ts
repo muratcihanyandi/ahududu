@@ -207,6 +207,24 @@ export const api = {
     return Number(data?.total ?? 0);
   },
 
+  /**
+   * Anket oyu ver (ya da mevcut oyu değiştir).
+   * Oylar sunucuda tutulur; karşı taraf da aynı işareti görür.
+   */
+  async votePoll(
+    messageId: number,
+    voter: UserId,
+    optionIndex: number
+  ): Promise<{ success: boolean; votes: number[]; voters: Record<string, number> }> {
+    const res = await fetch(`${BASE_URL}/api/chat/messages/${messageId}/vote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voter, option_index: optionIndex }),
+    });
+    if (!res.ok) throw new Error(`Oy kaydedilemedi (${res.status})`);
+    return res.json();
+  },
+
   async sendChatMessage(data: {
     sender: UserId;
     message_type?: string;

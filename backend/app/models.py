@@ -54,6 +54,22 @@ class ChatMessage(Base):
     place_name = Column(String(200), nullable=True)
     created_at = Column(DateTime(timezone=True), default=now_utc)
 
+class ChatPollVote(Base):
+    """Sohbette paylaşılan bir anketin oyu.
+
+    Aynı anket mesajına her kişi (murat / selin) TEK oy verir; oyunu değiştirirse
+    kayıt güncellenir. Böylece oylar iki tarafta da aynı görünür ve uygulama
+    kapansa da kaybolmaz.
+    """
+    __tablename__ = "chat_poll_votes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, nullable=False, index=True)   # chat_messages.id
+    voter = Column(String(50), nullable=False)                 # 'murat' | 'selin'
+    option_index = Column(Integer, nullable=False)             # 0..5
+    created_at = Column(DateTime(timezone=True), default=now_utc)
+    updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
 class GalleryItem(Base):
     __tablename__ = "gallery_items"
     

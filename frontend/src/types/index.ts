@@ -71,7 +71,20 @@ export interface ChatMessage {
   latitude?: number | null;
   longitude?: number | null;
   place_name?: string | null;
+  /** Anket: seçenek başına oy sayısı (sunucudan gelir). */
+  votes?: number[];
+  /** Anket: oy verenler — { 'murat': 1, 'selin': 0 } (sunucudan gelir). */
+  voters?: Record<string, number>;
   created_at: string;
+}
+
+/** Sunucudaki bir anketin güncel oy durumu (WebSocket `poll_vote` olayı). */
+export interface PollVoteEvent {
+  message_id: number;
+  voter: UserId | string;
+  option_index: number;
+  votes: number[];
+  voters: Record<string, number>;
 }
 
 export interface ChatContactCard {

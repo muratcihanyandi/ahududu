@@ -161,11 +161,21 @@ def main():
             page.wait_for_selector(
                 '[data-chat-attach-panel="true"]', state="attached", timeout=8000
             )
+            # Altlık panel kayarak yükselir; oturmasını bekle (aksi hâlde
+            # Playwright "element is not stable" der).
+            page.wait_for_timeout(450)
+            # Altlık panel kayarak yükselir; oturmasını bekle.
+            page.wait_for_timeout(350)
 
         def close_panel():
-            """Panel açıksa tutamakla kapat."""
-            if panel_open():
-                page.locator('[aria-label="Paneli kapat"]').first.click()
+            """Panel açıksa kendi ✕ düğmesiyle kapat (altlık panel alt navigasyonu da kaplar)."""
+            if not panel_open():
+                return
+            # Kayma animasyonu otursun: aksi hâlde düğme "stable" değil görünür.
+            page.wait_for_timeout(500)
+            page.locator(
+                '[data-chat-attach-panel="true"] [aria-label="Paneli tamamen kapat"]'
+            ).first.click(force=True, no_wait_after=True)
             page.wait_for_selector(
                 '[data-chat-attach-panel="true"]', state="detached", timeout=8000
             )
@@ -207,7 +217,10 @@ def main():
         )
         print("     geometri:", geom)
         log("panel navigasyonun üstünde bitiyor", geom["panelBottom"] <= geom["navTop"] + 1, str(geom))
-        log("yazma alanı panelin üstünde", geom["composerBottom"] <= geom["panelTop"] + 1, str(geom))
+        # Altlık (bottom sheet) düzeni: panel sohbetin ÜSTÜNE kayarak açılır,
+        # yazma alanının üstünü kapatır — görseldeki gibi alttan yükselir.
+        log("panel sohbetin üstüne binmiş (altlık düzeni)",
+            geom["composerBottom"] > geom["panelTop"], str(geom))
         log("panel yüksekliği makul (0 < h < ekranın %60'ı)",
             0 < geom["panelHeight"] < geom["vh"] * 0.62, str(geom["panelHeight"]))
 
@@ -246,7 +259,7 @@ def main():
         shot(page, "attach_03_konum_gonderildi")
 
         # --- Kişi ---
-        attach().click()
+        open_panel()
         wait_panel(True)
         page.wait_for_timeout(300)
         box("Kişi").click()
@@ -260,7 +273,7 @@ def main():
             page.locator('[data-chat-root="true"] a[href^="tel:"]').count() >= 1)
 
         # --- Anket ---
-        attach().click()
+        open_panel()
         wait_panel(True)
         page.wait_for_timeout(300)
         box("Anket").click()
@@ -275,7 +288,7 @@ def main():
             page.locator('[data-chat-root="true"] button:has-text("Pizza")').count() >= 1)
 
         # --- Etkinlik ---
-        attach().click()
+        open_panel()
         wait_panel(True)
         page.wait_for_timeout(300)
         box("Etkinlik").click()
@@ -288,7 +301,7 @@ def main():
             page.locator('[data-chat-root="true"] a[href*="google.com/calendar"]').count() >= 1)
 
         # --- Belge ---
-        attach().click()
+        open_panel()
         wait_panel(True)
         page.wait_for_timeout(300)
         doc_path = os.path.join(tempfile.gettempdir(), "ahududu_deneme_belgesi.pdf")
@@ -304,7 +317,7 @@ def main():
         shot(page, "attach_07_hepsi")
 
         # --- Galeri'den fotoğraf ---
-        attach().click()
+        open_panel()
         wait_panel(True)
         page.wait_for_timeout(300)
         png = os.path.join(MEDIA, sorted(os.listdir(MEDIA))[0])
@@ -312,33 +325,28 @@ def main():
             box("Galeri").click()
         fc2.value.set_files(png)
         page.wait_for_timeout(1800)
-        imgs = [m for m in (api("/api/chat/messages?limit=5") or []) if m["message_type"] == "image"]
+        imgs = [m for m in (api("/api/chat/messages?limit=50") or []) if m["message_type"] == "image"]
         log("galeri fotoğrafı gönderildi", bool(imgs))
 
         # --- Kapatma yolları ---
-        attach().click()
-        wait_panel(True)
+        open_panel()
         log("panel tekrar açıldı", page.locator('[data-chat-attach-panel="true"]').count() == 1)
-        page.locator('[aria-label="Paneli kapat"]').first.click()
-        wait_panel(False)
-        log("tutamakla kapandı", page.locator('[data-chat-attach-panel="true"]').count() == 0)
+        close_panel()
+        log("✕ düğmesiyle kapandı", page.locator('[data-chat-attach-panel="true"]').count() == 0)
 
-        attach().click()
-        wait_panel(True)
+        open_panel()
         page.evaluate("window.__ahududuBack && window.__ahududuBack()")
-        wait_panel(False)
+        page.wait_for_selector('[data-chat-attach-panel="true"]', state="detached", timeout=8000)
         log("geri tuşuyla kapandı ve sohbet kaldı",
             page.locator('[data-chat-attach-panel="true"]').count() == 0
             and page.locator('[data-chat-root="true"]').count() == 1)
 
         # --- Tekrar açma (ikinci kez) ---
-        attach().click()
-        wait_panel(True)
+        open_panel()
         page.wait_for_timeout(500)
         log("tekrar tekrar açılabiliyor", page.locator('[data-chat-attach-panel="true"]').count() == 1)
         shot(page, "attach_08_panel_tekrar")
-        page.locator('[aria-label="Paneli kapat"]').first.click()
-        wait_panel(False)
+        close_panel()
 
         bad = [e for e in errors if "Failed to load resource" not in e]
         log("sayfa konsol hatası yok", not bad, " | ".join(bad[:4]))
