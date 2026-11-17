@@ -724,11 +724,35 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
             </div>
           )}
 
-          {/* ---- Galerideki fotoğraflar: kutuların HEMEN ALTINDA ---- */}
+          {/* ---- Telefon galerisi + ortak anılarımız ----
+               "Galeri" kutusu TELEFONUN galerisini açar (sistem seçicisi).
+               Aşağıdaki kareler ise ikimizin ortak albümü (Anılar). */}
           <div className="mt-3">
-            <div className="mb-1.5 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => {
+                playHaptic(15);
+                onPickFile('galeri');
+              }}
+              className="flex w-full items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50/70 px-3 py-2 text-left active:scale-[0.99]"
+            >
+              <span className="flex items-center gap-2">
+                <Images className="h-4 w-4 text-sky-500" />
+                <span>
+                  <span className="block text-[11.5px] font-bold text-berry-900">
+                    Telefon galerisinden fotoğraf seç
+                  </span>
+                  <span className="block text-[9.5px] text-stone-500">
+                    Cihazındaki fotoğraflar açılır
+                  </span>
+                </span>
+              </span>
+              <span className="shrink-0 text-[11px] font-bold text-berry-600">Seç ›</span>
+            </button>
+
+            <div className="mb-1.5 mt-2.5 flex items-center justify-between">
               <span className="text-[10px] font-bold tracking-wide text-stone-500">
-                Galeriden gönder
+                Ortak anılarımız
               </span>
               <button
                 type="button"

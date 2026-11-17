@@ -352,12 +352,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // sırası, kapanma effect'inin ref'i geri yazmasına yol açabilirdi).
   attachOpenRef.current = isAttachOpen;
 
-  /** Panelden bir dosya seçimi başlat (galeri / kamera / belge). */
+  /**
+   * Panelden bir dosya seçimi başlat (galeri / kamera / belge).
+   *
+   * ÖNEMLİ: "Galeri" ve "Kamera" TELEFONUN kendi galerisini/kamerasını açar.
+   * Uygulamanın ortak galerisi (Anılar) kullanılmaz. Android WebView'de dosya
+   * seçici, `accept="image/*"` sayesinde doğrudan sistem galerisini gösterir;
+   * burada her açılışta accept AÇIKÇA yazılır çünkü input bir kere "belge"
+   * (her tür) moduna geçtiyse eski sürgelerde kalıcı olabilir.
+   */
   const handlePickFile = useCallback((kind: PickKind) => {
     const input = fileInputRef.current;
     if (!input) return;
     pickKindRef.current = kind;
-    if (pickResetTimerRef.current !== null) window.clearTimeout(pickResetTimerRef.current);
+    if (pickResetTimerRef.current !== null) {
+      window.clearTimeout(pickResetTimerRef.current);
+      pickResetTimerRef.current = null;
+    }
+    // Tür süzgecini HER seferinde seçimin kendisine göre ayarla.
+    input.setAttribute('accept', PICK_ACCEPT[kind]);
+    // Kamera: Android/Chrome'da tek seçicide "Kamera" sekmesini öne çıkar.
+    if (kind === 'camera') {
+      input.setAttribute('capture', 'environment');
+    } else {
+      input.removeAttribute('capture');
+    }
     input.value = '';
     try {
       input.click();
