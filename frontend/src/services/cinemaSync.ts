@@ -267,6 +267,15 @@ export interface SyncEngineOptions {
   seekCooldownMs?: number;
   graceMs?: number;
   nudgeMaxSeconds?: number;
+  /**
+   * "Sadece olay anında senkron" modu.
+   *
+   * Açıkken (varsayılan) motor, film OYNARKEN oynatıcıya ASLA dokunmaz:
+   * ne hız kaydırır (nudge), ne sarma yapar (seek). Mikro takılmaların
+   * kaynağı buydu. Hizalama yalnızca kullanıcı bir komut verdiğinde
+   * (oynat / duraklat / sarma) ve salona ilk girişte yapılır.
+   */
+  eventOnly?: boolean;
 }
 
 /**
@@ -284,6 +293,8 @@ export class SyncEngine {
   private seekCooldownMs: number;
   private graceMs: number;
   private nudgeMaxSeconds: number;
+  /** true → oynarken oynatıcıya dokunma (sadece olay anında hizala). */
+  private eventOnly: boolean = true;
 
   private lastLocalActionAt = -Infinity;
   private lastSeekAt = -Infinity;
@@ -304,6 +315,16 @@ export class SyncEngine {
     this.seekCooldownMs = options.seekCooldownMs ?? SYNC_SEEK_COOLDOWN_MS;
     this.graceMs = options.graceMs ?? SYNC_GRACE_MS;
     this.nudgeMaxSeconds = options.nudgeMaxSeconds ?? SYNC_NUDGE_MAX_SECONDS;
+    this.eventOnly = options.eventOnly ?? true;
+  }
+
+  /** "Sadece olay anında senkron" modunu açar/kapatır. */
+  setEventOnly(enabled: boolean): void {
+    this.eventOnly = Boolean(enabled);
+  }
+
+  isEventOnly(): boolean {
+    return this.eventOnly;
   }
 
   get latencyMs(): number {
@@ -392,12 +413,24 @@ export class SyncEngine {
 
     const target = expectedPosition(merged, this.now());
     const current = adapter.getTime();
-    if (Math.abs(drift(current, target)) > 0.05) {
+    const gap = Math.abs(drift(current, target));
+
+    // OYNATMAYA BAŞLARKEN de saniyeyi eşitle: kullanıcının istediği tam bu.
+    // "Durdurduk → başlattık → iki taraf aynı dakika:saniyeden devam etsin."
+    // (Sadece olay anında senkron modunda oynarken buraya hiç girilmez.)
+    const shouldAlign = gap > 0.3;
+    if (shouldAlign) {
       adapter.setTime(target);
       this.lastSeekAt = this.now();
     }
+
     if (merged.isPlaying) {
       if (adapter.isPaused() && !adapter.isEnded()) adapter.play();
+      // Hızlı hız kaydırmasından kalma bir oran varsa normale dön.
+      if (this.nudged) {
+        this.nudged = false;
+        adapter.setRate(this.baseRate);
+      }
     } else if (!adapter.isPaused()) {
       adapter.pause();
     }
@@ -463,6 +496,15 @@ export class SyncEngine {
       if (this.nudged) return decision('reset-rate', 'yerine oturdu', target, d, this.baseRate);
       return decision('none', 'hizalı', target, d);
     }
+
+    // ---- "Sadece olay anında senkron" modu ----
+    // Film oynarken oynatıcıya DOKUNMA. Hız kaydırma (nudge) ve sarma (seek)
+    // mikro takılmalara yol açıyordu; kullanıcı bunu istemiyor. Hizalama
+    // yalnızca komut anında (applyState) yapılır.
+    if (this.eventOnly) {
+      return decision('none', 'oynuyor: takılma olmasın diye dokunulmuyor', target, d);
+    }
+
     if (abs <= this.toleranceSeconds) {
       if (this.nudged) return decision('reset-rate', 'tolerans içinde', target, d, this.baseRate);
       return decision('none', 'tolerans içinde', target, d);

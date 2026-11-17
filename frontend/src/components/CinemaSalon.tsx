@@ -594,6 +594,12 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
   const [showCalendar, setShowCalendar] = useState(false);
   /** Salona giriş sürerken çift dokunuşu yut: aynı anda iki "başlat" gitmesin. */
   const enteringRef = useRef(false);
+  /**
+   * Geç katılım kapısı: salona yeni girildi, bir kez partnerin saniyesine
+   * yetişebiliriz. Yetiştikten (ya da ilk kontrolden) sonra false olur ve
+   * film oynarken bir daha sarma yapılmaz — mikro takılma olmasın.
+   */
+  const lateJoinCatchupRef = useRef(false);
   /** Bu oturumda uğraştığımız salon: kendiliğinden açılan film kullanıcıyı
    *  tekrar içeri sürüklemesin ("Cars 1 takılı kaldı" hatası). */
   const lastRoomRef = useRef<number | null>(null);
@@ -811,7 +817,14 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
       setPlayback((prev) => {
         if (!prev.isPlaying) return prev;
         const ours = expectedPosition(prev);
-        if (partnerPosition - ours <= HEARTBEAT_CATCHUP_SECONDS) return prev;
+        // ÖNEMLİ: Film oynarken partnerin saniyesine yetişmeye ÇALIŞMA.
+        // Bu, sürekli mikro sarma yapıp videoyu takıyordu. Yetişme yalnızca
+        // salona YENİ girildiğinde (aşağıdaki late-join kapısı) yapılır.
+        if (!lateJoinCatchupRef.current) return prev;
+        if (partnerPosition - ours <= HEARTBEAT_CATCHUP_SECONDS) {
+          lateJoinCatchupRef.current = false;
+          return prev;
+        }
         return {
           ...prev,
           position: partnerPosition,
@@ -861,6 +874,13 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     });
     setCurtainOpen(false);
     window.setTimeout(() => setCurtainOpen(true), 60);
+
+    // Geç katılım: bir kez partnerin saniyesine yetişebiliriz (6 sn pencere).
+    // Sonrasında film oynarken sarma yapılmaz.
+    lateJoinCatchupRef.current = true;
+    window.setTimeout(() => {
+      lateJoinCatchupRef.current = false;
+    }, 6000);
 
     // Yön + tam ekran
     await enterCinemaFullscreen();

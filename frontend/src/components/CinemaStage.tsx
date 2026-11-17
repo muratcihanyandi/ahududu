@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, Loader2, Film,
-  Clapperboard, ExternalLink,
+  Clapperboard, ExternalLink, Maximize, Minimize,
 } from 'lucide-react';
 import { CinemaRoom } from '../types';
 import { api, mediaUrl, cinemaProxyUrl, cinemaHlsUrl } from '../services/api';
@@ -98,6 +98,9 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const embedHostRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const engineRef = useRef<SyncEngine | null>(null);
+  /** Tam ekrana alınacak kapsayıcı (perde alanı): video/iframe ile aynı kutu. */
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -339,7 +342,9 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     let adapter: PlayerAdapter | null = null;
     let destroyed = false;
 
-    const engine = new SyncEngine({ latencyMs });
+    // eventOnly: film oynarken hız kaydırma/sarma YAPILMAZ (mikro takılma
+    // olmasın). Hizalama yalnızca oynat/duraklat/sarma komutlarında olur.
+    const engine = new SyncEngine({ latencyMs, eventOnly: true });
     engineRef.current = engine;
 
     const attach = (created: PlayerAdapter) => {
@@ -471,6 +476,10 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   useEffect(() => {
     // Otomatik oynatma engellendiyse 1 sn'lik denetim sürekli play deneyip
     // deneyip sessizce bozmasın: düğme "oynat" gösterir, kullanıcı dokunur.
+    //
+    // NOT: Bu döngü yalnızca DURUMU İZLER. Film oynarken oynatıcıya hız
+    // kaydırma/sarma yapılmaz (mikro takılmaların kaynağıydı); hizalama
+    // sadece oynat/duraklat/sarma komutlarında olur.
     const timer = window.setInterval(() => {
       const engine = engineRef.current;
       if (!engine) return;
@@ -490,10 +499,13 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       }
       const adapter = engine.getAdapter();
       if (adapter) {
-        setCurrentTime(adapter.getTime());
+        // Yalnızca ilerleme çubuğu için okunur; sunucuya durum YAZILMAZ.
+        const t = adapter.getTime();
+        setCurrentTime(t);
         const dur = adapter.getDuration();
         if (dur > 0 && Math.abs(dur - duration) > 0.5) setDuration(dur);
-        onStateChange({ position: adapter.getTime(), duration: dur });
+        // NOT: Burada `onStateChange` çağrılmıyor. Her saniye konum yazmak
+        // salonun anchor'ını bozup iki tarafı birbirine çekiyordu.
       }
     }, TICK_MS);
     return () => window.clearInterval(timer);
@@ -503,6 +515,90 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   /* Kontroller                                                          */
   /* ------------------------------------------------------------------ */
   const adapterNow = () => engineRef.current?.getAdapter() ?? null;
+
+  /**
+   * VİDEOYU tam ekraan al.
+   *
+   * ÖNEMLİ: Film sitesinden gelen HLS akışında `<video>` bizim elimizde
+   * olduğu için önce onu tam ekrana alıyoruz (en geniş görüntü, harici
+   * kuşak yok). Tarayıcı reddederse perde kapsayıcısına düşüyoruz.
+   * YouTube/Vimeo iframe'lerinde video üstünde kontrolümüz yok; onlarda
+   * kapsayıcı tam ekrana alınır.
+   */
+  const toggleFullscreen = async () => {
+    playHaptic(15);
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void>;
+    };
+    const video = videoRef.current;
+    const box = containerRef.current;
+    const current = document.fullscreenElement || doc.webkitFullscreenElement || null;
+
+    // Zaten VİDEO tam ekrandaysa → çık.
+    if (current && video && current === video) {
+      try {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if (doc.webkitExitFullscreen) await doc.webkitExitFullscreen();
+      } catch (e) {
+        console.warn('Tam ekrandan çıkılamadı', e);
+      }
+      return;
+    }
+
+    // Sayfa (<html>) tam ekrandaysa ama video değilse: ÖNCE ondan çık,
+    // sonra videoyu tam ekrana al. Aksi halde "tam ekran" düğmesi yalnızca
+    // sayfa modunu kapatıyor, video hiç tam ekran olmuyordu.
+    if (current && current !== video) {
+      try {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if (doc.webkitExitFullscreen) await doc.webkitExitFullscreen();
+        // Tarayıcının mod değişimini işlemesi için kısa bekleme.
+        await new Promise((r) => window.setTimeout(r, 120));
+      } catch (e) {
+        console.warn('Tam ekrandan çıkılamadı', e);
+      }
+    }
+
+    const target = (video || box) as (HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void>;
+      webkitEnterFullscreen?: () => void; // iOS Safari <video>
+    }) | null;
+    if (!target) return;
+
+    try {
+      if (target.requestFullscreen) {
+        await target.requestFullscreen({ navigationUI: 'hide' } as FullscreenOptions);
+      } else if (target.webkitRequestFullscreen) {
+        await target.webkitRequestFullscreen();
+      } else if (target.webkitEnterFullscreen) {
+        target.webkitEnterFullscreen();
+      }
+    } catch (e) {
+      console.warn('Video tam ekranı reddedildi, perde deneniyor', e);
+      // Video tam ekranı reddedilirse perde kapsayıcısını dene.
+      try {
+        if (box && !document.fullscreenElement) await box.requestFullscreen();
+      } catch {
+        /* yok say */
+      }
+    }
+  };
+
+  /** Tam ekran durumunu izle (ESC / geri tuşu ile çıkışta düğme güncellensin). */
+  useEffect(() => {
+    const onChange = () => {
+      // Yalnızca VİDEO tam ekrandaysa "çık" düğmesi gösterilsin. Sayfanın
+      // (<html>) tam ekran olması videoyu tam ekran yapmış sayılmaz.
+      setIsFullscreen(Boolean(videoRef.current && document.fullscreenElement === videoRef.current));
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
+  }, []);
 
   const togglePlay = () => {
     const playing = !state.isPlaying;
@@ -559,7 +655,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const progress = totalDuration > 0 ? Math.min(100, (currentTime / totalDuration) * 100) : 0;
 
   return (
-    <div className="w-full h-full absolute inset-0 bg-black">
+    <div ref={containerRef} className="w-full h-full absolute inset-0 bg-black">
       {/* ---- html5: doğrudan video ---- */}
       {source === 'html5' && (
         <video
@@ -835,6 +931,17 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
           >
             <SkipBack className="w-4 h-4" />
           </button>
+          {/* Video tam ekran: YouTube'un kendi düğmesi var, orada gizli. */}
+          {source !== 'youtube' && (
+            <button
+              onClick={toggleFullscreen}
+              className="p-2 rounded-full text-white/85 hover:text-white"
+              title={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
+              aria-label={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
+            >
+              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+            </button>
+          )}
         </div>
       </div>
     </div>
