@@ -91,7 +91,52 @@ def require_password_or_exit() -> str:
         raise SystemExit(2)
 
 
+def connect_ssh():
+    """Pi'ye bağlanır: önce SSH anahtarı, olmazsa parola.
+
+    Anahtar varsa parola hiç istenmez; bu, parolanın koda yazılmadığı yeni
+    düzende tercih edilen yoldur.
+    """
+    import paramiko  # yerel içe aktarma: config'i hafif tutar
+
+    host, user = pi_host(), pi_user()
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.load_system_host_keys()
+
+    password = pi_password(required=False)
+    key_paths = [
+        os.getenv("AHUDUDU_PI_KEY", ""),
+        os.path.expanduser("~/.ssh/id_ed25519"),
+        os.path.expanduser("~/.ssh/id_rsa"),
+    ]
+    key_paths = [p for p in key_paths if p and os.path.isfile(p)]
+
+    last_err = None
+    # 1) anahtar varsa önce onu dene (parola gerekmez)
+    for kp in key_paths:
+        try:
+            ssh.connect(host, username=user, key_filename=kp, timeout=15,
+                        allow_agent=True, look_for_keys=True)
+            return ssh, False          # (bağlantı, parola_kullanıldı_mı)
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+
+    # 2) parola
+    if password:
+        try:
+            ssh.connect(host, username=user, password=password, timeout=15)
+            return ssh, True
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+
+    raise ConnectionError(
+        "Pi'ye bağlanılamadı. SSH anahtarı (~/.ssh/id_ed25519) yok/geçersiz ve "
+        "AHUDUDU_PI_PASS tanımlı değil.\nSon hata: %s" % last_err
+    )
+
+
 __all__ = [
     "pi_host", "pi_user", "pi_port", "container_name",
-    "pi_password", "require_password_or_exit", "MissingPassword",
+    "pi_password", "require_password_or_exit", "connect_ssh", "MissingPassword",
 ]

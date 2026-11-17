@@ -131,7 +131,11 @@ def create_tarball():
 
 def run_ssh_command(ssh, cmd, sudo=False, timeout=1800, check=False):
     if sudo:
-        cmd = f"echo '{PI_PASS}' | sudo -S {cmd}"
+        if PI_PASS:
+            cmd = f"echo '{PI_PASS}' | sudo -S {cmd}"
+        else:
+            # Anahtar ile bağlanıldı: parolasız sudo (NOPASSWD) beklenir
+            cmd = f"sudo -n {cmd}"
     print(f"\n>>> {cmd}")
     stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
 
@@ -152,11 +156,14 @@ def run_ssh_command(ssh, cmd, sudo=False, timeout=1800, check=False):
 def deploy_to_pi():
     step(f"Raspberry Pi 5'e bağlanılıyor ({PI_HOST})")
     global PI_PASS
-    PI_PASS = config.require_password_or_exit()   # parola yalnızca ortamdan / .env'den
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(PI_HOST, username=PI_USER, password=PI_PASS, timeout=15)
-    print("SSH bağlantısı kuruldu.")
+    # Önce SSH anahtarı, yoksa parola (AHUDUDU_PI_PASS). Parola koda yazılmaz.
+    try:
+        ssh, used_password = config.connect_ssh()
+    except ConnectionError as exc:
+        print(f"\n[deploy] {exc}\n", file=sys.stderr)
+        raise SystemExit(2)
+    PI_PASS = config.pi_password(required=False) if used_password else ""
+    print("SSH bağlantısı kuruldu (%s)." % ("parola" if used_password else "SSH anahtarı"))
 
     try:
         run_ssh_command(ssh, "mkdir -p /DATA/AppData/ahududu/uploads /DATA/AppData/ahududu/src", sudo=True)
