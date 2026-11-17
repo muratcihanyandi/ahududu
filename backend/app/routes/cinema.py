@@ -6,6 +6,7 @@ telefon da aynı filmi aynı saniyede görür: oynat / duraklat / sarma işlemle
 WebSocket üzerinden anında karşı tarafa yansır.
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -884,7 +885,12 @@ async def room_embed(room_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{room_id}/start", response_model=CinemaRoomResponse)
 async def start_room(room_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
-    """Filmi başlat: her iki telefon da yatay sinema salonuna girer."""
+    """Filmi başlat: her iki telefon da yatay sinema salonuna girer.
+
+    SADE MODEL: film hemen oynamaya BAŞLAMAZ. İki cihaz da "hazırım" deyince
+    (`/ready`) sunucu ikisine aynı anda "başla" komutu yayınlar. Böylece
+    yükleme süresi farkı yüzünden biri 20 saniye geriden başlamaz.
+    """
     room = await db.get(CinemaRoom, room_id)
     if not room:
         raise HTTPException(status_code=404, detail="Salon bulunamadı")
@@ -897,13 +903,16 @@ async def start_room(room_id: int, payload: dict, db: AsyncSession = Depends(get
         other.is_active = False
 
     room.is_active = True
-    room.is_playing = True
+    # HENÜZ oynamıyor: iki taraf da hazır olunca başlayacak.
+    room.is_playing = False
     room.position = 0.0
-    # Bilinen süre korunur (aynı film yeniden başlatıldığında ilerleme çubuğu bozulmasın)
     room.updated_by = payload.get("user_id", "murat")
     room.last_seen_at = now_utc()
     await db.commit()
     await db.refresh(room)
+
+    # Bu salon için "hazır" kayıtlarını sıfırla.
+    _ready_markers.pop(room.id, None)
 
     await ws_manager.broadcast({
         "type": "cinema_started",
@@ -914,14 +923,89 @@ async def start_room(room_id: int, payload: dict, db: AsyncSession = Depends(get
     return room
 
 
+# ---------------------------------------------------------------------------
+# Hazır olma kapısı: iki cihaz da yükleyince film AYNI ANDA başlar
+# ---------------------------------------------------------------------------
+#
+# SADE MODEL'in 1. kuralı. Kullanıcı: "ikisinde de yüklenecek ki aynı anda
+# başlayacak." Bu yüzden `start` anında oynatma başlamaz; her cihaz kendi
+# oynatıcısı hazır olunca `/ready` çağırır ve ikisi de hazırsa sunucu tek bir
+# `cinema_play` olayı yayınlar. O an ikisi de aynı saniyeden (0) başlar.
+#
+# Bir taraf hiç gelmezse film sonsuza kadar beklemesin: 20 saniye sonra
+# hazır olan taraf tek başına başlar.
+
+# room_id -> {user_id: hazır_olma_zamani}
+_ready_markers: dict[int, dict[str, float]] = {}
+READY_TIMEOUT_SECONDS = 20.0
+
+
+@router.post("/{room_id}/ready")
+async def mark_ready(room_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
+    """Bir cihazın oynatıcısı hazır: ikisi de hazırsa filmi başlat."""
+    room = await db.get(CinemaRoom, room_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Salon bulunamadı")
+
+    user_id = payload.get("user_id") or "murat"
+    position = float(payload.get("position") or 0.0)
+
+    # Bu salon için hazır kayıtları (varsa) — `start` bunları sıfırlamıştı.
+    markers = _ready_markers.setdefault(room_id, {})
+    markers[user_id] = time.time()
+
+    now = time.time()
+    others = [u for u in markers if u != user_id]
+    others_ready = any(now - markers[u] < READY_TIMEOUT_SECONDS for u in others)
+
+    # İki taraf da hazırsa VEYA bir taraf 20 sn'dir bekliyorsa başla.
+    waited_long = (now - min(markers.values())) >= READY_TIMEOUT_SECONDS
+    should_start = others_ready or waited_long
+
+    if should_start:
+        room.is_playing = True
+        room.position = position
+        room.updated_at = now_utc()
+        await db.commit()
+        await db.refresh(room)
+        _ready_markers.pop(room_id, None)
+        logger.info(
+            "Sinema başladı: room=%s pos=%.1f (diğer hazır=%s, süre doldu=%s)",
+            room_id, position, others_ready, waited_long,
+        )
+
+        await ws_manager.broadcast({
+            "type": "cinema_play",
+            "room_id": room.id,
+            "position": position,
+            "is_playing": True,
+            "started": True,
+        })
+        return {"started": True, "position": position}
+
+    # İkinci cihazı bekle.
+    return {"started": False, "waiting_for_partner": not others_ready}
+
+
 @router.post("/{room_id}/control", response_model=CinemaRoomResponse)
 async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = Depends(get_db)):
-    """Oynat / duraklat / sarma — partnerin ekranına anında yansır."""
+    """Oynat / duraklat / sarma — SADE MODEL.
+
+    Kurallar:
+      - `pause`: ikisi de durur, konum kaydedilir.
+      - `play`  : GERİDE OLANIN saniyesi esas alınır. İki cihaz da o saniyeye
+                  sarılır ve birlikte devam eder.
+      - `seek`  : kullanıcı elle sardı; konum güncellenir.
+    Oynarken periyodik senkron YOKTUR.
+    """
     room = await db.get(CinemaRoom, room_id)
     if not room:
         raise HTTPException(status_code=404, detail="Salon bulunamadı")
 
     action = (payload.action or "").lower()
+    # Bu cihazın bildirdiği konum (varsa).
+    reported = float(payload.position) if payload.position is not None else None
+
     if action == "play":
         room.is_playing = True
     elif action == "pause":
@@ -929,18 +1013,83 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
     elif action == "seek":
         room.position = float(payload.position or 0.0)
     elif action in ("adopt", "join"):
-        # Salona yeni katılan taraf, kimsenin ekranını oynatmaz: sadece
-        # "salondayım" bilgisini tazeler. Konum oynatıcıda zaten senkronlanır.
+        # ---- SALONA SONRADAN GİREN: TEK SEFERLİK SENKRON ----
+        #
+        # Kullanıcı isteği: "Murat filmi izliyor 11. dakikada; Selin odaya
+        # girdiğinde 1 kere senkronize işlemi başlatılsın, Murat'ın videosu
+        # durdurulsun, Selin'le senkronize edilsin ve ikisi 11. dakikadan
+        # devam etsin."
+        #
+        # Yani: salonda ZATEN oynayan tarafın saniyesi ESAS ALINIR; yeni giren
+        # oraya hizalanır. Oynayan kişinin konumu `_device_positions` içinde
+        # (pause/play/seek anlarında) tutuluyor; burada en son kalan
+        # (en ileride) konumu kullanıyoruz.
         room.last_seen_at = now_utc()
+
+        # Salonda ZATEN oynayan biri var mı? (bizden başka biri)
+        others = [u for u in _device_positions.get(room.id, {}) if u != payload.user_id]
+        partner_id = others[0] if others else (settings.partner_of(payload.user_id) if room.is_playing else None)
+
+        was_playing = bool(room.is_playing) and bool(partner_id)
+
+        if was_playing and partner_id:
+            # ---- Oynayan taraftan CANLI konum iste (yalnız bu an) ----
+            live_pos = await ask_position(room.id, payload.user_id, partner_id)
+
+            if live_pos is not None:
+                leader_pos = max(0.0, live_pos)
+            else:
+                # Yanıt gelmezse son bilinen konuma düş (pause/play/seek anından).
+                positions = _device_positions.get(room.id, {})
+                leader_pos = max(0.0, positions.get(partner_id, room.position or 0.0))
+
+            room.position = leader_pos
+            room.is_playing = True
+            room.updated_by = payload.user_id
+            room.updated_at = now_utc()
+            await db.commit()
+            await db.refresh(room)
+            logger.info(
+                "Salona giriş senkronu: room=%s lider=%s pos=%.1fs (giren=%s, canlı=%s)",
+                room.id, partner_id, leader_pos, payload.user_id, live_pos is not None,
+            )
+
+            await ws_manager.broadcast({
+                "type": "cinema_sync",
+                "room_id": room.id,
+                "action": "join_sync",
+                "position": leader_pos,
+                "duration": room.duration,
+                "is_playing": True,
+                "is_active": room.is_active,
+                "updated_by": payload.user_id,
+                "updated_at": room.updated_at.isoformat(),
+                "behind_by": partner_id,
+            })
+            return room
+
+        # Salonda kimse oynamıyorsa: sadece "salondayım" bilgisi.
+        room.updated_by = payload.user_id
+        room.updated_at = now_utc()
+        await db.commit()
+        await db.refresh(room)
+        await ws_manager.broadcast({
+            "type": "cinema_sync",
+            "room_id": room.id,
+            "action": "join",
+            "position": room.position,
+            "duration": room.duration,
+            "is_playing": room.is_playing,
+            "is_active": room.is_active,
+            "updated_by": room.updated_by,
+            "updated_at": room.updated_at.isoformat(),
+        })
+        return room
     elif action == "leave":
-        # Salondan çıkan kişi filmi duraklatır. İki taraf da çıktıysa salon kapanır;
-        # böylece kimse izlemediği halde "oynuyor" görünen bir film kalmaz.
         room.last_seen_at = now_utc()
         room.is_playing = False
         room.is_active = False
         room.updated_by = payload.user_id
-        # Profildeki 'Sinemada' durumu ANINDA temizlensin.
-        # WS mesaji kaybolsa/gecikse bile HTTP yolu tek basina yeterli olsun.
         try:
             await set_cinema_presence(payload.user_id, False)
         except Exception as exc:  # noqa: BLE001
@@ -950,15 +1099,32 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
         room.is_playing = False
         room.position = 0.0
     elif action == "sync":
-        # Sadece oynatma durumunu/pozisyonunu tazele (yeni gelen tarafın isteği)
         pass
     else:
         raise HTTPException(status_code=400, detail="Bilinmeyen işlem")
 
-    if payload.position is not None and action in ("play", "pause", "seek"):
-        room.position = float(payload.position)
-    # Süre hiçbir zaman sıfıra geri yazılmaz: iki telefonun aynı anda
-    # bildirim göndermesi durumunda bile bilinen süre korunur.
+    if reported is not None and action in ("play", "pause", "seek"):
+        room.position = reported
+        # Bu cihazın konumunu hatırla: "geride olan" seçiminde kullanılır.
+        _device_positions.setdefault(room.id, {})[payload.user_id] = reported
+
+    # ---- OYNAT: geride olan esas alınır ----
+    if action == "play":
+        positions = _device_positions.get(room.id, {})
+        # Dururken kaydedilen konumlar (iki cihazın bıraktığı yer).
+        if len(positions) >= 2:
+            earliest_user = min(positions, key=lambda u: positions[u])
+            room.position = max(0.0, positions[earliest_user])
+            logger.info(
+                "Sinema play: geride olan=%s (%.1fs) -> herkes buradan devam",
+                earliest_user, room.position,
+            )
+            behind_by = earliest_user
+        else:
+            behind_by = None
+    else:
+        behind_by = None
+
     if payload.duration and float(payload.duration) > 0:
         room.duration = float(payload.duration)
 
@@ -977,8 +1143,56 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
         "is_active": room.is_active,
         "updated_by": room.updated_by,
         "updated_at": room.updated_at.isoformat(),
+        "behind_by": behind_by,
     })
     return room
+
+
+# room_id -> {user_id: son bildirdiği saniye}
+# "Oynat"ta geride olanı bulmak için. Oynarken güncellenmez (sadece
+# oynat/duraklat/sarma anında) — sürekli checkpoint yok.
+_device_positions: dict[int, dict[str, float]] = {}
+
+# Salona giriş senkronu: oynayan taraftan CANLI konum istemek için bekleyenler.
+# room_id -> { requester_id, event, future }  (WS üzerinden tek tur soru-cevap)
+_position_requests: dict[int, dict] = {}
+
+
+async def ask_position(room_id: int, requester_id: str, user_id: str, wait_seconds: float = 3.0) -> Optional[float]:
+    """Oynayan taraftan TEK SEFERLİK canlı konum sor.
+
+    Kullanıcı isteği: "sunucu video zaten eşleneceği anca senkronizasyon
+    başlattığında öğrensin sonra senkronize etsin devam etsin."
+
+    Sürekli checkpoint YOK. Yalnızca salona biri girdiğinde bu tek tur
+    çalışır: karşı tarafın tarayıcısı o anki saniyesini bir kez bildirir.
+    """
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    _position_requests[room_id] = {"requester": requester_id, "future": future}
+
+    await ws_manager.send_to_user(user_id, {
+        "type": "cinema_position_request",
+        "room_id": room_id,
+        "requested_by": requester_id,
+    })
+
+    try:
+        value = await asyncio.wait_for(future, timeout=wait_seconds)
+        return float(value) if value is not None else None
+    except asyncio.TimeoutError:
+        return None
+    finally:
+        _position_requests.pop(room_id, None)
+
+
+def resolve_position(room_id: int, position: float) -> None:
+    """Karşı taraf konumunu bildirdi: bekleyen soruyu yanıtla."""
+    entry = _position_requests.get(room_id)
+    if not entry:
+        return
+    future = entry.get("future")
+    if future and not future.done():
+        future.set_result(position)
 
 
 @router.post("/{room_id}/react")

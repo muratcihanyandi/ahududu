@@ -622,6 +622,26 @@ export const api = {
     return res.json();
   },
 
+  /**
+   * Bu cihazın oynatıcısı hazır.
+   *
+   * SADE MODEL: film `start` anında başlamaz; iki cihaz da hazır olunca sunucu
+   * `cinema_play` yayınlar ve ikisi AYNI ANDA başlar.
+   * Yanıt: `started: true` → şimdi başladı; `waiting_for_partner: true` → bekle.
+   */
+  async markCinemaReady(
+    roomId: number,
+    userId: UserId,
+    position = 0
+  ): Promise<{ started: boolean; position?: number; waiting_for_partner?: boolean }> {
+    const res = await fetch(`${BASE_URL}/api/cinema/${roomId}/ready`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, position }),
+    });
+    return res.json();
+  },
+
   async controlCinemaRoom(roomId: number, data: {
     user_id: UserId;
     action: 'play' | 'pause' | 'seek' | 'adopt' | 'join' | 'leave' | 'stop';

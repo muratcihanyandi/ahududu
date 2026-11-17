@@ -197,27 +197,27 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                             "title": title,
                             "room_id": data.get("room_id"),
                         })
-                elif msg_type == "cinema_heartbeat":
-                    # Oynatma sırasında periyodik konum bildirimi. Sunucudaki
-                    # konum ancak böyle güncel kalır ki sonradan salona giren
-                    # kişi filmi baştan değil, doğru saniyeden başlatsın.
+                elif msg_type == "cinema_position_reply":
+                    # Salona biri girdiğinde, oynayan tarafın CANLI konumu.
+                    # Tek tur: soru soruldu, cevap geldi, iş bitti.
+                    # (Sürekli checkpoint YOK — kullanıcı isteğiyle kaldırıldı.)
                     room_id = data.get("room_id")
                     position = data.get("position")
                     if room_id is not None and position is not None:
                         try:
-                            await cinema_room_module.touch_position(
-                                int(room_id),
-                                float(position),
-                                bool(data.get("is_playing")),
-                                user_id,
-                            )
-                        except Exception as e:  # noqa: BLE001 - kalp atışı asla bağlantıyı düşürmesin
-                            logger.debug("cinema_heartbeat kaydı başarısız: %s", e)
+                            cinema_room_module.resolve_position(int(room_id), float(position))
+                        except Exception as e:  # noqa: BLE001
+                            logger.debug("cinema_position_reply işlenemedi: %s", e)
+                elif msg_type == "cinema_heartbeat":
+                    # SADE MODEL: kalp atışı / sürekli checkpoint YOK.
+                    # Oynarken senkron yapmıyoruz (Murat 20:11, Selin 20:22
+                    # olabilir). Bu mesaj yalnızca "salondayım" bilgisini taşır.
+                    room_id = data.get("room_id")
                     await ws_manager.send_to_user(partner_id, {
                         "type": "cinema_heartbeat",
                         "user_id": user_id,
                         "room_id": room_id,
-                        "position": position,
+                        "position": data.get("position"),
                         "is_playing": bool(data.get("is_playing")),
                     })
             except Exception as e:

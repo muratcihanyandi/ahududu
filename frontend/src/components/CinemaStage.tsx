@@ -8,18 +8,15 @@ import { api, mediaUrl, cinemaProxyUrl, cinemaHlsUrl } from '../services/api';
 import { playHaptic } from '../services/haptics';
 import {
   PlaybackState,
-  SyncEngine,
+  PlayerAdapter,
   clampPosition,
-  compensateLatency,
-  expectedPosition,
   formatTime,
-  looksLikeYouTubeLink,
+  isFilmFinished,
 } from '../services/cinemaSync';
 import {
   AdapterEvents,
   HLSPlayerAdapter,
   HTML5PlayerAdapter,
-  PlayerAdapter,
   VimeoPlayerAdapter,
   YouTubePlayerAdapter,
   detectPlayerSource,
@@ -30,55 +27,47 @@ import {
 } from '../services/youtubePlayer';
 
 /**
- * Sinema perdesindeki oynatıcı — senkron motorlu.
+ * Sinema perdesindeki OYNATICI — SADE MODEL.
  *
- * Kaynak ne olursa olsun (mp4/m3u8 dosyası, YouTube, Vimeo) aynı `SyncEngine`
- * ile sürülür:
- *   - Sunucudan gelen durum (position/is_playing) RTT/2 kadar ileri alınır.
- *   - Kademeli düzeltme: hizalıysa dokunmaz, küçük sapmada hızı %10 kaydırır,
- *     büyük sapmada 5 sn cooldown ile sarma yapar.
- *   - Late-join: oynatıcı hazır olana kadar durum bekletilir.
- *   - Programatik çağrıların yankısı adaptör içinde susturulur.
+ * Burada senkron mantığı YOKTUR (bilerek):
+ *   - Periyodik düzeltme, drift, nudge, RTT telafisi, heartbeat YOK.
+ *   - Oynarken oynatıcıya asla dokunulmaz.
+ *
+ * Yalnızca üç olay sunucuya bildirilir:
+ *   - `ready`  → oynatıcı yüklendi (ikisi de hazır olunca film başlar)
+ *   - `pause`  → kullanıcı durdurdu
+ *   - `play`   → kullanıcı oynattı (salon "geride olan" saniyesine hizalar)
+ *   - `seek`   → kullanıcı sardı
  *
  * Film siteleri (fullhdfilmizlesene gibi) kendi sayfalarını çerçeve içinde
- * açmaz. Bu yüzden onlar için "sahne" akışı vardır: kullanıcı siteyi kendi
- * tarayıcısında gezip DOĞRU videoyu açar, paylaştığı adresi "Sahneye al" ile
- * perdeye koyar. Tek dokunuş olduğu için video kilitlenmez.
+ * açmaz. Onlar için gerçek HLS akışı sunucuda çözülür ve perdeye konur.
  */
 export interface CinemaStageProps {
   room: CinemaRoom;
   state: PlaybackState;
-  /** Oynatıcının kendi durum bildirimi (sunucuya yazılmaz). */
-  onStateChange: (next: Partial<PlaybackState>) => void;
-  onUserPlayPause: (shouldPlay: boolean) => void;
-  onUserSeek: (position: number) => void;
+  /** Oynatıcı hazır: cihaz "hazırım" bildirir (film ikisi de hazırken başlar). */
   onReady?: (duration: number) => void;
-  /** Ağ gecikmesi (ms) — ping/pong ile ölçülür. */
-  latencyMs?: number;
+  /** Kullanıcı oynat/duraklat düğmesine bastı. */
+  onUserPlayPause: (shouldPlay: boolean, atPosition: number) => void;
+  /** Kullanıcı sardı. */
+  onUserSeek: (position: number) => void;
+  /** Oynatıcının kendi ilerleme bildirimi (yalnızca ilerleme çubuğu için). */
+  onProgress?: (position: number, duration: number) => void;
   /** Kullanıcının sahneye aldığı yeni video: salon kaydı güncellendiğinde. */
   onRoomChanged?: (room: CinemaRoom) => void;
 }
 
-const TICK_MS = 1000;
+const TICK_MS = 500;
 /** iframe kaynaklarında perdenin "hazırlanıyor"da takılma emniyeti (ms). */
 const FRAME_LOAD_TIMEOUT_MS = 8000;
-/**
- * Sarma bu süreden uzun sürerse tarayıcı takılmış sayılır ve kurtarılır (ms).
- *
- * Gerçek ölçüm: normal sarma 0.5–10 sn. Chromium/MediaSource bazen `seeked`
- * olayını hiç göndermiyor ve video sonsuza kadar `readyState=1` kalıyor.
- * 12 sn sonra oynatıcıyı hafifçe iterek bu durumdan çıkıyoruz.
- */
-const STUCK_SEEK_MS = 12_000;
 
 export const CinemaStage: React.FC<CinemaStageProps> = ({
   room,
   state,
-  onStateChange,
+  onReady,
   onUserPlayPause,
   onUserSeek,
-  onReady,
-  latencyMs = 120,
+  onProgress,
   onRoomChanged,
 }) => {
   const source = useMemo(
@@ -93,10 +82,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     [room.video_url, room.embed_url, room.stream_url, room.source, room.kind]
   );
 
-  /**
-   * Film sitesinden çözülen akış, sunucu proxy'sinden geçirilir.
-   * CDN'ler CORS başlığı vermediği ve Referer istediği için zorunlu.
-   */
+  /** Film sitesinden çözülen akış, sunucu proxy'sinden geçirilir. */
   const hlsSrc = useMemo(
     () => (room.stream_url ? cinemaHlsUrl(room.stream_url, room.stream_referer) : ''),
     [room.stream_url, room.stream_referer]
@@ -105,10 +91,8 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const embedHostRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const engineRef = useRef<SyncEngine | null>(null);
-  /** Tam ekrana alınacak kapsayıcı (perde alanı): video/iframe ile aynı kutu. */
+  const adapterRef = useRef<PlayerAdapter | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,99 +100,16 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(room.duration || 0);
   const [blockedAutoplay, setBlockedAutoplay] = useState(false);
-  /**
-   * iframe tabanlı kaynaklar (Vimeo, senkronsuz gömme) `onReady` bildirmez.
-   * Bu yüzden iframe'in `load` olayını kendimiz dinliyoruz; aksi halde
-   * "Perde hazırlanıyor" perdesi yüklenmiş videonun ÜSTÜNDE sonsuza kadar
-   * kalıyordu (ekran yükleniyor'da takılı görünüyordu).
-   */
   const [frameLoaded, setFrameLoaded] = useState(false);
-  /** Site çerçeve içinde açılmayı reddediyorsa kullanıcıya çıkış yolu sunulur. */
-  const [frameStuck, setFrameStuck] = useState(false);
   const [loadingFaded, setLoadingFaded] = useState(false);
-  const [stageDrawerOpen, setStageDrawerOpen] = useState(false);
-  /**
-   * Perde meşgul: sarma ya da tampon. HLS'te sarma yeni bölüm indirdiği için
-   * 5–10 saniye sürebilir. Bu sırada kullanıcıya "hazırlanıyor" gösterilir ve
-   * oynat isteği saklanır (sessizce yutulmaz).
-   */
-  const [playbackBusy, setPlaybackBusy] = useState(false);
-  /** Sarma/tampon biterken uygulanacak "oynat" isteği. */
-  const pendingPlayRef = useRef(false);
-  /** Kullanıcının en son istediği oynatma durumu (state gecikmesin). */
-  const wantPlayingRef = useRef(false);
-  /** Sarmanın başladığı an (0 = sarma yok). Takılan sarmayı kurtarmak için. */
-  const seekStuckRef = useRef(0);
-  /** Kullanıcının sardığı hedef saniye (takılma kurtarmasında buradan devam). */
-  const seekTargetRef = useRef(-1);
-
-  /* ------------------------------------------------------------------ */
-  /* Eksik akışı kendiliğinden onar                                      */
-  /* ------------------------------------------------------------------ */
-  /**
-   * Film sitesi odalarında gerçek akış (`stream_url`) yoksa salon siteyi
-   * gösterip "kara ekran"a düşüyordu. Eski sürümden kalmış odalar ve akışı
-   * çözülememiş kayıtlar bu durumda kalıyor.
-   *
-   * Burada bir kez sunucudan akışı yeniden çözmesini isteyip odayı güncelliyoruz.
-   * Kullanıcı hiçbir şey yapmak zorunda kalmadan perde açılıyor.
-   */
-  const repairTriedRef = useRef(false);
-  const [repairing, setRepairing] = useState(false);
-
-  useEffect(() => {
-    repairTriedRef.current = false;
-  }, [room.id]);
-
-  useEffect(() => {
-    // Yalnızca: film sitesi kaydı, akış yok, onarım denenmemiş.
-    if (source !== 'unsupported' || room.stream_url || repairTriedRef.current) return;
-    if (!room.video_url || !/^https?:\/\//i.test(room.video_url)) return;
-    repairTriedRef.current = true;
-    setRepairing(true);
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const resolved = await api.resolveCinemaLink(room.video_url);
-        if (cancelled) return;
-        if (!resolved?.stream_url) {
-          setRepairing(false);
-          return;
-        }
-        // Sunucu odayı günceller; akışla birlikte yeni kayıt gelir.
-        const updated = await api.createCinemaRoom({
-          title: room.title,
-          video_url: resolved.video_url || room.video_url,
-          created_by: room.created_by,
-          kind: resolved.kind,
-          stream_url: resolved.stream_url,
-          stream_referer: resolved.stream_referer || undefined,
-          source: resolved.source,
-        });
-        if (cancelled || !updated?.id) {
-          setRepairing(false);
-          return;
-        }
-        onRoomChanged?.(updated);
-      } catch (e) {
-        console.error('Akış onarılamadı', e);
-      } finally {
-        if (!cancelled) setRepairing(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [source, room.id, room.video_url, room.stream_url, room.title, room.created_by, onRoomChanged]);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [scrubPreview, setScrubPreview] = useState<number | null>(null);
 
   const isFrameSource = source === 'vimeo' || source === 'unsupported';
-  /** Perdeye konabilecek adres */
   const frameUrl = room.embed_url || room.video_url || '';
   const playableFrame = isPlayableEmbedUrl(frameUrl);
+  const isGenericSite = source === 'unsupported';
 
-  /** Film siteleri (X-Frame-Options engelleyen siteler) sunucu proxy'si ile açılır */
   const finalFrameUrl = useMemo(() => {
     if (!frameUrl) return '';
     if (source === 'vimeo') return vimeoApiUrl(frameUrl);
@@ -218,59 +119,20 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
 
   useEffect(() => {
     setLoadingFaded(false);
-    // İframe yüklenmesi gecikse bile 1.5 sn sonra loading perdesini kaldır:
-    // Kullanıcı arkadaki sayfayı hemen görsün, donup kalmasın ve rahatça aşağı kaydırabilsin.
     const t = window.setTimeout(() => setLoadingFaded(true), 1500);
     return () => window.clearTimeout(t);
   }, [room.id, frameUrl]);
 
-  /** Sitenin kendi HTML sayfası olduğunda sahne rehberi üstte yardımcı çubuk olarak sunulur */
-  const isGenericSite = source === 'unsupported';
-
-  /* ------------------------------------------------------------------ */
-  /* "Sahne": siteyi tarayıcıda gez, doğru videoyu seç, perdeye al       */
-  /* ------------------------------------------------------------------ */
+  /* ---------------------------------------------------------------- */
+  /* "Sahne": film sitesi linkini perdeye al                          */
+  /* ---------------------------------------------------------------- */
   const [stageInput, setStageInput] = useState('');
   const [stageBusy, setStageBusy] = useState(false);
   const [stageNote, setStageNote] = useState<string | null>(null);
 
-  /**
-   * Kullanıcı bu sahnede videoyu DEĞİŞTİRDİYSE oynatıcıya "başka biri
-   * dokunmadı" bilgisini vermeliyiz: yeni oynatıcı hazır olurken gelen eski
-   * duraklatma/gizli komutlar aksi halde kontrolü ele geçirebilir.
-   */
-  const stagedRef = useRef(false);
-  /** Kullanıcının seçtiği sahne: oynatıcı hazır olunca çalışacak başlatıcı. */
-  const pendingStartRef = useRef<(() => void) | null>(null);
-  /** Sahne yeni değişti: ilk durum çeki (0 saniye, oynuyor) uygulanacak. */
-  const freshSceneRef = useRef(false);
-  /** Otomatik oynatma engellendi mi? (interval yankısız okusun)
-   *  Not: tick bu bayrağa göre atlanmaz — sesi açık oynatma yalnızca kullanıcı
-   *  dokunuşunda yapılır; burada durum yalnızca izlenir. */
-  const blockedAutoplayRef = useRef(false);
-  blockedAutoplayRef.current = blockedAutoplay;
-  /** Tick içinden güncel durum okunabilsin (kapanışta eski değer kalmasın). */
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  // Salon "oynuyor" diyorsa kullanıcı oynatmak istiyor demektir. Sarma
-  // sonrası oynatıcı kendiliğinden durmuşsa tick bunu görüp devam ettirir.
-  wantPlayingRef.current = state.isPlaying;
-
-  /**
-   * Kullanıcının yapıştırdığı linki perdeye koyar.
-   *
-   * Tek dokunuşla çalıştığı için (kullanıcı da tıkladı) tarayıcının otomatik
-   * oynatma engeli aşılmış olur; oynat/duraklat düğmeleri normal çalışır.
-   */
   const handleStageVideo = async (raw: string = stageInput) => {
     const text = (raw || '').trim();
     if (!text || stageBusy) return;
-    // Film sitesi linki (sayfa adresi) perdeye doğrudan konamaz: kullanıcıya
-    // "siteyi aç, doğru videoyu bul" yolu gösterilir. Sahte "bulundu" olmasın.
-    if (!looksLikeYouTubeLink(text)) {
-      setStageNote('Bu bir site linki. Önce siteyi açıp filmi başlat, sonra videosunun bağlantısını paylaş.');
-      return;
-    }
     setStageBusy(true);
     setStageNote(null);
     playHaptic(20);
@@ -282,20 +144,16 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         created_by: room.created_by,
         kind: resolved.kind,
         embed_url: resolved.embed_url || undefined,
+        stream_url: resolved.stream_url || undefined,
+        stream_referer: resolved.stream_referer || undefined,
         source: resolved.source,
       });
-      stagedRef.current = true;
-      freshSceneRef.current = true;
       setStageInput('');
-      // Sunucu kaydı bu sahneye geçti: perde yeni video ile kurulur (room.id
-      // değişir → oynatıcı yeniden bağlanır ve kullanıcı dokunuşunun içinde
-      // oynatma başlatılır).
       if (room2 && room2.id) {
         onRoomChanged?.(room2);
       } else {
         setStageNote('Sahne güncellenemedi. Lütfen tekrar dene.');
       }
-      playHaptic(30);
     } catch (e) {
       console.error('Sahne alınamadı', e);
       setStageNote('Bağlantı okunamadı. Videoyu tarayıcıda açıp adres çubuğundan kopyala.');
@@ -304,73 +162,37 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     }
   };
 
-  /** Tarayıcıda siteyi/doğru videoyu aç: film siteleri iframe içinde açılmaz. */
   const openOutside = (url: string) => {
     if (!url) return;
     playHaptic(15);
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  /** Kullanıcı eylemlerini sunucuya yayınla (kendi yankımızı susturur). */
-  const publishPlayPause = useCallback(
-    (playing: boolean) => {
-      engineRef.current?.noteLocalAction();
-      onUserPlayPause(playing);
-    },
-    [onUserPlayPause]
-  );
-
-  const publishSeek = useCallback(
-    (position: number) => {
-      engineRef.current?.noteLocalAction(true);
-      onUserSeek(position);
-    },
-    [onUserSeek]
-  );
-
+  /* ---------------------------------------------------------------- */
+  /* Oynatıcı olayları                                                */
+  /* ---------------------------------------------------------------- */
   const events: AdapterEvents = useMemo(
     () => ({
       onReady: (dur) => {
         setReady(true);
         if (dur > 0) setDuration(dur);
-        engineRef.current?.markReady();
-        if (dur > 0) onReady?.(dur);
-        // Kullanıcının seçtiği sahne: oynatıcı hazır olur olmaz başlat.
-        const start = pendingStartRef.current;
-        if (start) {
-          pendingStartRef.current = null;
-          start();
-        }
+        onReady?.(dur);
       },
       onDuration: (dur) => {
         if (dur > 0) setDuration(dur);
       },
-      onUserPlay: () => publishPlayPause(true),
-      onUserPause: () => publishPlayPause(false),
-      onUserSeek: (position) => publishSeek(position),
-      onBuffering: () => {
-        /* tampon durumu motor içinde değerlendirilir */
-      },
-      onEnded: () => {
-        onStateChange({ isPlaying: false, position: 0 });
-      },
       onAutoplayBlocked: () => setBlockedAutoplay(true),
       onError: (message) => setError(message),
     }),
-    [onReady, onStateChange, publishPlayPause, publishSeek]
+    [onReady]
   );
 
-  /* ------------------------------------------------------------------ */
-  /* Oynatıcıyı kur                                                      */
-  /* ------------------------------------------------------------------ */
+  /* ---------------------------------------------------------------- */
+  /* Oynatıcıyı kur                                                   */
+  /* ---------------------------------------------------------------- */
   useEffect(() => {
     let adapter: PlayerAdapter | null = null;
     let destroyed = false;
-
-    // eventOnly: film oynarken hız kaydırma/sarma YAPILMAZ (mikro takılma
-    // olmasın). Hizalama yalnızca oynat/duraklat/sarma komutlarında olur.
-    const engine = new SyncEngine({ latencyMs, eventOnly: true });
-    engineRef.current = engine;
 
     const attach = (created: PlayerAdapter) => {
       if (destroyed) {
@@ -378,41 +200,13 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         return;
       }
       adapter = created;
-      engine.attach(created);
-      // Teşhis kancası: sahne sahibi oynatıcıya erişebilsin (test/geliştirme).
+      adapterRef.current = created;
       (window as any).__ahududuCinemaPlayer = created;
-      if (created.isReady()) engine.markReady();
-
-      // Kullanıcı bu video sahnesini kendisi seçtiyse (dokunuşun içindeyiz):
-      // video otomatik oynatma engeline düşmeden başlasın, düğmeler çalışsın.
-      if (stagedRef.current) {
-        stagedRef.current = false;
-        const start = () => {
-          publishPlayPause(true);
-          if (created.kind === 'html5' || created.kind === 'hls') {
-            const video = videoRef.current;
-            if (video) video.play().catch(() => setMuted(true));
-          } else if (created.kind === 'youtube') {
-            const yt = created as YouTubePlayerAdapter;
-            yt.setMuted(false);
-            setMuted(false);
-            yt.play();
-          }
-        };
-        if (created.isReady()) start();
-        else pendingStartRef.current = start;
-      } else if (pendingStartRef.current) {
-        // Önceki deneme sahnesinde oynatıcı henüz kurulmadan geldi: şimdi.
-        const start = pendingStartRef.current;
-        pendingStartRef.current = null;
-        start();
-      }
     };
 
     if (source === 'html5' && videoRef.current) {
       attach(new HTML5PlayerAdapter(videoRef.current, events));
     } else if (source === 'hls' && videoRef.current) {
-      // Film sitesinden çözülen akış: hls.js / yerleşik HLS ile oynat.
       attach(new HLSPlayerAdapter(videoRef.current, hlsSrc, events));
     } else if (source === 'youtube') {
       const videoId =
@@ -423,7 +217,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
           videoId,
           container: host,
           events,
-          startSeconds: extractYouTubeStart(room.video_url) || state.position || 0,
+          startSeconds: extractYouTubeStart(room.video_url) || 0,
         });
         yt.init().catch((e) => {
           if (!destroyed) setError(e?.message || 'YouTube videosu açılamadı 🎬');
@@ -436,269 +230,121 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       attach(new VimeoPlayerAdapter(iframeRef.current, events));
     }
 
-    return () => {      destroyed = true;
-      engine.detach();
+    return () => {
+      destroyed = true;
       adapter?.destroy?.();
       if ((window as any).__ahududuCinemaPlayer === adapter) {
         (window as any).__ahududuCinemaPlayer = null;
       }
-      if (engineRef.current === engine) engineRef.current = null;
+      if (adapterRef.current === adapter) adapterRef.current = null;
       setReady(false);
       setError(null);
       setBlockedAutoplay(false);
       setFrameLoaded(false);
-      setFrameStuck(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, room.id, hlsSrc]);
 
-  /* ------------------------------------------------------------------ */
-  /* iframe kaynakları: yükleme takılı kalmasın                          */
-  /* ------------------------------------------------------------------ */
+  /* iframe kaynakları: yükleme takılı kalmasın */
   useEffect(() => {
     setFrameLoaded(false);
-    setFrameStuck(false);
     if (!isFrameSource) return;
-    // Bazı siteler çerçeveyi reddederken `load` bile vermez: perde sonsuza
-    // kadar "hazırlanıyor" kalmasın diye emniyet süresi koyuyoruz.
-    const timer = window.setTimeout(() => setFrameStuck(true), FRAME_LOAD_TIMEOUT_MS);
+    const timer = window.setTimeout(() => setFrameLoaded(true), FRAME_LOAD_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [isFrameSource, frameUrl]);
 
-  /** iframe yüklendi: "Perde hazırlanıyor" perdesini kaldır. */
-  const handleFrameLoad = () => {
-    setFrameLoaded(true);
-    setFrameStuck(false);
-  };
+  /* ---------------------------------------------------------------- */
+  /* Sunucudan gelen OYNAT/DURAKLAT komutunu uygula                    */
+  /* ---------------------------------------------------------------- */
+  //
+  // SADE MODEL: Sunucu yalnızca ÜÇ olayda komut yayınlar (play/pause/seek).
+  // Oynarken hiçbir komut gelmez; oynatıcıya dokunulmaz.
+  // Komut, `state.position` + `state.isPlaying` olarak gelir.
+  const appliedRef = useRef<{ isPlaying: boolean; position: number }>({
+    isPlaying: false,
+    position: -1,
+  });
 
-  /* ------------------------------------------------------------------ */
-  /* Sunucu/partner durumu değişti → motora ver                          */
-  /* ------------------------------------------------------------------ */
   useEffect(() => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    engine.setLatency(latencyMs);
-    // Sahne değiştiyse durum SIFIRDAN başlar: eski filmin saniyesi yenisine
-    // uygulanırsa video ortadan başlar ya da anında "bitti" görünür.
-    const fresh = freshSceneRef.current;
-    if (fresh) freshSceneRef.current = false;
+    const adapter = adapterRef.current;
+    if (!adapter) return;
 
-    const adapter = engine.getAdapter();
-    // ---- ÇİFT SARMA / SARMA FIRTINASI KORUMASI ----
-    // Kullanıcı ilerleme çubuğunu kaydırdığında biz zaten sarmayı uyguladık;
-    // komut sunucuya gidip geri döndüğünde aynı saniyeye İKİNCİ kez sarmak
-    // HLS'te yeni bölüm indirmeye (5–10 sn donma) yol açıyordu.
-    //
-    // Ayrıca salon her 2 saniyede konum tazeliyor (anchor yenilemesi). Film
-    // oynarken bu tazelemeler sarma TETİKLEMEMELİ: aksi halde sarma döngüsü
-    // hiç bitmiyor ve video "başlıyor sonra duruyor" durumunda kalıyor.
-    if (adapter && !fresh && adapter.kind !== 'youtube') {
-      const busy = adapter.isSeeking() || adapter.isBuffering();
-      const gap = Math.abs(adapter.getTime() - state.position);
-      if (busy && gap < 15) return;
-      // Film zaten akıyorsa ve sapma küçükse hiç dokunma.
-      if (state.isPlaying && !adapter.isPaused() && gap < 3) {
-        return;
-      }
+    const wantPlaying = Boolean(state.isPlaying);
+    const target = clampPosition(state.position, state.duration || duration || undefined);
+
+    // Aynı komut tekrar geldiyse (render döngüsü) dokunma.
+    const prev = appliedRef.current;
+    const sameCommand =
+      prev.isPlaying === wantPlaying && Math.abs(prev.position - target) < 0.5;
+    if (sameCommand) return;
+    appliedRef.current = { isPlaying: wantPlaying, position: target };
+
+    // Konumu yalnızca komut anında hizala.
+    if (adapter.kind === 'youtube') {
+      if (Math.abs(adapter.getTime() - target) > 0.8) adapter.setTime(target);
+    } else if (adapter.getTime() > 0 || target > 0) {
+      if (Math.abs(adapter.getTime() - target) > 0.5) adapter.setTime(target);
     }
 
-    // ---- GERİ-ÇEKME (RUBBER-BAND) KORUMASI ----
-    // Gerçek hata: film 7-8. saniyeye geliyor, sonra 2. saniyeye dönüyor,
-    // tekrar ilerliyor, yine geri dönüyor (sonsuz salınım).
-    // Sebep: gelen durumda `position` 0 (ya da videonun çok gerisinde) olsa
-    // bile `applyState` onu uyguluyor ve video başa sarılıyor.
-    // Film AKIYORSA ve gelen hedef video'nun BELİRGİN ŞEKİLDE GERİSİNDEYSE
-    // (>= 3 sn) bu bilgi bayattır; yok say.
-    if (adapter && !fresh && state.isPlaying) {
-      const current = adapter.getTime();
-      const backwards = current - state.position;
-      if (backwards > 3) {
-        // Kullanıcının kendi sarması (seekTargetRef) ise uygula; değilse yok say.
-        const isOwnSeek =
-          seekTargetRef.current >= 0 && Math.abs(seekTargetRef.current - state.position) < 2;
-        if (!isOwnSeek) {
-          return;
-        }
-      }
+    if (wantPlaying) {
+      if (adapter.isPaused() && !adapter.isEnded()) adapter.play();
+    } else if (!adapter.isPaused()) {
+      adapter.pause();
     }
-
-    engine.applyState(
-      compensateLatency(
-        {
-          position: fresh ? 0 : state.position,
-          isPlaying: fresh ? true : state.isPlaying,
-          duration: fresh ? undefined : state.duration || duration || undefined,
-        },
-        fresh ? 0 : latencyMs
-      )
-    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.position, state.isPlaying, state.anchorMs, latencyMs]);
+  }, [state.isPlaying, state.position, state.anchorMs]);
 
-  /* ------------------------------------------------------------------ */
-  /* Periyodik düzeltme + zaman göstergesi                               */
-  /* ------------------------------------------------------------------ */
+  /* ---------------------------------------------------------------- */
+  /* Periyodik okuma — YALNIZCA ilerleme çubuğu için                   */
+  /* ---------------------------------------------------------------- */
+  //
+  // Burada oynatıcıya HİÇBİR komut verilmez. Sunucuya konum yazılmaz.
   useEffect(() => {
-    // Otomatik oynatma engellendiyse 1 sn'lik denetim sürekli play deneyip
-    // deneyip sessizce bozmasın: düğme "oynat" gösterir, kullanıcı dokunur.
-    //
-    // NOT: Bu döngü yalnızca DURUMU İZLER. Film oynarken oynatıcıya hız
-    // kaydırma/sarma yapılmaz (mikro takılmaların kaynağıydı); hizalama
-    // sadece oynat/duraklat/sarma komutlarında olur.
     const timer = window.setInterval(() => {
-      const engine = engineRef.current;
-      if (!engine) return;
-      if (blockedAutoplayRef.current && stateRef.current.isPlaying) {
-        // Otomatik oynatma engellendi: düğme "oynat" göstersin; sekme sessizce
-        // oynamaya çalışıp durumu bozmasın. Duraklat/sarma yine çalışır.
-        // YouTube'da yeşil "sesi aç" düğmesi zaten doğru yolu sunuyor.
-        const adapter = engine.getAdapter();
-        if (adapter && adapter.kind !== 'youtube') {
-          adapter.pause();
-          publishPlayPause(false);
-        } else {
-          engine.tick();
-        }
-      } else if (!stagedRef.current) {
-        engine.tick();
-      }
-      const adapter = engine.getAdapter();
-      if (adapter) {
-        // Yalnızca ilerleme çubuğu için okunur; sunucuya durum YAZILMAZ.
-        const t = adapter.getTime();
-        setCurrentTime(t);
-        const dur = adapter.getDuration();
-        if (dur > 0 && Math.abs(dur - duration) > 0.5) setDuration(dur);
-        // NOT: Burada `onStateChange` çağrılmıyor. Her saniye konum yazmak
-        // salonun anchor'ını bozup iki tarafı birbirine çekiyordu.
-
-        // ---- Sarma/tampon bitişini gözle ----
-        // HLS'te sarma yeni bölüm indirir (5–10 sn). Bu sürede kullanıcıya
-        // "hazırlanıyor" gösteriyoruz ve oynat isteğini kaybetmiyoruz.
-        if (adapter.kind !== 'youtube') {
-          const video = videoRef.current;
-          // GERÇEK durumu video elementinden oku. Adaptörün `isSeeking()` bayrağı
-          // kendi zamanlayıcısıyla sıfırlanıyor; `seeked` olayı gelmediğinde
-          // gerçeği yansıtmıyor.
-          const videoSeeking = Boolean(video?.seeking);
-          const videoStuck =
-            Boolean(video) &&
-            videoSeeking &&
-            video!.readyState <= 1 &&
-            wantPlayingRef.current;
-
-          const buffering = adapter.isBuffering();
-          const busy = videoSeeking || buffering;
-          setPlaybackBusy((prev) => (prev === busy ? prev : busy));
-
-          // ---- TAKILI SARMA KURTARMA ----
-          // Chromium/MediaSource bazı durumlarda sarmayı hiç tamamlamıyor:
-          // `seeking=true`, `readyState=1` kalıyor, `seeked` olayı gelmiyor ve
-          // hiç ağ isteği yapılmıyor. Kullanıcı bunu "başlıyor ama devam
-          // etmiyor" olarak görüyor. Çare: oynatıcıyı aynı noktaya itip
-          // oynatmayı yeniden başlatmak.
-          if (videoStuck) {
-            if (seekStuckRef.current === 0) {
-              seekStuckRef.current = Date.now();
-            } else if (Date.now() - seekStuckRef.current > STUCK_SEEK_MS) {
-              seekStuckRef.current = Date.now(); // bir sonraki deneme için sıfırla
-              // Kullanıcının gitmek istediği saniye varsa ondan devam et.
-              const here =
-                seekTargetRef.current >= 0 ? seekTargetRef.current : video!.currentTime;
-              const ad = engine.getAdapter() as unknown as {
-                restartAt?: (s: number) => void;
-              } | null;
-              if (ad?.restartAt) {
-                // En güvenilir kurtarma: oynatıcıyı o saniyeden yeniden kur.
-                console.warn('[cinema] sarma takıldı, oynatıcı yeniden kuruluyor:', here);
-                wantPlayingRef.current = true;
-                ad.restartAt(here);
-              } else {
-                try {
-                  video!.currentTime = here + 0.01;
-                  void video!.play().catch(() => {});
-                } catch {
-                  /* yok say */
-                }
-              }
-            }
-          } else {
-            seekStuckRef.current = 0;
-          }
-
-          if (!busy) {
-            // Veri hazır: bekleyen oynat isteği varsa şimdi uygula.
-            if (pendingPlayRef.current) {
-              pendingPlayRef.current = false;
-              adapter.play();
-              setBlockedAutoplay(false);
-            } else if (wantPlayingRef.current && adapter.isPaused() && !adapter.isEnded()) {
-              // Kullanıcı oynatmak istiyor ama oynatıcı durmuş (sarma sonrası
-              // tarayıcı play'i düşürmüş olabilir): kendiliğinden devam et.
-              adapter.play();
-            }
-          }
-        }
-      }
+      const adapter = adapterRef.current;
+      if (!adapter) return;
+      const t = adapter.getTime();
+      setCurrentTime(t);
+      const dur = adapter.getDuration();
+      if (dur > 0 && Math.abs(dur - duration) > 0.5) setDuration(dur);
+      onProgress?.(t, dur);
     }, TICK_MS);
     return () => window.clearInterval(timer);
-  }, [duration, onStateChange]);
+  }, [duration, onProgress]);
 
-  /* ------------------------------------------------------------------ */
-  /* Kontroller                                                          */
-  /* ------------------------------------------------------------------ */
-  const adapterNow = () => engineRef.current?.getAdapter() ?? null;
-
-  /**
-   * VİDEOYU tam ekraan al.
-   *
-   * ÖNEMLİ: Film sitesinden gelen HLS akışında `<video>` bizim elimizde
-   * olduğu için önce onu tam ekrana alıyoruz (en geniş görüntü, harici
-   * kuşak yok). Tarayıcı reddederse perde kapsayıcısına düşüyoruz.
-   * YouTube/Vimeo iframe'lerinde video üstünde kontrolümüz yok; onlarda
-   * kapsayıcı tam ekrana alınır.
-   */
+  /* ---------------------------------------------------------------- */
+  /* Tam ekran                                                        */
+  /* ---------------------------------------------------------------- */
   const toggleFullscreen = async () => {
     playHaptic(15);
-    const doc = document as Document & {
-      webkitFullscreenElement?: Element | null;
-      webkitExitFullscreen?: () => Promise<void>;
-    };
     const video = videoRef.current;
     const box = containerRef.current;
-    const current = document.fullscreenElement || doc.webkitFullscreenElement || null;
+    const current = document.fullscreenElement;
 
-    // Zaten VİDEO tam ekrandaysa → çık.
     if (current && video && current === video) {
       try {
-        if (document.exitFullscreen) await document.exitFullscreen();
-        else if (doc.webkitExitFullscreen) await doc.webkitExitFullscreen();
-      } catch (e) {
-        console.warn('Tam ekrandan çıkılamadı', e);
+        await document.exitFullscreen();
+      } catch {
+        /* yok say */
       }
       return;
     }
 
-    // Sayfa (<html>) tam ekrandaysa ama video değilse: ÖNCE ondan çık,
-    // sonra videoyu tam ekrana al. Aksi halde "tam ekran" düğmesi yalnızca
-    // sayfa modunu kapatıyor, video hiç tam ekran olmuyordu.
+    // Sayfa tam ekrandaysa önce ondan çık, sonra videoyu tam ekran yap.
     if (current && current !== video) {
       try {
-        if (document.exitFullscreen) await document.exitFullscreen();
-        else if (doc.webkitExitFullscreen) await doc.webkitExitFullscreen();
-        // Tarayıcının mod değişimini işlemesi için kısa bekleme.
+        await document.exitFullscreen();
         await new Promise((r) => window.setTimeout(r, 120));
-      } catch (e) {
-        console.warn('Tam ekrandan çıkılamadı', e);
+      } catch {
+        /* yok say */
       }
     }
 
     const target = (video || box) as (HTMLElement & {
       webkitRequestFullscreen?: () => Promise<void>;
-      webkitEnterFullscreen?: () => void; // iOS Safari <video>
+      webkitEnterFullscreen?: () => void;
     }) | null;
     if (!target) return;
-
     try {
       if (target.requestFullscreen) {
         await target.requestFullscreen({ navigationUI: 'hide' } as FullscreenOptions);
@@ -709,7 +355,6 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       }
     } catch (e) {
       console.warn('Video tam ekranı reddedildi, perde deneniyor', e);
-      // Video tam ekranı reddedilirse perde kapsayıcısını dene.
       try {
         if (box && !document.fullscreenElement) await box.requestFullscreen();
       } catch {
@@ -718,11 +363,8 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     }
   };
 
-  /** Tam ekran durumunu izle (ESC / geri tuşu ile çıkışta düğme güncellensin). */
   useEffect(() => {
     const onChange = () => {
-      // Yalnızca VİDEO tam ekrandaysa "çık" düğmesi gösterilsin. Sayfanın
-      // (<html>) tam ekran olması videoyu tam ekran yapmış sayılmaz.
       setIsFullscreen(Boolean(videoRef.current && document.fullscreenElement === videoRef.current));
     };
     document.addEventListener('fullscreenchange', onChange);
@@ -733,54 +375,34 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     };
   }, []);
 
+  /* ---------------------------------------------------------------- */
+  /* Kontroller                                                       */
+  /* ---------------------------------------------------------------- */
+  const adapterNow = () => adapterRef.current;
+
   const togglePlay = () => {
-    const playing = !state.isPlaying;
+    playHaptic(12);
     const adapter = adapterNow();
+    const playing = !state.isPlaying;
     if (adapter) {
       if (playing) {
-        // Sarma/tampon sürüyorsa play() sessizce yutulur (tarayıcı "seeking"
-        // hâlindeyken oynatmayı erteler, bazen de hiç uygulamaz). İsteği
-        // hatırla: veri hazır olunca kendiliğinden oynatılacak.
-        pendingPlayRef.current = true;
-        if (playbackBusy || (adapter.kind !== 'youtube' && adapter.isSeeking())) {
-          setPlaybackBusy(true);
-          publishPlayPause(true);
-          return;
-        }
         adapter.play();
-        // Oynatma engelliyse "sesi aç" düğmesi referansı kaybolmasın.
         setBlockedAutoplay(false);
       } else {
-        pendingPlayRef.current = false;
         adapter.pause();
       }
     }
-    publishPlayPause(playing);
+    // Sunucuya olayı bildir: karşı taraf da aynı şeyi yapar.
+    const at = adapter ? adapter.getTime() : state.position;
+    onUserPlayPause(playing, at);
   };
-
-  /** Perde yüzeyine dokunuş: tek dokunuşla oynat / duraklat. */
-  const handleSurfaceTap = () => {
-    playHaptic(12);
-    togglePlay();
-  };
-
-  /**
-   * YouTube'un kendi gömülü oynatıcısı her tıklamayı kendisi de işler
-   * (kendi play/pause düğmesi, videonun kendisi). Üstüne bir de bizim
-   * saydam "dokun → oynat/duraklat" katmanımız binince tek dokunuş iki kez
-   * uygulanıyor ve birbirini iptal ediyordu: "videoyu başlatıyorum ama
-   * oynamıyor". Bu yüzden YouTube'da perde yüzeyine dokunma katmanı
-   * kaldırıldı; kontrol alt bardan ve YouTube'un kendi düğmelerinden yapılır.
-   */
 
   const seekTo = (next: number) => {
     const target = clampPosition(next, duration || state.duration);
-    // Takılma kurtarması bu saniyeden devam etsin (video'nun takıldığı yerden
-    // değil, kullanıcının gitmek istediği yerden).
-    seekTargetRef.current = target;
     adapterNow()?.setTime(target);
     setCurrentTime(target);
-    publishSeek(target);
+    appliedRef.current = { isPlaying: state.isPlaying, position: target };
+    onUserSeek(target);
   };
 
   const seekBy = (delta: number) => {
@@ -789,15 +411,15 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     seekTo(from + delta);
   };
 
-  /* ---- Sarma çubuğu: sürükleyerek hassas sarma ----
-   *
-   * Çubuk ~396 piksel geniş ve film ~7000 saniye: 1 piksel ≈ 18 saniye!
-   * Tek dokunuşla istediğin saniyeye inmek imkânsızdı. Bu yüzden:
-   *   - basılı tutup sürükleyince hedef CANLI gösterilir (metin),
-   *   - bırakınca o saniyeye sarılır.
-   * Böylece "7. dakikaya al" gerçekten 7:00 olur.
-   */
-  const [scrubPreview, setScrubPreview] = useState<number | null>(null);
+  const toggleMute = () => {
+    const adapter = adapterNow();
+    const next = !muted;
+    adapter?.setMuted?.(next);
+    setMuted(next);
+    playHaptic(12);
+  };
+
+  /* Sarma çubuğu: sürükleyerek hassas sarma */
   const scrubRectRef = useRef<DOMRect | null>(null);
   const scrubMovedRef = useRef(false);
   const scrubTargetRef = useRef(0);
@@ -834,12 +456,10 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const endScrubbing = (e: React.PointerEvent) => {
     const rect = scrubRectRef.current;
     if (!rect) return;
-    // Sürükleme yapıldıysa bırakılan noktaya sar; yapılmadıysa tek dokunuş.
     const ratio = ratioFromEvent(e, rect);
     const target = scrubMovedRef.current ? scrubTargetRef.current : ratio * totalDuration;
     scrubRectRef.current = null;
     setScrubPreview(null);
-    playHaptic(12);
     seekTo(target);
   };
 
@@ -847,14 +467,6 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     scrubRectRef.current = null;
     scrubMovedRef.current = false;
     setScrubPreview(null);
-  };
-
-  const toggleMute = () => {
-    const adapter = adapterNow();
-    const next = !muted;
-    adapter?.setMuted?.(next);
-    setMuted(next);
-    playHaptic(12);
   };
 
   const totalDuration = duration || state.duration || 0;
@@ -876,7 +488,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         />
       )}
 
-      {/* ---- HLS: film sitesinden çözülen akış (hls.js kaynağı kendisi bağlar) ---- */}
+      {/* ---- HLS: film sitesinden çözülen akış ---- */}
       {source === 'hls' && (
         <video
           ref={videoRef}
@@ -889,10 +501,10 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         />
       )}
 
-      {/* ---- YouTube: IFrame Player API kapsayıcısı ---- */}
+      {/* ---- YouTube ---- */}
       {source === 'youtube' && <div ref={embedHostRef} className="absolute inset-0 w-full h-full" />}
 
-      {/* ---- Vimeo: postMessage API'li iframe ---- */}
+      {/* ---- Vimeo ---- */}
       {source === 'vimeo' && playableFrame && (
         <div
           className="absolute inset-0 w-full h-full overflow-y-auto overscroll-contain select-auto touch-pan-y"
@@ -902,25 +514,16 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
             ref={iframeRef}
             src={vimeoApiUrl(frameUrl)}
             className="w-full h-full border-0 select-auto touch-pan-y"
-            style={{
-              width: '100%',
-              height: '100%',
-              minHeight: '100%',
-              border: 0,
-              overflow: 'auto',
-              WebkitOverflowScrolling: 'touch',
-              touchAction: 'pan-y',
-            }}
-            scrolling="yes"
+            style={{ width: '100%', height: '100%', minHeight: '100%', border: 0 }}
             allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
             allowFullScreen
-            onLoad={handleFrameLoad}
+            onLoad={() => setFrameLoaded(true)}
             title={room.title}
           />
         </div>
       )}
 
-      {/* ---- Web sitesi / genel gömme: kullanıcının sitede rahatça gezinmesi ve aşağı kaydırması için ---- */}
+      {/* ---- Web sitesi / genel gömme ---- */}
       {source === 'unsupported' && (
         <div
           className="absolute inset-0 w-full h-full overflow-y-auto overscroll-contain select-auto touch-pan-y"
@@ -930,19 +533,10 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
             ref={iframeRef}
             src={finalFrameUrl}
             className="w-full h-full border-0 select-auto touch-pan-y"
-            style={{
-              width: '100%',
-              height: '100%',
-              minHeight: '100%',
-              border: 0,
-              overflow: 'auto',
-              WebkitOverflowScrolling: 'touch',
-              touchAction: 'pan-y',
-            }}
-            scrolling="yes"
+            style={{ width: '100%', height: '100%', minHeight: '100%', border: 0 }}
             allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
             allowFullScreen
-            onLoad={handleFrameLoad}
+            onLoad={() => setFrameLoaded(true)}
             title={room.title}
           />
         </div>
@@ -953,13 +547,12 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         <button
           type="button"
           aria-label={state.isPlaying ? 'Duraklat' : 'Oynat'}
-          onClick={handleSurfaceTap}
+          onClick={togglePlay}
           className="absolute inset-0 z-10 bg-transparent"
         />
       )}
 
-      {/* Yükleme perdesi: videonun ÜSTÜNDE takılı kalmasın.
-          pointer-events-none sayesinde kullanıcı arkadaki siteyi gördüğü an hemen dokunabilir ve kaydırabilir. */}
+      {/* Yükleme perdesi */}
       {!ready && !error && !(isFrameSource && frameLoaded) && !loadingFaded && (
         <div className="absolute inset-0 z-[15] pointer-events-none flex flex-col items-center justify-center gap-3 bg-cinema-950/70 transition-opacity duration-500">
           <Loader2 className="w-10 h-10 text-amber-300 animate-spin" />
@@ -969,53 +562,23 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         </div>
       )}
 
-      {/* Sarma/tampon göstergesi.
-          HLS'te sarma yeni bölüm indirir: 5–10 saniye sürebilir. Bu sırada
-          ekran donmuş gibi görünmesin, kullanıcı ne olduğunu anlasın.
-          pointer-events-none: alttaki düğmeler kullanılabilir kalır. */}
-      {ready && playbackBusy && !error && source !== 'youtube' && (
-        <div className="absolute inset-0 z-[14] pointer-events-none flex flex-col items-center justify-center gap-2.5 bg-black/35">
-          <Loader2 className="w-9 h-9 text-amber-300 animate-spin" />
-          <p className="text-amber-100/90 text-[11px] font-semibold tracking-[0.15em] uppercase">
-            Sahne hazırlanıyor
-          </p>
-          <p className="text-white/50 text-[10px] px-6 text-center">
-            Filmi o saniyeden yüklüyoruz…
-          </p>
-        </div>
-      )}
-
-      {/* ---- SAHNE: siteyi tarayıcıda gez, doğru videoyu seç, perdeye al ----
-           Kullanıcının sitede gezinmesini ve aşağı kaydırmasını engellemez.
-           Üstte kompakt bir yardımcı çubuk ve sahne kutusu olarak durur. */}
-      {isGenericSite && repairing && !error && (
-        <div className="absolute inset-0 z-[18] flex flex-col items-center justify-center gap-3 bg-cinema-950/95 text-center px-8">
-          <Loader2 className="w-10 h-10 text-amber-300 animate-spin" />
-          <p className="text-amber-100 font-serif text-sm font-bold">Film perdeye hazırlanıyor…</p>
-          <p className="text-amber-100/60 text-[11px] max-w-xs leading-snug">
-            Sitedeki gerçek video akışı aranıyor. Birkaç saniye sürebilir 🎬
-          </p>
-        </div>
-      )}
-
-      {isGenericSite && !repairing && !error && (
+      {/* Film sitesi sahnesi */}
+      {isGenericSite && !error && (
         <div className="absolute top-2 inset-x-2 z-20 flex flex-col items-center gap-1.5 pointer-events-none">
           <div className="w-full max-w-xl flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 rounded-2xl bg-cinema-950/85 backdrop-blur-md border border-amber-300/30 text-white shadow-xl pointer-events-auto">
             <div className="flex items-center gap-1.5 min-w-0">
               <Clapperboard className="w-3.5 h-3.5 text-amber-300 shrink-0" />
               <span className="text-[10px] font-medium text-amber-100 truncate">
-                Önce sitede gez, doğru videoyu bul 🎬
+                Video adresini yapıştır, perdeye alalım 🎬
               </span>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                onClick={() => openOutside(room.video_url)}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-400 text-cinema-950 text-[10px] font-bold active:scale-95"
-              >
-                <ExternalLink className="w-3 h-3" />
-                Siteyi tarayıcıda aç
-              </button>
-            </div>
+            <button
+              onClick={() => openOutside(room.video_url)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-400 text-cinema-950 text-[10px] font-bold active:scale-95"
+            >
+              <ExternalLink className="w-3 h-3" />
+              Siteyi tarayıcıda aç
+            </button>
           </div>
 
           <div className="w-full max-w-xl px-3 py-2 rounded-2xl bg-cinema-950/90 backdrop-blur-md border border-amber-300/20 text-white shadow-xl pointer-events-auto flex items-center gap-2">
@@ -1026,7 +589,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleStageVideo();
               }}
               rows={1}
-              placeholder="https://www.youtube.com/watch?v=..."
+              placeholder="https://www.fullhdfilmizlesene.now/film/..."
               className="flex-1 px-3 py-1.5 rounded-xl bg-white/10 border border-amber-200/30 text-white text-[11px] resize-none focus:outline-none focus:ring-1 focus:ring-amber-400 placeholder:text-white/40"
             />
             <button
@@ -1035,7 +598,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
               className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-gradient-to-r from-amber-400 to-rose-400 text-cinema-950 text-[11px] font-bold disabled:opacity-60 active:scale-95 shrink-0"
             >
               {stageBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
-              {stageBusy ? 'Sahneye alınıyor…' : 'Sahneye al 🎬'}
+              {stageBusy ? 'Alınıyor…' : 'Perdeye al 🎬'}
             </button>
           </div>
           {stageNote && (
@@ -1076,7 +639,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         </button>
       )}
 
-      {/* Sinema alt barı (YouTube'da gizli: kendi kontrol çubuğu var) */}
+      {/* Sinema alt barı */}
       <div
         className={`absolute inset-x-0 bottom-0 z-20 px-4 pb-3 pt-10 bg-gradient-to-t from-black/90 via-black/50 to-transparent ${
           source === 'youtube' ? 'hidden' : ''
@@ -1115,7 +678,6 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
             {formatTime(currentTime)}
           </span>
 
-          {/* Sürüklerken hedef saniye (hassas sarma göstergesi) */}
           {scrubPreview !== null && (
             <span className="absolute left-1/2 -translate-x-1/2 -top-1 px-2 py-0.5 rounded-full bg-amber-400 text-cinema-950 text-[10px] font-bold tabular-nums shadow-lg pointer-events-none">
               {formatTime(scrubTargetRef.current)}
@@ -1129,10 +691,10 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
               const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
               seekTo(ratio * totalDuration);
             }}
-            onPointerDown={(e) => startScrubbing(e)}
-            onPointerMove={(e) => moveScrubbing(e)}
-            onPointerUp={(e) => endScrubbing(e)}
-            onPointerCancel={() => cancelScrubbing()}
+            onPointerDown={startScrubbing}
+            onPointerMove={moveScrubbing}
+            onPointerUp={endScrubbing}
+            onPointerCancel={cancelScrubbing}
             className="flex-1 h-1.5 rounded-full bg-white/20 overflow-hidden relative touch-none"
             style={{ touchAction: 'none' }}
             title="Sarma"
@@ -1165,7 +727,6 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
           >
             <SkipBack className="w-4 h-4" />
           </button>
-          {/* Video tam ekran: YouTube'un kendi düğmesi var, orada gizli. */}
           {source !== 'youtube' && (
             <button
               onClick={toggleFullscreen}

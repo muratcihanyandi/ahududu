@@ -14,8 +14,8 @@ import { playHaptic, soundEngine, HAPTIC_PATTERNS } from '../services/haptics';
 import { CinemaCalendar } from './CinemaCalendar';
 import { CinemaStage } from './CinemaStage';
 import {
-  PlaybackState, SyncMessage, expectedPosition, clampPosition,
-  shouldCorrect, formatTime, LatencyProbe, looksLikeYouTubeLink,
+  PlaybackState, SyncMessage, clampPosition,
+  formatTime, looksLikeYouTubeLink,
 } from '../services/cinemaSync';
 
 /* ------------------------------------------------------------------ */
@@ -37,7 +37,7 @@ const enterCinemaFullscreen = async (): Promise<boolean> => {
       await NativeOrientation.lockLandscape();
     }
   } catch (e) {
-    console.warn('Yön kilidi uygulanamadı', e);
+    console.warn('YÃ¶n kilidi uygulanamadÄ±', e);
   }
 
   // Chrome / WebView tam ekran API'si
@@ -55,7 +55,7 @@ const enterCinemaFullscreen = async (): Promise<boolean> => {
       return true;
     }
   } catch (e) {
-    console.warn('Tam ekran açılamadı', e);
+    console.warn('Tam ekran aÃ§Ä±lamadÄ±', e);
   }
   return false;
 };
@@ -71,12 +71,12 @@ const exitCinemaFullscreen = async () => {
       await NativeOrientation.unlock();
     }
   } catch (e) {
-    console.warn('Yön kilidi kaldırılamadı', e);
+    console.warn('YÃ¶n kilidi kaldÄ±rÄ±lamadÄ±', e);
   }
 };
 
 /* ------------------------------------------------------------------ */
-/* Yerleşik sinema videosu                                             */
+/* YerleÅŸik sinema videosu                                             */
 /* ------------------------------------------------------------------ */
 
 interface CinemaVideoProps {
@@ -84,18 +84,18 @@ interface CinemaVideoProps {
   roomId: number;
   currentUserId: UserId;
   state: PlaybackState;
-  /** Videoların kendi olayları (yükleme, bitti vb.) — sunucuya yazılmaz. */
+  /** VideolarÄ±n kendi olaylarÄ± (yÃ¼kleme, bitti vb.) â€” sunucuya yazÄ±lmaz. */
   onStateChange: (next: Partial<PlaybackState>) => void;
-  /** Kullanıcı oynat/duraklat düğmesine bastı — sunucuya yazılır. */
+  /** KullanÄ±cÄ± oynat/duraklat dÃ¼ÄŸmesine bastÄ± â€” sunucuya yazÄ±lÄ±r. */
   onUserPlayPause: (shouldPlay: boolean) => void;
-  /** Kullanıcı ileri/geri sardı — sunucuya yazılır. */
+  /** KullanÄ±cÄ± ileri/geri sardÄ± â€” sunucuya yazÄ±lÄ±r. */
   onUserSeek: (position: number) => void;
   onReady?: (duration: number) => void;
 }
 
 /**
- * Salonda oynayan video. Komutları uygular ve beklenen saniyeye göre kendini
- * düzeltir. Duraklatılan video duvar kağıdı gibi arkada bekler, ekran boş kalmaz.
+ * Salonda oynayan video. KomutlarÄ± uygular ve beklenen saniyeye gÃ¶re kendini
+ * dÃ¼zeltir. DuraklatÄ±lan video duvar kaÄŸÄ±dÄ± gibi arkada bekler, ekran boÅŸ kalmaz.
  */
 const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateChange, onUserPlayPause, onUserSeek }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -109,19 +109,19 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
     isPlaying: false,
   });
 
-  // Komut geldiğinde videoyu hizala
+  // Komut geldiğinde videoyu hizala (SADE MODEL: yalnızca komut anında)
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !ready) return;
-    const expected = expectedPosition(state);
+    const target = clampPosition(state.position, state.duration);
     const commandChanged =
       appliedRef.current.anchorMs !== state.anchorMs ||
       appliedRef.current.isPlaying !== state.isPlaying;
 
     if (commandChanged) {
-      if (Math.abs(video.currentTime - expected) > FRAME_SYNC_TOLERANCE) {
+      if (Math.abs(video.currentTime - target) > FRAME_SYNC_TOLERANCE) {
         try {
-          video.currentTime = clampPosition(expected, state.duration);
+          video.currentTime = target;
         } catch {
           /* metadata henüz yoksa yok say */
         }
@@ -133,34 +133,10 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
       }
     }
 
-    appliedRef.current = { position: expected, isPlaying: state.isPlaying, anchorMs: state.anchorMs };
+    appliedRef.current = { position: target, isPlaying: state.isPlaying, anchorMs: state.anchorMs };
   }, [state, ready]);
 
-  // Oynarken sapma düzeltmesi + hazır olmayan videoyu başlatma
-  useEffect(() => {
-    if (!ready) return;
-    const video = videoRef.current;
-    if (!video) return;
-    if (state.isPlaying && video.paused) {
-      video.play().catch(() => setMuted(true));
-    } else if (!state.isPlaying && !video.paused) {
-      video.pause();
-    }
-  }, [ready, state.isPlaying, state.anchorMs]);
-
-  // Oynarken sapma düzeltmesi
-  useEffect(() => {
-    if (!state.isPlaying) return;
-    const timer = window.setInterval(() => {
-      const video = videoRef.current;
-      if (!video || video.paused) return;
-      const expected = expectedPosition(state);
-      if (shouldCorrect(video.currentTime, expected)) {
-        video.currentTime = clampPosition(expected, state.duration);
-      }
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, [state]);
+  // Oynarken sapma düzeltmesi YOK (SADE MODEL).
 
   const handleLoaded = () => {
     setReady(true);
@@ -169,15 +145,13 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
       const dur = video.duration || 0;
       durationRef.current = dur;
       setDuration(dur);
-      // Video yüklenirken film ilerlemiş olabilir. Oynuyorsa, "şu an" beklenen
-      // saniyeden başla (state.anchorMs ile hesap edilen gerçek zaman).
-      video.currentTime = clampPosition(expectedPosition(state), state.duration || dur);
+      video.currentTime = clampPosition(state.position, state.duration || dur);
       if (state.isPlaying) video.play().catch(() => setMuted(true));
       if (dur > 0) onReady?.(dur);
     }
   };
 
-  // Kapanış değeri yerine ref: timeupdate her zaman güncel süreyi göndersin.
+  // KapanÄ±ÅŸ deÄŸeri yerine ref: timeupdate her zaman gÃ¼ncel sÃ¼reyi gÃ¶ndersin.
   const durationRef = useRef(0);
 
   const handleTimeUpdate = () => {
@@ -193,7 +167,7 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
   };
 
   const togglePlay = () => {
-    // Kullanıcı düğmeye bastı: bu bilinçli bir komuttur, sunucuya yazılır.
+    // KullanÄ±cÄ± dÃ¼ÄŸmeye bastÄ±: bu bilinÃ§li bir komuttur, sunucuya yazÄ±lÄ±r.
     onUserPlayPause(!state.isPlaying);
   };
 
@@ -220,7 +194,7 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
         onLoadedMetadata={handleLoaded}
         onTimeUpdate={handleTimeUpdate}
         onEnded={() => onStateChange({ isPlaying: false, position: 0 })}
-        onError={() => setError('Bu video salonun perdesinde açılamadı 🎬')}
+        onError={() => setError('Bu video salonun perdesinde aÃ§Ä±lamadÄ± ğŸ¬')}
         muted={muted}
       />
 
@@ -228,7 +202,7 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-cinema-950/70">
           <Loader2 className="w-10 h-10 text-amber-300 animate-spin" />
           <p className="text-amber-100/80 text-xs font-semibold tracking-[0.2em] uppercase">
-            Perde hazırlanıyor
+            Perde hazÄ±rlanÄ±yor
           </p>
         </div>
       )}
@@ -238,12 +212,12 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
           <Film className="w-12 h-12 text-rose-300/70" />
           <p className="text-white font-serif text-base">{error}</p>
           <p className="text-white/50 text-[11px]">
-            Bağlantıyı kontrol et ya da başka bir video seç
+            BaÄŸlantÄ±yÄ± kontrol et ya da baÅŸka bir video seÃ§
           </p>
         </div>
       )}
 
-      {/* Sinema alt barı */}
+      {/* Sinema alt barÄ± */}
       <div className="absolute inset-x-0 bottom-0 z-20 px-4 pb-3 pt-10 bg-gradient-to-t from-black/90 via-black/50 to-transparent">
         <div className="flex items-center gap-3 max-w-3xl mx-auto">
           <button
@@ -296,7 +270,7 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
               playHaptic(12);
             }}
             className="p-2 rounded-full text-white/85 hover:text-white"
-            title={muted ? 'Sesi aç' : 'Sesi kapat'}
+            title={muted ? 'Sesi aÃ§' : 'Sesi kapat'}
           >
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
@@ -306,7 +280,7 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
               seekBy(-(videoRef.current?.currentTime ?? 0));
             }}
             className="p-2 rounded-full text-white/60 hover:text-white"
-            title="Baştan başlat"
+            title="BaÅŸtan baÅŸlat"
           >
             <SkipBack className="w-4 h-4" />
           </button>
@@ -316,7 +290,7 @@ const CinemaVideo: React.FC<CinemaVideoProps> = ({ url, state, onReady, onStateC
   );
 };
 
-// Komut anında perdeye gömülen videoda kabul edilen küçük tolerans (saniye)
+// Komut anÄ±nda perdeye gÃ¶mÃ¼len videoda kabul edilen kÃ¼Ã§Ã¼k tolerans (saniye)
 const FRAME_SYNC_TOLERANCE = 0.4;
 
 /* ------------------------------------------------------------------ */
@@ -347,7 +321,7 @@ const SalonDecor: React.FC<{ playing: boolean }> = ({ playing }) => (
       }}
     />
 
-    {/* Üst perde (açılırken yukarı çekilmiş gibi) */}
+    {/* Ãœst perde (aÃ§Ä±lÄ±rken yukarÄ± Ã§ekilmiÅŸ gibi) */}
     <div
       className="absolute inset-x-0 top-0 h-[10%] z-10"
       style={{
@@ -356,7 +330,7 @@ const SalonDecor: React.FC<{ playing: boolean }> = ({ playing }) => (
       }}
     />
 
-    {/* Projektör ışığı */}
+    {/* ProjektÃ¶r Ä±ÅŸÄ±ÄŸÄ± */}
     <div
       className="absolute left-1/2 top-[-20%] w-[70%] h-[140%] -translate-x-1/2 z-[5] pointer-events-none"
       style={{
@@ -369,7 +343,7 @@ const SalonDecor: React.FC<{ playing: boolean }> = ({ playing }) => (
       }}
     />
 
-    {/* Sahne kenarı ışıkları */}
+    {/* Sahne kenarÄ± Ä±ÅŸÄ±klarÄ± */}
     <div className="absolute inset-x-0 bottom-0 h-16 z-[6] pointer-events-none opacity-70"
       style={{
         background:
@@ -377,7 +351,7 @@ const SalonDecor: React.FC<{ playing: boolean }> = ({ playing }) => (
       }}
     />
 
-    {/* Koltuklar: alt sıra siluetleri */}
+    {/* Koltuklar: alt sÄ±ra siluetleri */}
     <div className="absolute inset-x-0 bottom-0 h-[14%] z-[7] pointer-events-none flex items-end justify-center gap-1 px-6">
       {Array.from({ length: 14 }).map((_, i) => (
         <div
@@ -398,7 +372,7 @@ const SalonDecor: React.FC<{ playing: boolean }> = ({ playing }) => (
 );
 
 /* ------------------------------------------------------------------ */
-/* Karakterlerimiz — sinema koltuklarında oturur                       */
+/* Karakterlerimiz â€” sinema koltuklarÄ±nda oturur                       */
 /* ------------------------------------------------------------------ */
 
 const CharacterSeat: React.FC<{
@@ -411,16 +385,16 @@ const CharacterSeat: React.FC<{
   const user = USERS[userId];
   return (
     <div className={`relative flex flex-col items-center ${isMe ? 'order-1' : 'order-3'}`}>
-      {/* Popcorn / içecek */}
+      {/* Popcorn / iÃ§ecek */}
       <div className="mb-1 flex items-end gap-1">
         <span
           className="text-lg"
           style={{ animation: playing ? 'popIn 0.6s ease' : undefined }}
-          title="Mısır"
+          title="MÄ±sÄ±r"
         >
-          🍿
+          ğŸ¿
         </span>
-        <span className="text-sm" title="İçecek">🥤</span>
+        <span className="text-sm" title="Ä°Ã§ecek">ğŸ¥¤</span>
       </div>
 
       {/* Koltuk + karakter */}
@@ -458,14 +432,14 @@ const CharacterSeat: React.FC<{
         </span>
       </div>
       <span className={`text-[8px] mt-0.5 ${isWatching ? 'text-emerald-300' : 'text-white/40'}`}>
-        {isWatching ? 'salonda 🍿' : 'salonda değil'}
+        {isWatching ? 'salonda ğŸ¿' : 'salonda deÄŸil'}
       </span>
     </div>
   );
 };
 
 /* ------------------------------------------------------------------ */
-/* Afiş kartı                                                          */
+/* AfiÅŸ kartÄ±                                                          */
 /* ------------------------------------------------------------------ */
 
 const PosterCard: React.FC<{
@@ -493,7 +467,7 @@ const PosterCard: React.FC<{
       <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/40" />
       {isActive && (
         <span className="absolute top-2 left-2 text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400 text-cinema-950">
-          ŞİMDİ OYNUYOR
+          ÅÄ°MDÄ° OYNUYOR
         </span>
       )}
       <span className="absolute top-2 right-2 text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-black/60 text-amber-200">
@@ -514,12 +488,12 @@ const PosterCard: React.FC<{
         className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-xl bg-gradient-to-r from-amber-400 to-rose-400 text-cinema-950 text-[10px] font-bold active:scale-95"
       >
         <Play className="w-3 h-3" />
-        İzle
+        Ä°zle
       </button>
       <button
         onClick={onDelete}
         className="p-1.5 rounded-xl bg-white/10 text-rose-300 active:scale-90"
-        title="Afişi kaldır"
+        title="AfiÅŸi kaldÄ±r"
       >
         <Trash2 className="w-3 h-3" />
       </button>
@@ -528,20 +502,20 @@ const PosterCard: React.FC<{
 );
 
 /* ------------------------------------------------------------------ */
-/* Ana bileşen                                                         */
+/* Ana bileÅŸen                                                         */
 /* ------------------------------------------------------------------ */
 
-/** Partnerin başlattığı filme kendiliğinden girme için en fazla süre. */
+/** Partnerin baÅŸlattÄ±ÄŸÄ± filme kendiliÄŸinden girme iÃ§in en fazla sÃ¼re. */
 const AUTO_ENTER_MAX_AGE_MS = 2 * 60 * 60 * 1000;
-/** Oynatma süresi bilinmiyorsa "film bitti mi?" hesabında kullanılan varsayılan. */
+/** Oynatma sÃ¼resi bilinmiyorsa "film bitti mi?" hesabÄ±nda kullanÄ±lan varsayÄ±lan. */
 const DEFAULT_FILM_SECONDS = 2.5 * 60 * 60;
-/** Süre bilinmiyorsa: bu kadar ilerlediyse film bitmiş sayılır (2.5 sa − 45 sn). */
+/** SÃ¼re bilinmiyorsa: bu kadar ilerlediyse film bitmiÅŸ sayÄ±lÄ±r (2.5 sa âˆ’ 45 sn). */
 const END_TOLERANCE_SECONDS = 45;
 /**
- * Partnerin kalp atışı ile bildirdiği saniye bizden bu kadar ileriyse ona
- * yetişiriz (geç katılan tarafın gecikmesini kapatır). Daha küçük farklarda
- * dokunmuyoruz: kalp atışı 2 saniyede bir geldiği için küçük farklar zaten
- * senkron motorunun toleransı içinde.
+ * Partnerin kalp atÄ±ÅŸÄ± ile bildirdiÄŸi saniye bizden bu kadar ileriyse ona
+ * yetiÅŸiriz (geÃ§ katÄ±lan tarafÄ±n gecikmesini kapatÄ±r). Daha kÃ¼Ã§Ã¼k farklarda
+ * dokunmuyoruz: kalp atÄ±ÅŸÄ± 2 saniyede bir geldiÄŸi iÃ§in kÃ¼Ã§Ã¼k farklar zaten
+ * senkron motorunun toleransÄ± iÃ§inde.
  */
 const HEARTBEAT_CATCHUP_SECONDS = 1.5;
 
@@ -550,25 +524,19 @@ const HEARTBEAT_CATCHUP_SECONDS = 1.5;
  *
  * Süre GERÇEKTEN biliniyorsa bitişe çok az kalmış olmalı (son 1 saniye).
  * Yoksa 1 dakikalık bir video 15. saniyede "bitti" sayılıp salon kapanıyordu.
- * Süre bilinmiyorsa 2.5 saatlik varsayıma göre 45 saniyelik pay kullanılır.
+ * Süre bilinmiyorsa bitmiş SAYILMAZ.
  */
-const isFilmFinished = (next: Partial<PlaybackState>, durationGuess?: number): boolean => {
-  const position = next.position ?? 0;
-  const knownDuration = next.duration && next.duration > 0
-    ? next.duration
-    : (durationGuess && durationGuess > 0 ? durationGuess : 0);
-  if (knownDuration > 0) {
-    const tail = Math.min(END_TOLERANCE_SECONDS, Math.max(1, knownDuration * 0.02));
-    return position >= knownDuration - tail;
-  }
-  return position >= DEFAULT_FILM_SECONDS - END_TOLERANCE_SECONDS;
+const isFilmFinished = (position: number, duration: number): boolean => {
+  if (!(duration > 0) || !Number.isFinite(position)) return false;
+  const tail = Math.min(END_TOLERANCE_SECONDS, Math.max(1, duration * 0.02));
+  return position >= duration - tail;
 };
 
 interface CinemaSalonProps {
   currentUserId: UserId;
   /**
-   * Android geri tuşu için iç handler. Salon açıkken "geri" tuşu önce filmden
-   * çıkarır; App bu fonksiyonu çağırır.
+   * Android geri tuÅŸu iÃ§in iÃ§ handler. Salon aÃ§Ä±kken "geri" tuÅŸu Ã¶nce filmden
+   * Ã§Ä±karÄ±r; App bu fonksiyonu Ã§aÄŸÄ±rÄ±r.
    */
   onBackHandlerReady?: (handler: (() => boolean) | null) => void;
 }
@@ -589,21 +557,20 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
   const [floatingEmojis, setFloatingEmojis] = useState<{ id: number; emoji: string; left: number }[]>([]);
   const [partnerJustJoined, setPartnerJustJoined] = useState(false);
   const [curtainOpen, setCurtainOpen] = useState(false);
-  /** Takvim: yalnızca "Takvimi Gör" / "Takvimi Gizle" ile açılıp kapanır.
-   *  "Bu ayın perdesi" kartı ise HER ZAMAN görünür (görev 5). */
+  /** Takvim: yalnÄ±zca "Takvimi GÃ¶r" / "Takvimi Gizle" ile aÃ§Ä±lÄ±p kapanÄ±r.
+   *  "Bu ayÄ±n perdesi" kartÄ± ise HER ZAMAN gÃ¶rÃ¼nÃ¼r (gÃ¶rev 5). */
   const [showCalendar, setShowCalendar] = useState(false);
-  /** Salona giriş sürerken çift dokunuşu yut: aynı anda iki "başlat" gitmesin. */
+  /** Salona giriÅŸ sÃ¼rerken Ã§ift dokunuÅŸu yut: aynÄ± anda iki "baÅŸlat" gitmesin. */
   const enteringRef = useRef(false);
   /**
-   * Geç katılım kapısı: salona yeni girildi, bir kez partnerin saniyesine
-   * yetişebiliriz. Yetiştikten (ya da ilk kontrolden) sonra false olur ve
-   * film oynarken bir daha sarma yapılmaz — mikro takılma olmasın.
+   * SADE MODEL: film yÃ¼klendi ama partner de hazÄ±r deÄŸil; iki cihaz birlikte
+   * baÅŸlayacak. Bu sÄ±rada kullanÄ±cÄ±ya "bekleniyor" gÃ¶sterilir.
    */
-  const lateJoinCatchupRef = useRef(false);
-  /** Bu oturumda uğraştığımız salon: kendiliğinden açılan film kullanıcıyı
-   *  tekrar içeri sürüklemesin ("Cars 1 takılı kaldı" hatası). */
+  const [waitingPartner, setWaitingPartner] = useState(false);
+  /** Bu oturumda uÄŸraÅŸtÄ±ÄŸÄ±mÄ±z salon: kendiliÄŸinden aÃ§Ä±lan film kullanÄ±cÄ±yÄ±
+   *  tekrar iÃ§eri sÃ¼rÃ¼klemesin ("Cars 1 takÄ±lÄ± kaldÄ±" hatasÄ±). */
   const lastRoomRef = useRef<number | null>(null);
-  /** Partner bir film başlattıysa: "Katıl" daveti (zorla giriş yok) */
+  /** Partner bir film baÅŸlattÄ±ysa: "KatÄ±l" daveti (zorla giriÅŸ yok) */
   const [partnerSession, setPartnerSession] = useState<{
     roomId: number;
     title: string;
@@ -615,8 +582,6 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     isPlaying: false,
     duration: 0,
   });
-  /** Ağ gecikmesi (ms): ping/pong turuyla ölçülür, senkron telafisinde kullanılır. */
-  const latencyMsRef = useRef(120);
 
   const lastSyncRef = useRef<number>(0);
   const roomRef = useRef<CinemaRoom | null>(null);
@@ -624,7 +589,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
   const playbackRef = useRef<PlaybackState>(playback);
   playbackRef.current = playback;
 
-  /* ---------------- Yön algılama ---------------- */
+  /* ---------------- YÃ¶n algÄ±lama ---------------- */
   useEffect(() => {
     const onResize = () => setIsLandscape(window.innerWidth > window.innerHeight);
     const onOrient = () => window.setTimeout(onResize, 220);
@@ -643,69 +608,34 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     return () => updates.setBusy(false);
   }, [activeRoom]);
 
-  /* ---------------- Afiş listesi ---------------- */
+  /* ---------------- AfiÅŸ listesi ---------------- */
   const loadRooms = useCallback(async () => {
     setIsLoading(true);
     try {
       const data = await api.listCinemaRooms();
       setRooms(Array.isArray(data) ? data : []);
     } catch (e) {
-      console.error('Salonlar yüklenemedi', e);
+      console.error('Salonlar yÃ¼klenemedi', e);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  /** Sunucudaki filmi kendiliğinden açma kararı:
-   *  - Yalnızca partner başlattıysa (kendi bıraktığımız film bizi içeri sokmaz),
-   *  - film gerçekten oynuyorsa,
-   *  - "başlatma" taze ise (2 saatten eski bir hayalet kayıt yok sayılır).
-   *  Böylece takılı kalan bir salon uygulama her açılışında ekranı ele geçirmez. */
-  const shouldAutoEnter = (room: CinemaRoom | null): boolean => {
-    if (!room?.is_active || !room.is_playing) return false;
-    if (!room.updated_by || room.updated_by === currentUserId) return false;
-    if (lastRoomRef.current === room.id) return false;
-    const stamp = room.updated_at || room.last_seen_at;
-    if (stamp) {
-      const ageMs = Date.now() - new Date(stamp).getTime();
-      if (Number.isFinite(ageMs) && ageMs > AUTO_ENTER_MAX_AGE_MS) return false;
-    }
-    return true;
-  };
+  /** Otomatik salona girme YOK (kullanıcı isteğiyle kaldırıldı). */
 
   useEffect(() => {
+    // OTOMATİK SALONA GİRME YOK (bilerek kaldırıldı).
+    // Kullanıcı: "film başladığında otomatik salona girme işini iptal edelim.
+    // Herkes kendisi salona girsin, kendisi kontrol etsin. Sadece bildirim
+    // versek yeter" — bildirim App tarafında yapılıyor.
     loadRooms();
-    // Sadece partnerin TAZE başlattığı film için salona gir.
-    api
-      .getCurrentCinemaRoom()
-      .then((room) => {
-        if (room && shouldAutoEnter(room)) {
-          void enterRoom(room, {
-            position: room.position || 0,
-            is_playing: room.is_playing,
-            duration: room.duration || 0,
-          }, true);
-        }
-      })
-      .catch(() => {});
-  }, [loadRooms, currentUserId]);
+  }, [loadRooms]);
 
-  /* ---------------- Ağ gecikmesi ölçümü (RTT/2 telafisi) ---------------- */
-  useEffect(() => {
-    const probe = new LatencyProbe((message) => wsClient.send(message));
-    const offPong = wsClient.on('pong', () => {
-      const rtt = probe.pong();
-      if (rtt !== null) latencyMsRef.current = probe.latencyMs;
-    });
-    probe.ping();
-    const timer = window.setInterval(() => probe.ping(), 15000);
-    return () => {
-      window.clearInterval(timer);
-      offPong();
-    };
-  }, []);
-
-  /* ---------------- WebSocket senkronizasyonu ---------------- */
+  /* ---------------- WebSocket olaylarÄ± (SADE MODEL) ---------------- */
+  //
+  // Oynarken SENKRON YOK. Sunucudan yalnÄ±zca sonlu olaylar gelir:
+  //   cinema_play  â†’ iki cihaz da hazÄ±r: AYNI ANDA baÅŸla
+  //   cinema_sync  â†’ play / pause / seek komutu
   useEffect(() => {
     const unsubSync = wsClient.on('cinema_sync', (data: SyncMessage) => {
       if (!data) return;
@@ -716,7 +646,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
         return;
       }
 
-      // Partner salondan çıktı: salon KAPANIR, kimse takılı kalmaz.
+      // Partner salondan Ã§Ä±ktÄ±: salon KAPANIR, kimse takÄ±lÄ± kalmaz.
       if (data.action === 'leave' && data.is_active === false) {
         if (room && room.id === data.room_id) {
           void leaveRoom(false);
@@ -726,28 +656,65 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
         return;
       }
 
-      // Salona başkası girdi/oynatma komutu geldi ama biz lobideyiz:
-      // Zorla içeri girmeyiz ("Cars 1 takıldı" hatası), yalnızca afişleri
-      // ve otomatik açılabilir oturumu tazeleriz.
       if (!room || room.id !== data.room_id) {
         if (data.is_active) loadRooms();
         return;
       }
 
-      if (data.updated_by === currentUserId) return; // kendi komutumuz
+      // ---- SALONA SONRADAN GİREN: TEK SEFERLİK SENKRON ----
+      // Murat 11:00'da izliyordu; Selin odaya girdi. Sunucu Murat'ın saniyesini
+      // esas aldı: İKİSİ DE o saniyeye hizalanır ve birlikte devam eder.
+      if (data.action === 'join_sync') {
+        setPlayback((prev) => ({
+          ...prev,
+          position: data.position,
+          isPlaying: true,
+          duration: data.duration || prev.duration,
+          anchorMs: Date.now(),
+        }));
+        return;
+      }
 
-      setPlayback({
-        position: data.position,
-        isPlaying: data.is_playing,
-        duration: data.duration || room.duration || 0,
-        anchorMs: Date.now(),
-        updatedBy: data.updated_by,
-      });
+      // ---- Başlatma / oynatma / duraklatma / sarma ----
+      // `play` ve `pause` KENDÄ° komutumuzda da uygulanÄ±r: sunucu "geride olan"
+      // saniyesini seÃ§ip geri gÃ¶nderir, iki cihaz da ona hizalanÄ±r.
+      const isPlayCommand = data.action === 'play' || data.updated_by === currentUserId;
+      if (data.action === 'play' || data.action === 'pause' || data.action === 'seek') {
+        if (data.updated_by === currentUserId && data.action !== 'play') {
+          // Kendi duraklatma/sarma komutumuz: oynatÄ±cÄ±ya zaten uygulandÄ±.
+          return;
+        }
+        if (isPlayCommand || data.action === 'pause') {
+          setPlayback({
+            position: data.position,
+            isPlaying: data.is_playing,
+            duration: data.duration || room.duration || 0,
+            anchorMs: Date.now(),
+            updatedBy: data.updated_by,
+          });
+        }
+        return;
+      }
+
+      if (data.updated_by === currentUserId) return;
     });
 
-    // Sunucuda bir film "başlatıldı": filmi BEN başlatmadıysam kendiliğinden
-    // salona girmem. Otomatik giriş yalnızca sunucu tarafında seansı açan
-    // kişi için geçerlidir; karşı taraf "Katıl" davetini görür.
+    // ---- Ä°KÄ°SÄ° DE HAZIR: film AYNI ANDA baÅŸlar ----
+    const unsubPlay = wsClient.on('cinema_play', (data: any) => {
+      const room = roomRef.current;
+      if (!room || room.id !== data?.room_id) return;
+      setPlayback({
+        position: Number(data.position) || 0,
+        isPlaying: true,
+        duration: room.duration || 0,
+        anchorMs: Date.now(),
+      });
+      setWaitingPartner(false);
+    });
+
+    // Sunucuda bir film "baÅŸlatÄ±ldÄ±": filmi BEN baÅŸlatmadÄ±ysam kendiliÄŸinden
+    // salona girmem. Otomatik giriÅŸ yalnÄ±zca sunucu tarafÄ±nda seansÄ± aÃ§an
+    // kiÅŸi iÃ§in geÃ§erlidir; karÅŸÄ± taraf "KatÄ±l" davetini gÃ¶rÃ¼r.
     const unsubStarted = wsClient.on('cinema_started', (data: any) => {
       if (!data?.room) return;
       if (data.started_by === currentUserId) {
@@ -755,15 +722,16 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
           data.room as CinemaRoom,
           {
             position: data.room.position || 0,
-            is_playing: true,
+            // SADE MODEL: film HENÃœZ oynamÄ±yor. Ä°ki cihaz da hazÄ±r olunca
+            // `cinema_play` gelir ve ikisi AYNI ANDA baÅŸlar.
+            is_playing: false,
             duration: data.room.duration || 0,
           },
           false
         );
         return;
       }
-      // Partner film başlattı: SADECE bilgi ver, kullanıcıyı salona sürükleme.
-      // Kullanıcı "Katıl" düğmesine bastığında salona girer ve aynı saniyeden devam eder.
+      // Partner film baÅŸlattÄ±: SADECE bilgi ver, kullanÄ±cÄ±yÄ± salona sÃ¼rÃ¼kleme.
       soundEngine.playLoveChime();
       playHaptic(HAPTIC_PATTERNS.butterfly);
       setPartnerSession({
@@ -776,7 +744,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     const unsubCreated = wsClient.on('cinema_room_created', () => loadRooms());
     const unsubDeleted = wsClient.on('cinema_room_deleted', (data: any) => {
       loadRooms();
-      // Silinen film şu an perdedeyse perdeyi kapat: hayalet salon kalmasın.
+      // Silinen film ÅŸu an perdedeyse perdeyi kapat: hayalet salon kalmasÄ±n.
       if (data?.room_id && roomRef.current?.id === data.room_id) {
         void leaveRoom(false);
       }
@@ -794,64 +762,52 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
 
     const unsubReaction = wsClient.on('cinema_reaction', (data: any) => {
       if (data?.sender === currentUserId) return;
-      addFloatingEmoji(data.emoji || '❤️');
+      addFloatingEmoji(data.emoji || 'â¤ï¸');
     });
 
+    // ---- Salona biri girdi: CANLI konumumuzu bildir (tek tur) ----
+    // Murat 11:00'da izliyor, Selin odaya giriyor. Sunucu Murat'a "şu an
+    // kaçıncı saniyedesin?" diye sorar; Murat BİR KEZ cevap verir. Sunucu
+    // ikisini de o saniyeye hizalar. Sürekli bildirim YOK.
+    const unsubPosReq = wsClient.on('cinema_position_request', (data: any) => {
+      const room = roomRef.current;
+      if (!room || room.id !== data?.room_id) return;
+      const video = document.querySelector('video') as HTMLVideoElement | null;
+      const pos = video && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      wsClient.send({
+        type: 'cinema_position_reply',
+        room_id: room.id,
+        position: pos,
+      });
+    });
+
+    // ---- Partner kalp atışı: SADECE "salonda" rozeti ----
     const unsubHeartbeat = wsClient.on('cinema_heartbeat', (data: any) => {
       if (data?.user_id !== partnerId) return;
-      // Partner oynatıyor: "salonda" rozetini tazele.
       setPartnerWatching(true);
-
-      // ---- Geç katılan tarafın gecikmesini kapat ----
-      // Partner her 2 saniyede o anki saniyesini bildirir. Biz belirgin şekilde
-      // GERİDEYSEK (salona sonradan girdiğimiz için sunucudaki konum eskiydi)
-      // onun saniyesine yetişiriz. İLERİDEYSEK hiç dokunmayız: yoksa iki taraf
-      // birbirini geriye çeker ve senkron hiç oturmaz.
-      const room = roomRef.current;
-      if (!room || room.id !== data.room_id) return;
-      if (!data.is_playing || data.position == null) return;
-      const partnerPosition =
-        Number(data.position) + latencyMsRef.current / 2 / 1000;
-      if (!Number.isFinite(partnerPosition)) return;
-
-      setPlayback((prev) => {
-        if (!prev.isPlaying) return prev;
-        const ours = expectedPosition(prev);
-        // ÖNEMLİ: Film oynarken partnerin saniyesine yetişmeye ÇALIŞMA.
-        // Bu, sürekli mikro sarma yapıp videoyu takıyordu. Yetişme yalnızca
-        // salona YENİ girildiğinde (aşağıdaki late-join kapısı) yapılır.
-        if (!lateJoinCatchupRef.current) return prev;
-        if (partnerPosition - ours <= HEARTBEAT_CATCHUP_SECONDS) {
-          lateJoinCatchupRef.current = false;
-          return prev;
-        }
-        return {
-          ...prev,
-          position: partnerPosition,
-          anchorMs: Date.now(),
-        };
-      });
     });
 
     return () => {
       unsubSync();
+      unsubPlay();
       unsubStarted();
       unsubCreated();
       unsubDeleted();
       unsubPresence();
       unsubReaction();
+      unsubPosReq();
       unsubHeartbeat();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUserId, partnerId, loadRooms]);
 
-  /* ---------------- Salona gir / çık ---------------- */
+  /* ---------------- Salona gir / Ã§Ä±k ---------------- */
   /**
-   * Salona girer. İki yerde kullanılır:
-   *   - Kullanıcı "Salona Gir"e bastı (startWatch → sunucu oda döndürür),
-   *   - partner film başlattı ve "Katıl"a bastı.
-   * Geri tuşu handler'ı bu fonksiyonu referans tuttuğu için tanım sırası
-   * önemlidir: `leaveRoom` yukarıda, `enterRoom` hemen altında tanımlıdır.
+   * Salona girer. Ä°ki yerde kullanÄ±lÄ±r:
+   *   - KullanÄ±cÄ± "Salona Gir"e bastÄ± (startWatch â†’ sunucu oda dÃ¶ndÃ¼rÃ¼r),
+   *   - partner film baÅŸlattÄ± ve "KatÄ±l"a bastÄ±.
+   * Geri tuÅŸu handler'Ä± bu fonksiyonu referans tuttuÄŸu iÃ§in tanÄ±m sÄ±rasÄ±
+   * Ã¶nemlidir: `leaveRoom` yukarÄ±da, `enterRoom` hemen altÄ±nda tanÄ±mlÄ±dÄ±r.
    */
   const enterRoom = async (room: CinemaRoom, state: any, isRemoteStart: boolean) => {
     if (enteringRef.current) return;
@@ -859,30 +815,22 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     lastRoomRef.current = room.id;
 
     setActiveRoom(room);
-    // Film şu anda oynuyorsa, sunucudaki konum "2 saniye önce" kaydedilmiştir.
-    // Aradan geçen süreyi ekleyerek gerçek anı yakalarız; böylece yeni giren
-    // taraf partnerin bulunduğu saniyeden başlar.
-    const basePosition = state?.position ?? room.position ?? 0;
+    // SADE MODEL: salon aÃ§Ä±ldÄ±ÄŸÄ±nda film HENÃœZ oynamaz (yÃ¼kleme ekranÄ±).
+    // Ä°ki cihaz da oynatÄ±cÄ±sÄ±nÄ± hazÄ±rlayÄ±nca sunucu `cinema_play` yayÄ±nlar ve
+    // ikisi AYNI ANDA baÅŸlar.
+    const startsNow =
+      Boolean(state?.is_playing ?? room.is_playing) && !Boolean(state?.fresh_start);
     setPlayback({
-      position: basePosition,
-      isPlaying: state?.is_playing ?? room.is_playing ?? false,
+      position: state?.position ?? room.position ?? 0,
+      isPlaying: startsNow,
       duration: state?.duration ?? room.duration ?? 0,
-      // anchorMs = "bu saniye hangi anda geçerliydi". Sunucudaki konum güncel
-      // sayılır; aradaki 2 saniyelik kalp atışı gecikmesi, partnerden gelen
-      // `cinema_heartbeat` ile kendiliğinden kapatılır.
       anchorMs: Date.now(),
     });
+    setWaitingPartner(!startsNow && Boolean(state?.wait_for_ready));
     setCurtainOpen(false);
     window.setTimeout(() => setCurtainOpen(true), 60);
 
-    // Geç katılım: bir kez partnerin saniyesine yetişebiliriz (6 sn pencere).
-    // Sonrasında film oynarken sarma yapılmaz.
-    lateJoinCatchupRef.current = true;
-    window.setTimeout(() => {
-      lateJoinCatchupRef.current = false;
-    }, 6000);
-
-    // Yön + tam ekran
+    // YÃ¶n + tam ekran
     await enterCinemaFullscreen();
     try {
       if (Capacitor.isNativePlatform()) {
@@ -893,7 +841,15 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     }
 
     wsClient.send({ type: 'cinema_presence', room_id: room.id, is_watching: true, title: room.title });
-    api.controlCinemaRoom(room.id, { user_id: currentUserId, action: 'join' }).catch(() => {});
+    // Salona giriş: kendi konumumuzu bildir. Sunucu, salonda ZATEN oynayan
+    // tarafın saniyesini esas alıp ikisini de oraya hizalar (tek seferlik).
+    api
+      .controlCinemaRoom(room.id, {
+        user_id: currentUserId,
+        action: 'join',
+        position: 0,
+      })
+      .catch(() => {});
     playHaptic(isRemoteStart ? HAPTIC_PATTERNS.attention : 25);
     enteringRef.current = false;
   };
@@ -905,8 +861,8 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     setPlayback({ position: 0, isPlaying: false, duration: 0 });
     setPartnerWatching(false);
 
-    // Salondan çıkışta partnerin ekranı ANINDA güncellensin: WS açık olsun
-    // olmasın, HTTP ile de bildir. WS kopsa bile durum takılı kalmasın.
+    // Salondan Ã§Ä±kÄ±ÅŸta partnerin ekranÄ± ANINDA gÃ¼ncellensin: WS aÃ§Ä±k olsun
+    // olmasÄ±n, HTTP ile de bildir. WS kopsa bile durum takÄ±lÄ± kalmasÄ±n.
     if (room) {
       wsClient.send({ type: 'cinema_presence', room_id: room.id, is_watching: false });
       if (broadcastLeave) {
@@ -929,7 +885,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     }
   };
 
-  // Android geri tuşu: salon açıksa önce filmden çık (App bu fonksiyonu çağırır).
+  // Android geri tuÅŸu: salon aÃ§Ä±ksa Ã¶nce filmden Ã§Ä±k (App bu fonksiyonu Ã§aÄŸÄ±rÄ±r).
   useEffect(() => {
     if (!onBackHandlerReady) return;
     onBackHandlerReady(() => {
@@ -941,8 +897,8 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
   }, [onBackHandlerReady]);
 
   /**
-   * Bileşen söküldüğünde (sekme değişimi, uygulama kapanışı) salonda kalma
-   * durumunu temizle. Aksi halde partner "hâlâ sinemada" görür.
+   * BileÅŸen sÃ¶kÃ¼ldÃ¼ÄŸÃ¼nde (sekme deÄŸiÅŸimi, uygulama kapanÄ±ÅŸÄ±) salonda kalma
+   * durumunu temizle. Aksi halde partner "hÃ¢lÃ¢ sinemada" gÃ¶rÃ¼r.
    */
   useEffect(() => {
     return () => {
@@ -958,18 +914,48 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     if (enteringRef.current) return;
     playHaptic(30);
     try {
+      // ---- Salonda ZATEN oynayan bir film var mı? ----
+      // Varsa `start` ÇAĞIRMA: `start` filmi sıfırlar ve karşı tarafın
+      // filmini durdururdu. Bunun yerine doğrudan salona gir; giriş
+      // senkronu (`join`) ikisini de oynayan tarafın saniyesine hizalar.
+      const live = await api.getCurrentCinemaRoom();
+      const alreadyPlaying =
+        live && live.id === room.id && live.is_playing && live.updated_by !== currentUserId;
+
+      if (alreadyPlaying) {
+        await enterRoom(
+          live,
+          {
+            position: live.position || 0,
+            is_playing: true,
+            duration: live.duration || 0,
+          },
+          false
+        );
+        return;
+      }
+
       const started = await api.startCinemaRoom(room.id, currentUserId);
+      // SADE MODEL: film HENÜZ başlamaz. İki cihaz da oynatıcısını hazırlar,
+      // sonra sunucu `cinema_play` yayınlar ve ikisi AYNI ANDA başlar.
       await enterRoom(started, {
         position: 0,
-        is_playing: true,
+        is_playing: false,
+        wait_for_ready: true,
         duration: 0,
       }, false);
+      setWaitingPartner(true);
     } catch (e) {
       console.error(e);
     }
   };
 
-  /* ---------------- Oynatma komutlarını yayınla ---------------- */
+  /* ---------------- Oynat / duraklat / sarma yayınla ---------------- */
+  //
+  // SADE MODEL: her komut sunucuya gider.
+  //   - `pause`: ikisi de durur.
+  //   - `play` : sunucu GERİDE OLANIN saniyesini seçer ve geri gönderir;
+  //              iki cihaz da o saniyeye hizalanır.
   const broadcastPlayback = useCallback(
     (next: Partial<PlaybackState>, action: 'play' | 'pause' | 'seek') => {
       const room = roomRef.current;
@@ -978,7 +964,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
       const merged: PlaybackState = { ...playback, ...next, anchorMs: Date.now() };
       setPlayback(merged);
 
-      // Aynı anda iki istek gitmesin
+      // Sarma için çok hızlı tekrar istekleri birleştir.
       const now = Date.now();
       if (action === 'seek' && now - lastSyncRef.current < 220) return;
       lastSyncRef.current = now;
@@ -994,76 +980,103 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     },
     [playback, currentUserId]
   );
-
+  /* ---------------- İlerleme bildirimi (SADE MODEL) ---------------- */
+  //
+  // Sunucuya periyodik konum YAZILMAZ (checkpoint yok). Burada yalnızca
+  // ilerleme çubuğu ve "film bitti" tespiti için yerel durum güncellenir.
   /**
-   * Film oynarken her 2 saniyede bir konumu sunucuya bildirir. Sunucudaki
-   * konum böylece güncel kalır ve salona sonradan giren kişi filmi baştan
-   * değil, doğru saniyeden başlatır.
+   * Bekleme sırasında yedek kontrol: `cinema_play` WS mesajı kaçarsa da
+   * film başlasın. 1.5 saniyede bir oda durumunu sorar.
    */
   useEffect(() => {
-    if (!activeRoom) return;
-    const timer = window.setInterval(() => {
-      const room = roomRef.current;
-      if (!room) return;
-      wsClient.send({
-        type: 'cinema_heartbeat',
-        room_id: room.id,
-        // Sunucuya, o an gerçekten görünen saniyeyi bildir (taban konum değil).
-        position: expectedPosition(playbackRef.current),
-        is_playing: playbackRef.current.isPlaying,
-      });
-    }, 2000);
+    if (!waitingPartner || !activeRoom) return;
+    const roomId = activeRoom.id;
+    const timer = window.setInterval(async () => {
+      try {
+        const live = await api.getCurrentCinemaRoom();
+        if (live && live.id === roomId && live.is_playing) {
+          setWaitingPartner(false);
+          setPlayback((prev) => ({
+            ...prev,
+            position: live.position || 0,
+            isPlaying: true,
+            duration: live.duration || prev.duration,
+            anchorMs: Date.now(),
+          }));
+        }
+      } catch {
+        /* yok say */
+      }
+    }, 1500);
     return () => window.clearInterval(timer);
-  }, [activeRoom?.id]);
+  }, [waitingPartner, activeRoom?.id]);
 
   const lastDurationSent = useRef(0);
   const handleVideoState = useCallback(
-    (next: Partial<PlaybackState>) => {
-      // Süre bilgisi: bir kez öğrenilince sunucuya bildir (iki taraf da bilsin)
-      if (next.duration && next.duration > 0 && Math.abs(next.duration - lastDurationSent.current) > 0.5) {
-        lastDurationSent.current = next.duration;
-        setPlayback((prev) => ({ ...prev, duration: next.duration! }));
+    (position: number, dur: number) => {
+      // Süre: bir kez öğrenilince sunucuya bildir (iki taraf da bilsin).
+      if (dur > 0 && Math.abs(dur - lastDurationSent.current) > 0.5) {
+        lastDurationSent.current = dur;
+        setPlayback((prev) => ({ ...prev, duration: dur }));
         const room = roomRef.current;
         if (room) {
           api
             .controlCinemaRoom(room.id, {
               user_id: currentUserId,
               action: 'join',
-              duration: next.duration,
+              duration: dur,
             })
             .catch(() => {});
         }
       }
 
-      if (next.isPlaying !== undefined && next.isPlaying !== playback.isPlaying) {
-        // Yalnızca videonun kendi durumu değişir; sunucuya yazmıyoruz.
-        // Oynat/duraklat komutları yalnızca kullanıcı düğmeye bastığında
-        // (togglePlay) veya başka bir cihazdan gelen senkronla olur. Böylece
-        // salona yeni giren taraf filmi yanlışlıkla durdurmaz.
-        return;
-      }
-      if (next.position !== undefined) {
-        // Film bitti: perde lobiye dönsün, salon "oynuyor" diye takılı kalmasın.
-        if (isFilmFinished(next, playback.duration)) {
-          void leaveRoom(true);
-          return;
-        }
-        // ---- ANCHOR'I OYNARKEN TAZELEME ----
-        // `CinemaStage` her saniye oynatıcının konumunu bildiriyor. Burada
-        // anchor'ı tazelemek `state.anchorMs`'i değiştiriyor, bu da sahnedeki
-        // senkron effect'ini tetikleyip yeniden sarma yapıyordu: sarma döngüsü
-        // hiç bitmiyor, video "başlıyor sonra duruyor" durumunda kalıyordu.
-        // Oynarken salonun kendi zaman çizgisi (anchor) korunur; yalnızca
-        // duraklatılmışken konum gerçekten güncellenir.
-        if (!playback.isPlaying && Math.abs(next.position - playback.position) > 1.2) {
-          setPlayback((prev) => ({ ...prev, position: next.position!, anchorMs: Date.now() }));
-        }
+      // Film bitti: perde lobiye dönsün.
+      if (isFilmFinished(position, lastDurationSent.current)) {
+        void leaveRoom(true);
       }
     },
-    [playback, broadcastPlayback, currentUserId]
+    [currentUserId]
   );
 
-  /* ---------------- Yanıp sönen tepkiler ---------------- */
+  /* ---------------- HAZIR OLMA KAPISI (SADE MODEL) ---------------- */
+  //
+  // İki cihaz da yükleyince film AYNI ANDA başlar. Bu yüzden oynatıcı hazır
+  // olunca sunucuya "hazırım" deriz; sunucu ikisini görünce cinema_play
+  // yayınlar ve ikisi de o saniyeden başlar.
+  const readySentRef = useRef<number | null>(null);
+  const handlePlayerReady = useCallback(
+    (duration: number) => {
+      const room = roomRef.current;
+      if (!room) return;
+      if (duration > 0) {
+        setPlayback((prev) => ({ ...prev, duration: duration || prev.duration }));
+      }
+      if (readySentRef.current === room.id) return;
+      readySentRef.current = room.id;
+
+      api
+        .markCinemaReady(room.id, currentUserId, 0)
+        .then((res: any) => {
+          if (res?.started) {
+            // İki cihaz da hazır: film ŞİMDİ başlıyor. WS mesajını beklemeye
+            // gerek yok (yarış durumu olabilir); doğrudan başlat.
+            setWaitingPartner(false);
+            setPlayback({
+              position: Number(res.position) || 0,
+              isPlaying: true,
+              duration: duration || roomRef.current?.duration || 0,
+              anchorMs: Date.now(),
+            });
+          } else if (res?.waiting_for_partner) {
+            setWaitingPartner(true);
+          }
+        })
+        .catch(() => setWaitingPartner(false));
+    },
+    [currentUserId]
+  );
+
+  /* ---------------- YanÄ±p sÃ¶nen tepkiler ---------------- */
   const addFloatingEmoji = (emoji: string) => {
     const id = Date.now() + Math.random();
     setFloatingEmojis((prev) => [...prev, { id, emoji, left: 10 + Math.random() * 80 }]);
@@ -1091,7 +1104,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
   const handleAddVideo = async () => {
     const url = linkInput.trim();
     if (!url) {
-      setAddError('Bir video bağlantısı yapıştır 🔗');
+      setAddError('Bir video baÄŸlantÄ±sÄ± yapÄ±ÅŸtÄ±r ğŸ”—');
       return;
     }
     setIsAdding(true);
@@ -1100,7 +1113,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
 
     try {
       const resolved = await api.resolveCinemaLink(url);
-      // Film sitesi ise sayfa başlığını film adı olarak kullan
+      // Film sitesi ise sayfa baÅŸlÄ±ÄŸÄ±nÄ± film adÄ± olarak kullan
       const autoTitle =
         titleInput.trim() ||
         (resolved.page_title
@@ -1113,29 +1126,29 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
         created_by: currentUserId,
         kind: resolved.kind,
         poster_url: resolved.poster_url || undefined,
-        // Sunucunun bulduğu GERÇEK oynatıcı adresi (YouTube/player) mutlaka
-        // gönderilir. Gönderilmezse sunucu film sitesinin kendi HTML sayfasını
-        // iframe'e gömüyordu: site çerçeve içinde açılmadığı için perde sonsuz
-        // "Perde hazırlanıyor" ekranında kalıyordu.
+        // Sunucunun bulduÄŸu GERÃ‡EK oynatÄ±cÄ± adresi (YouTube/player) mutlaka
+        // gÃ¶nderilir. GÃ¶nderilmezse sunucu film sitesinin kendi HTML sayfasÄ±nÄ±
+        // iframe'e gÃ¶mÃ¼yordu: site Ã§erÃ§eve iÃ§inde aÃ§Ä±lmadÄ±ÄŸÄ± iÃ§in perde sonsuz
+        // "Perde hazÄ±rlanÄ±yor" ekranÄ±nda kalÄ±yordu.
         embed_url: resolved.embed_url || undefined,
-        // Film sitesinden çözülen GERÇEK akış. Sayfa adresi yerine bu gelirse
-        // perde kendi oynatıcısında oynar: "kara ekran" sorunu biter.
+        // Film sitesinden Ã§Ã¶zÃ¼len GERÃ‡EK akÄ±ÅŸ. Sayfa adresi yerine bu gelirse
+        // perde kendi oynatÄ±cÄ±sÄ±nda oynar: "kara ekran" sorunu biter.
         stream_url: resolved.stream_url || undefined,
         stream_referer: resolved.stream_referer || undefined,
         source: resolved.source,
       });
 
-      // Gömme (YouTube, Vimeo...) sitede, video dosyası doğrudan perdede oynar.
+      // GÃ¶mme (YouTube, Vimeo...) sitede, video dosyasÄ± doÄŸrudan perdede oynar.
       await openRoom(room);
     } catch (e) {
       console.error(e);
-      setAddError('Bu sayfada oynatılabilir film bulamadım. Filmin kendi izleme sayfasının adresini dene 🎬');
+      setAddError('Bu sayfada oynatÄ±labilir film bulamadÄ±m. Filmin kendi izleme sayfasÄ±nÄ±n adresini dene ğŸ¬');
     } finally {
       setIsAdding(false);
     }
   };
 
-  /* Telefondaki bir video dosyasını doğrudan salona yükle */
+  /* Telefondaki bir video dosyasÄ±nÄ± doÄŸrudan salona yÃ¼kle */
   const handleUploadVideo = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -1148,7 +1161,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
     try {
       const upload = await api.uploadMedia(file, 'cinema');
       const room = await api.createCinemaRoom({
-        title: titleInput.trim() || file.name.replace(/\.[^.]+$/, '') || 'Bizim Filmimiz 🍿',
+        title: titleInput.trim() || file.name.replace(/\.[^.]+$/, '') || 'Bizim Filmimiz ğŸ¿',
         video_url: cinemaVideoUrl(upload.url),
         created_by: currentUserId,
         kind: 'file',
@@ -1156,14 +1169,14 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
       await openRoom(room);
     } catch (err) {
       console.error(err);
-      setAddError('Video yüklenemedi, tekrar dener misin?');
+      setAddError('Video yÃ¼klenemedi, tekrar dener misin?');
     } finally {
       setIsAdding(false);
     }
   };
 
   const handleDeleteRoom = async (room: CinemaRoom) => {
-    if (!window.confirm(`"${room.title}" afişini kaldırmak istiyor musun?`)) return;
+    if (!window.confirm(`"${room.title}" afiÅŸini kaldÄ±rmak istiyor musun?`)) return;
     try {
       await api.deleteCinemaRoom(room.id);
       setRooms((prev) => prev.filter((r) => r.id !== room.id));
@@ -1188,22 +1201,25 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
         curtainOpen={curtainOpen}
         floatingEmojis={floatingEmojis}
         onVideoState={handleVideoState}
-        onUserPlayPause={(shouldPlay) =>
-          broadcastPlayback({ position: playback.position, isPlaying: shouldPlay }, shouldPlay ? 'play' : 'pause')
+        onUserPlayPause={(shouldPlay, atPosition) =>
+          broadcastPlayback(
+            { position: atPosition, isPlaying: shouldPlay },
+            shouldPlay ? 'play' : 'pause'
+          )
         }
         onUserSeek={(position) => broadcastPlayback({ position, isPlaying: playback.isPlaying }, 'seek')}
-        latencyMs={latencyMsRef.current}
-        onReady={(duration) => {
-          setPlayback((prev) => ({ ...prev, duration: duration || prev.duration }));
-        }}
+        onReady={handlePlayerReady}
+        waiting={waitingPartner}
         onReaction={sendReaction}
         onLeave={() => leaveRoom(true)}
         onEnterFullscreen={() => enterCinemaFullscreen()}
         onRoomChanged={(next) => {
           // Sahneye alınan yeni video: salon kaydı güncellendi. Oynatıcı
-          // yeniden kurulur; eski filmin saniyesi yenisine taşınmasın.
+          // yeniden kurulur; yine "hazır ol" kapısından geçer.
           lastRoomRef.current = next.id;
-          setPlayback({ position: 0, isPlaying: true, duration: 0 });
+          readySentRef.current = null;
+          setPlayback({ position: 0, isPlaying: false, duration: 0 });
+          setWaitingPartner(true);
           setActiveRoom(next);
           setRooms((prev) => [next, ...prev.filter((r) => r.id !== next.id)]);
         }}
@@ -1213,13 +1229,13 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
 
   const currentPoster = rooms[0];
 
-  /** Takvimden bir filme basılınca: sunucunun açtığı salonu perdeye koy. */
+  /** Takvimden bir filme basÄ±lÄ±nca: sunucunun aÃ§tÄ±ÄŸÄ± salonu perdeye koy. */
   const watchShowtime = async (showtime: Showtime) => {
     if (enteringRef.current) return;
     try {
-      // Sunucu salute ilgili odayı "aktif" yapar; listeyi tazeleyip BULMAK
-      // yerine doğrudan aktif salonu soruyoruz (eski sürümde başlık eşleşmesi
-      // tutmadığı için salon hiç açılmıyordu — "Cars 1 takıldı" hatası).
+      // Sunucu salute ilgili odayÄ± "aktif" yapar; listeyi tazeleyip BULMAK
+      // yerine doÄŸrudan aktif salonu soruyoruz (eski sÃ¼rÃ¼mde baÅŸlÄ±k eÅŸleÅŸmesi
+      // tutmadÄ±ÄŸÄ± iÃ§in salon hiÃ§ aÃ§Ä±lmÄ±yordu â€” "Cars 1 takÄ±ldÄ±" hatasÄ±).
       const live =
         (await api.getCurrentCinemaRoom()) ||
         (await api.listCinemaRooms()).find((r) => r.title === showtime.title) ||
@@ -1237,7 +1253,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
 
   return (
     <div className="flex flex-col space-y-4">
-      {/* ---- Partner film başlattı: katılmak ister misin? ---- */}
+      {/* ---- Partner film baÅŸlattÄ±: katÄ±lmak ister misin? ---- */}
       {partnerSession && (
         <div className="relative overflow-hidden rounded-3xl border border-emerald-400/40 bg-gradient-to-r from-emerald-900/95 to-[#123a2c] p-3.5 shadow-lg animate-[popIn_0.3s_ease-out]">
           <div className="flex items-center gap-3">
@@ -1277,7 +1293,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
                 }}
                 className="px-3 py-1.5 rounded-xl bg-emerald-400 text-emerald-950 text-[10px] font-bold active:scale-95"
               >
-                Katıl
+                KatÄ±l
               </button>
               <button
                 onClick={() => setPartnerSession(null)}
@@ -1290,12 +1306,12 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
         </div>
       )}
 
-      {/* ---- Ana sahne: film seç, salonda izle ---- */}
+      {/* ---- Ana sahne: film seÃ§, salonda izle ---- */}
       <HeroMoviePicker onWatch={startWatch} rooms={rooms} isLoading={isLoading} />
 
-      {/* ---- "BU AYIN PERDESİ" — HER ZAMAN GÖRÜNÜR ----
-          Takvim kutusu ile perde kartı AYRI tutulur: burası sadece seansları
-          gösterir; takvim açılıp kapandığında bu kart yerinden oynamaz. */}
+      {/* ---- "BU AYIN PERDESÄ°" â€” HER ZAMAN GÃ–RÃœNÃœR ----
+          Takvim kutusu ile perde kartÄ± AYRI tutulur: burasÄ± sadece seanslarÄ±
+          gÃ¶sterir; takvim aÃ§Ä±lÄ±p kapandÄ±ÄŸÄ±nda bu kart yerinden oynamaz. */}
       <PeriodCurtain
         currentUserId={currentUserId}
         isCalendarOpen={showCalendar}
@@ -1306,7 +1322,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
         onWatchShowtime={watchShowtime}
       />
 
-      {/* ---- Sinema Takvimi: YALNIZCA açılıp kapanan kutu ---- */}
+      {/* ---- Sinema Takvimi: YALNIZCA aÃ§Ä±lÄ±p kapanan kutu ---- */}
       {showCalendar && (
         <div className="animate-[fadeIn_0.25s_ease-out]">
           <CinemaCalendar
@@ -1316,7 +1332,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
         </div>
       )}
 
-      {/* ---- Partner salonda mı? ---- */}
+      {/* ---- Partner salonda mÄ±? ---- */}
       <div className="rounded-3xl bg-white/85 backdrop-blur-md border border-amber-200/70 shadow-sm p-3.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -1330,18 +1346,18 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
                 : 'bg-stone-100 text-stone-500'
             }`}
           >
-            {partnerWatching ? '●' : '○'} {nameOf(partnerId)} {partnerWatching ? 'salonda' : 'salonda değil'}
+            {partnerWatching ? 'â—' : 'â—‹'} {nameOf(partnerId)} {partnerWatching ? 'salonda' : 'salonda deÄŸil'}
           </span>
         </div>
       </div>
 
-      {/* ---- Hızlı link ile izleme (takvimde olmayan video) ---- */}
+      {/* ---- HÄ±zlÄ± link ile izleme (takvimde olmayan video) ---- */}
       <details className="rounded-3xl bg-white/85 backdrop-blur-md border border-amber-200/70 shadow-sm overflow-hidden">
         <summary className="cursor-pointer list-none p-3.5 flex items-center justify-between">
           <span className="flex items-center gap-1.5">
             <Link2 className="w-4 h-4 text-berry-600" />
             <span className="font-serif text-sm font-bold text-berry-950">
-              Takvimsiz Hızlı İzle
+              Takvimsiz HÄ±zlÄ± Ä°zle
             </span>
           </span>
           <ChevronRight className="w-4 h-4 text-stone-400" />
@@ -1351,14 +1367,14 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
             value={linkInput}
             onChange={(e) => setLinkInput(e.target.value)}
             rows={2}
-            placeholder="Film bağlantısı"
+            placeholder="Film baÄŸlantÄ±sÄ±"
             className="w-full px-3 py-2 rounded-xl border border-amber-200 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-amber-400"
           />
           <input
             type="text"
             value={titleInput}
             onChange={(e) => setTitleInput(e.target.value)}
-            placeholder="Film adı (isteğe bağlı)"
+            placeholder="Film adÄ± (isteÄŸe baÄŸlÄ±)"
             className="w-full px-3 py-2 rounded-xl border border-amber-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
           />
           {addError && <p className="text-[11px] text-rose-600 font-medium">{addError}</p>}
@@ -1369,10 +1385,10 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-2xl bg-gradient-to-r from-[#7f1030] to-berry-600 text-white text-xs font-bold shadow-md active:scale-[0.98] disabled:opacity-60"
             >
               {isAdding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              {isAdding ? 'Salon hazırlanıyor…' : 'Hemen İzle 🎬'}
+              {isAdding ? 'Salon hazÄ±rlanÄ±yorâ€¦' : 'Hemen Ä°zle ğŸ¬'}
             </button>
             <label className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-2xl bg-amber-50 border border-amber-300 text-berry-800 text-xs font-bold cursor-pointer active:scale-95">
-              📁 Dosya
+              ğŸ“ Dosya
               <input
                 type="file"
                 accept="video/*"
@@ -1391,7 +1407,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
           className="fixed bottom-24 right-4 z-30 flex items-center gap-2 px-4 py-2.5 rounded-full bg-amber-400 text-[#2a0713] text-xs font-bold shadow-xl shadow-amber-500/25 border border-amber-200/40 animate-bounce"
         >
           <Play className="w-4 h-4" />
-          Sahnedeki Filme Dön
+          Sahnedeki Filme DÃ¶n
           <ChevronRight className="w-3.5 h-3.5" />
         </button>
       )}
@@ -1400,7 +1416,7 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
 };
 
 /* ------------------------------------------------------------------ */
-/* Ana sahne: film afişleri yatay şeritte, tek dokunuşla salona gir    */
+/* Ana sahne: film afiÅŸleri yatay ÅŸeritte, tek dokunuÅŸla salona gir    */
 /* ------------------------------------------------------------------ */
 
 const HeroMoviePicker: React.FC<{
@@ -1427,10 +1443,10 @@ const HeroMoviePicker: React.FC<{
         className="relative rounded-3xl overflow-hidden border border-amber-400/25 p-6 text-center"
         style={{ background: 'linear-gradient(135deg, #2a0713 0%, #5c0a20 60%, #7f1030 100%)' }}
       >
-        <div className="text-5xl mb-2 animate-float">🎬</div>
-        <h3 className="font-serif text-base font-bold text-white">Salon hazır</h3>
+        <div className="text-5xl mb-2 animate-float">ğŸ¬</div>
+        <h3 className="font-serif text-base font-bold text-white">Salon hazÄ±r</h3>
         <p className="text-[11px] text-white/70 mt-1 max-w-[240px] mx-auto">
-          Aşağıya bir film bağlantısı yapıştır, salonu birlikte açalım 🍿
+          AÅŸaÄŸÄ±ya bir film baÄŸlantÄ±sÄ± yapÄ±ÅŸtÄ±r, salonu birlikte aÃ§alÄ±m ğŸ¿
         </p>
       </div>
     );
@@ -1438,7 +1454,7 @@ const HeroMoviePicker: React.FC<{
 
   return (
     <div className="relative rounded-3xl overflow-hidden border border-amber-400/25 shadow-xl shadow-berry-900/25">
-      {/* Afiş arka planı */}
+      {/* AfiÅŸ arka planÄ± */}
       <div className="absolute inset-0 bg-[#1a0510]">
         {poster && (
           <img
@@ -1456,7 +1472,7 @@ const HeroMoviePicker: React.FC<{
       <div className="relative p-4">
         <div className="flex items-start justify-between">
           <span className="text-[9px] font-bold tracking-[0.28em] text-amber-300/85 uppercase">
-            Şimdi sahnede
+            Åimdi sahnede
           </span>
           {room.is_active && (
             <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400 text-[#2a0713]">
@@ -1471,7 +1487,7 @@ const HeroMoviePicker: React.FC<{
           </h3>
           <p className="text-[10px] text-white/55 mt-1">
             {USERS[room.created_by]?.emoji} {nameOf(room.created_by)} ekledi
-            {room.duration ? ` · ${Math.round(room.duration / 60)} dk` : ''}
+            {room.duration ? ` Â· ${Math.round(room.duration / 60)} dk` : ''}
           </p>
         </div>
 
@@ -1486,7 +1502,7 @@ const HeroMoviePicker: React.FC<{
           Salona Gir
         </button>
 
-        {/* Diğer filmler: küçük afiş şeridi */}
+        {/* DiÄŸer filmler: kÃ¼Ã§Ã¼k afiÅŸ ÅŸeridi */}
         {rooms.length > 1 && (
           <div className="flex gap-1.5 mt-3 overflow-x-auto no-scrollbar">
             {rooms.map((r, i) => (
@@ -1517,17 +1533,17 @@ const HeroMoviePicker: React.FC<{
 };
 
 /* ------------------------------------------------------------------ */
-/* "Bu ayın perdesi" kartı — HER ZAMAN GÖRÜNÜR
+/* "Bu ayÄ±n perdesi" kartÄ± â€” HER ZAMAN GÃ–RÃœNÃœR
  *
- * Takvimden BAĞIMSIZ çalışır:
- *   - Bu ayın seanslarını kendi yükler (takvim açık da olsa kapalı da olsa),
- *   - "Takvimi Gör / Gizle" yalnızca TAKVİM kutusunu açar-kapatır,
+ * Takvimden BAÄIMSIZ Ã§alÄ±ÅŸÄ±r:
+ *   - Bu ayÄ±n seanslarÄ±nÄ± kendi yÃ¼kler (takvim aÃ§Ä±k da olsa kapalÄ± da olsa),
+ *   - "Takvimi GÃ¶r / Gizle" yalnÄ±zca TAKVÄ°M kutusunu aÃ§ar-kapatÄ±r,
  *     bu kart yerinden oynamaz ve kaybolmaz.
  * ------------------------------------------------------------------ */
 
 const MONTHS_TR = [
-  'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
-  'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık',
+  'Ocak', 'Åubat', 'Mart', 'Nisan', 'MayÄ±s', 'Haziran',
+  'Temmuz', 'AÄŸustos', 'EylÃ¼l', 'Ekim', 'KasÄ±m', 'AralÄ±k',
 ];
 
 const isoDate = (d: Date): string =>
@@ -1558,7 +1574,7 @@ const PeriodCurtain: React.FC<{
       const data = await api.listShowtimes(month, currentUserId);
       setShows(data);
     } catch (e) {
-      console.error('Bu ayın perdesi yüklenemedi', e);
+      console.error('Bu ayÄ±n perdesi yÃ¼klenemedi', e);
     } finally {
       setIsLoading(false);
     }
@@ -1566,7 +1582,7 @@ const PeriodCurtain: React.FC<{
 
   useEffect(() => {
     load();
-    // Takvimdeki her değişiklik bu kartı da tazeler (iki ayrı kutu, tek kaynak).
+    // Takvimdeki her deÄŸiÅŸiklik bu kartÄ± da tazeler (iki ayrÄ± kutu, tek kaynak).
     const unsubAdded = wsClient.on('cinema_showtime_added', load);
     const unsubUpdated = wsClient.on('cinema_showtime_updated', load);
     const unsubDeleted = wsClient.on('cinema_showtime_deleted', load);
@@ -1597,7 +1613,7 @@ const PeriodCurtain: React.FC<{
   const myTickets = shows.filter((s) => s.my_ticket).length;
   const preview = upcoming.slice(0, 4);
 
-  /** Premiere: biletini al ve perdeyi aç. Takvimi açmaya gerek yok. */
+  /** Premiere: biletini al ve perdeyi aÃ§. Takvimi aÃ§maya gerek yok. */
   const handlePremiere = async (show: Showtime) => {
     if (busyId !== null) return;
     setBusyId(show.id);
@@ -1610,7 +1626,7 @@ const PeriodCurtain: React.FC<{
       await api.openShowtime(current.id, currentUserId);
       onWatchShowtime(current);
     } catch (e: any) {
-      console.error('Perde açılamadı', e);
+      console.error('Perde aÃ§Ä±lamadÄ±', e);
     } finally {
       setBusyId(null);
     }
@@ -1621,7 +1637,7 @@ const PeriodCurtain: React.FC<{
       className="relative overflow-hidden rounded-3xl text-white shadow-xl shadow-berry-900/30 border border-amber-400/25"
       style={{ background: 'linear-gradient(135deg, #2a0713 0%, #4a0f24 55%, #7f1030 100%)' }}
     >
-      {/* perde ışığı */}
+      {/* perde Ä±ÅŸÄ±ÄŸÄ± */}
       <div
         className="absolute inset-0 opacity-40 pointer-events-none animate-[lightsSweep_9s_ease-in-out_infinite]"
         style={{
@@ -1634,15 +1650,15 @@ const PeriodCurtain: React.FC<{
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <p className="text-[9px] font-bold tracking-[0.28em] text-amber-300/85 uppercase">
-              Bu ayın perdesi
+              Bu ayÄ±n perdesi
             </p>
             <h2 className="font-serif text-xl font-bold tracking-wide mt-0.5">
-              {MONTHS_TR[now.getMonth()]} {now.getFullYear()} 🎬
+              {MONTHS_TR[now.getMonth()]} {now.getFullYear()} ğŸ¬
             </h2>
             <p className="text-[11px] text-white/70 mt-0.5">
               {isLoading
-                ? 'Perde hazırlanıyor…'
-                : `${shows.length} seans · ${myTickets} biletin var`}
+                ? 'Perde hazÄ±rlanÄ±yorâ€¦'
+                : `${shows.length} seans Â· ${myTickets} biletin var`}
             </p>
           </div>
           <button
@@ -1652,33 +1668,33 @@ const PeriodCurtain: React.FC<{
             }`}
           >
             <CalendarDays className="w-3.5 h-3.5" />
-            {isCalendarOpen ? 'Takvimi Gizle' : 'Takvimi Gör'}
+            {isCalendarOpen ? 'Takvimi Gizle' : 'Takvimi GÃ¶r'}
           </button>
         </div>
 
-        {/* Mini özet: bu akşam + sıradaki */}
+        {/* Mini Ã¶zet: bu akÅŸam + sÄ±radaki */}
         <div className="grid grid-cols-2 gap-2 mt-3">
           <div className="rounded-2xl bg-white/12 backdrop-blur-xs px-3 py-2 border border-white/10">
             <div className="flex items-center gap-1.5 text-[9px] text-amber-200/90 font-semibold uppercase tracking-wide">
               <Popcorn className="w-3 h-3" />
-              Bu akşam
+              Bu akÅŸam
             </div>
             <p className="font-serif text-xs font-bold mt-0.5 truncate">
-              {tonight ? `${tonight.show_time} · ${tonight.title}` : 'Seans yok'}
+              {tonight ? `${tonight.show_time} Â· ${tonight.title}` : 'Seans yok'}
             </p>
           </div>
           <div className="rounded-2xl bg-white/12 backdrop-blur-xs px-3 py-2 border border-white/10">
             <div className="flex items-center gap-1.5 text-[9px] text-rose-200/90 font-semibold uppercase tracking-wide">
               <Ticket className="w-3 h-3" />
-              Sıradaki
+              SÄ±radaki
             </div>
             <p className="font-serif text-xs font-bold mt-0.5 truncate">
-              {next ? `${shortDateTR(next.show_date)} · ${next.title}` : 'Takvim boş'}
+              {next ? `${shortDateTR(next.show_date)} Â· ${next.title}` : 'Takvim boÅŸ'}
             </p>
           </div>
         </div>
 
-        {/* Öne çıkan seans — tek dokunuşla perde */}
+        {/* Ã–ne Ã§Ä±kan seans â€” tek dokunuÅŸla perde */}
         {next ? (
           <div className="mt-3 rounded-2xl bg-black/25 border border-white/10 p-3">
             <div className="flex items-center gap-3">
@@ -1699,11 +1715,11 @@ const PeriodCurtain: React.FC<{
               <div className="min-w-0 flex-1">
                 <p className="font-serif text-sm font-bold truncate">{next.title}</p>
                 <p className="text-[10px] text-white/65 mt-0.5 truncate">
-                  {shortDateTR(next.show_date)} · {next.show_time} · {next.hall}
+                  {shortDateTR(next.show_date)} Â· {next.show_time} Â· {next.hall}
                 </p>
                 <p className="text-[9px] text-white/50 mt-0.5">
-                  {next.booked_count}/{next.seats} bilet ·{' '}
-                  {next.my_ticket ? 'biletin hazır 🎟️' : 'bilet almadan izleyemezsin'}
+                  {next.booked_count}/{next.seats} bilet Â·{' '}
+                  {next.my_ticket ? 'biletin hazÄ±r ğŸŸï¸' : 'bilet almadan izleyemezsin'}
                 </p>
               </div>
               <button
@@ -1716,22 +1732,22 @@ const PeriodCurtain: React.FC<{
                 ) : (
                   <Play className="w-3.5 h-3.5" />
                 )}
-                Perdeyi Aç
+                Perdeyi AÃ§
               </button>
             </div>
           </div>
         ) : (
           <div className="mt-3 rounded-2xl bg-black/25 border border-dashed border-white/15 p-3 text-center">
             <p className="text-[11px] text-white/70">
-              {isLoading ? 'Perde hazırlanıyor…' : 'Bu ay için seans yok'}
+              {isLoading ? 'Perde hazÄ±rlanÄ±yorâ€¦' : 'Bu ay iÃ§in seans yok'}
             </p>
             <p className="text-[10px] text-white/45 mt-0.5">
-              Film eklemek için takvimi aç
+              Film eklemek iÃ§in takvimi aÃ§
             </p>
           </div>
         )}
 
-        {/* Yaklaşan seanslar — kart İÇİNDE, her zaman görünür */}
+        {/* YaklaÅŸan seanslar â€” kart Ä°Ã‡Ä°NDE, her zaman gÃ¶rÃ¼nÃ¼r */}
         {preview.length > 0 && (
           <div className="mt-3">
             <button
@@ -1743,7 +1759,7 @@ const PeriodCurtain: React.FC<{
             >
               <span className="flex items-center gap-1.5">
                 <Clapperboard className="w-3 h-3" />
-                Bu ayın filmleri
+                Bu ayÄ±n filmleri
               </span>
               <ChevronRight
                 className={`w-3.5 h-3.5 transition-transform ${tabsOpen ? 'rotate-90' : ''}`}
@@ -1764,8 +1780,8 @@ const PeriodCurtain: React.FC<{
                     {show.title}
                   </span>
                   <span className="block text-[9px] text-white/55 truncate">
-                    {shortDateTR(show.show_date)} · {show.show_time}
-                    {show.my_ticket ? ' · 🎟️' : ''}
+                    {shortDateTR(show.show_date)} Â· {show.show_time}
+                    {show.my_ticket ? ' Â· ğŸŸï¸' : ''}
                   </span>
                 </button>
               ))}
@@ -1774,7 +1790,7 @@ const PeriodCurtain: React.FC<{
         )}
       </div>
 
-      {/* Sinema şeridi */}
+      {/* Sinema ÅŸeridi */}
       <div className="relative h-3 flex justify-around items-center bg-black/50">
         {Array.from({ length: 22 }).map((_, i) => (
           <span key={i} className="w-1.5 h-1.5 rounded-[1px] bg-amber-200/55" />
@@ -1798,12 +1814,12 @@ const CinemaTheater: React.FC<{
   isLandscape: boolean;
   curtainOpen: boolean;
   floatingEmojis: { id: number; emoji: string; left: number }[];
-  onVideoState: (next: Partial<PlaybackState>) => void;
-  onUserPlayPause: (shouldPlay: boolean) => void;
+  onVideoState: (position: number, duration: number) => void;
+  onUserPlayPause: (shouldPlay: boolean, atPosition: number) => void;
   onUserSeek: (position: number) => void;
   onReady: (duration: number) => void;
-  /** Ağ gecikmesi (ms) — senkron motoru RTT/2 telafisi için kullanır. */
-  latencyMs?: number;
+  /** SADE MODEL: iki cihaz da hazır olana kadar bekleme göstergesi. */
+  waiting: boolean;
   onReaction: (emoji: string) => void;
   onLeave: () => void;
   onEnterFullscreen: () => void;
@@ -1823,13 +1839,13 @@ const CinemaTheater: React.FC<{
   onUserPlayPause,
   onUserSeek,
   onReady,
-  latencyMs = 120,
+  waiting,
   onReaction,
   onLeave,
   onEnterFullscreen,
   onRoomChanged,
 }) => {
-  /* Geri tuşu / Android geri = salonu kapat */
+  /* Geri tuÅŸu / Android geri = salonu kapat */
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
@@ -1848,14 +1864,14 @@ const CinemaTheater: React.FC<{
       className="fixed inset-0 z-[90] bg-black overflow-hidden select-none animate-[fadeIn_0.4s_ease-out]"
       style={{ colorScheme: 'dark' }}
     >
-      {/* Duvarlar, perdeler, projektör */}
+      {/* Duvarlar, perdeler, projektÃ¶r */}
       <SalonDecor playing={playback.isPlaying} />
 
-      {/* Perde / ekran çerçevesi: Web sitelerinde ferah gezinti ve rahat kaydırma için geniş perde.
-          z-[16]: perdeler (z-10) ve karakter/tepki şeritleri (z-11) perdenin ÜSTÜNE
-          binmesin. Aksi halde yan perdeler ekranın %12'sini kaplayıp videonun
-          ortasını kesiyor, şeritlerdeki avatarlar ve tepkiler perdenin üstüne
-          düşüyordu: perde küçük görünüyor, film seyredilemiyordu. */}
+      {/* Perde / ekran Ã§erÃ§evesi: Web sitelerinde ferah gezinti ve rahat kaydÄ±rma iÃ§in geniÅŸ perde.
+          z-[16]: perdeler (z-10) ve karakter/tepki ÅŸeritleri (z-11) perdenin ÃœSTÃœNE
+          binmesin. Aksi halde yan perdeler ekranÄ±n %12'sini kaplayÄ±p videonun
+          ortasÄ±nÄ± kesiyor, ÅŸeritlerdeki avatarlar ve tepkiler perdenin Ã¼stÃ¼ne
+          dÃ¼ÅŸÃ¼yordu: perde kÃ¼Ã§Ã¼k gÃ¶rÃ¼nÃ¼yor, film seyredilemiyordu. */}
       <div
         className="absolute z-[16] rounded-[14px] overflow-hidden select-auto"
         style={{
@@ -1871,19 +1887,32 @@ const CinemaTheater: React.FC<{
         <CinemaStage
           room={room}
           state={playback}
-          onStateChange={onVideoState}
+          onProgress={onVideoState}
           onUserPlayPause={onUserPlayPause}
           onUserSeek={onUserSeek}
           onReady={onReady}
-          latencyMs={latencyMs}
           onRoomChanged={onRoomChanged}
         />
 
-        {/* Kayan yıldız animasyonu (film başlarken) */}
+        {/* ---- SADE MODEL: iki cihaz da hazır olana kadar bekle ---- */}
+        {waiting && !playback.isPlaying && (
+          <div className="absolute inset-0 z-[17] flex flex-col items-center justify-center gap-3 bg-black/85 text-center px-8">
+            <Loader2 className="w-9 h-9 text-amber-300 animate-spin" />
+            <p className="text-amber-100 font-serif text-sm font-bold">
+              İki cihaz da hazırlanınca başlayacak 🎬
+            </p>
+            <p className="text-white/50 text-[11px] max-w-xs leading-snug">
+              Sen ve {partnerId === 'selin' ? 'Selin' : 'Murat'} aynı anda başlamak için
+              bekleniyorsunuz.
+            </p>
+          </div>
+        )}
+
+        {/* Kayan yÄ±ldÄ±z animasyonu (film baÅŸlarken) */}
         {!curtainOpen && <div className="absolute inset-0 bg-black" />}
       </div>
 
-      {/* İçerik: başlık + karakterler + tepkiler */}
+      {/* Ä°Ã§erik: baÅŸlÄ±k + karakterler + tepkiler */}
       <div className="absolute inset-x-0 top-0 z-[12] flex items-start justify-between px-4 pt-3 pointer-events-none">
         <div className="pointer-events-auto">
           <div className="flex items-center gap-2">
@@ -1900,21 +1929,21 @@ const CinemaTheater: React.FC<{
           <button
             onClick={onEnterFullscreen}
             className="px-2.5 py-1.5 rounded-full bg-white/10 backdrop-blur-xs text-[10px] font-bold text-white/85 hover:bg-white/20"
-            title="Tam ekranı aç"
+            title="Tam ekranÄ± aÃ§"
           >
-            ⤢ Tam ekran
+            â¤¢ Tam ekran
           </button>
           <button
             onClick={onLeave}
             className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-rose-600/90 backdrop-blur-xs text-[10px] font-bold text-white shadow-lg active:scale-95"
           >
             <X className="w-3.5 h-3.5" />
-            Salondan Çık
+            Salondan Ã‡Ä±k
           </button>
         </div>
       </div>
 
-      {/* Karakterlerimiz (perdenin iki yanında) */}
+      {/* Karakterlerimiz (perdenin iki yanÄ±nda) */}
       <div className="absolute inset-y-0 left-0 w-[11.5%] z-[11] flex items-center justify-center pointer-events-none">
         <CharacterSeat
           userId={partnerId}
@@ -1924,9 +1953,9 @@ const CinemaTheater: React.FC<{
         />
       </div>
 
-      {/* Sağ taraf: tepkiler */}
+      {/* SaÄŸ taraf: tepkiler */}
       <div className="absolute inset-y-0 right-0 w-[11.5%] z-[11] flex flex-col items-center justify-center gap-1.5 pointer-events-auto pr-1">
-        {['❤️', '😂', '😱', '😍', '🍿'].map((e) => (
+        {['â¤ï¸', 'ğŸ˜‚', 'ğŸ˜±', 'ğŸ˜', 'ğŸ¿'].map((e) => (
           <button
             key={e}
             onClick={() => onReaction(e)}
@@ -1937,10 +1966,10 @@ const CinemaTheater: React.FC<{
         ))}
       </div>
 
-      {/* Partner katılım bildirimi */}
+      {/* Partner katÄ±lÄ±m bildirimi */}
       {partnerJustJoined && (
         <div className="absolute left-1/2 -translate-x-1/2 top-14 z-[14] px-4 py-2 rounded-2xl bg-amber-400 text-cinema-950 text-xs font-bold shadow-xl animate-[popIn_0.4s_ease-out]">
-          {USERS[partnerId].emoji} {nameOf(partnerId)} sinemaya katıldı! 🍿
+          {USERS[partnerId].emoji} {nameOf(partnerId)} sinemaya katÄ±ldÄ±! ğŸ¿
         </div>
       )}
 
@@ -1948,12 +1977,12 @@ const CinemaTheater: React.FC<{
       {!partnerWatching && (
         <div className="absolute left-1/2 -translate-x-1/2 bottom-[6%] z-[13] px-3.5 py-1.5 rounded-full bg-black/60 backdrop-blur-xs text-[10px] text-white/70 flex items-center gap-1.5">
           <Loader2 className="w-3 h-3 animate-spin" />
-          {nameOf(partnerId)} bekleniyor… filmi başlatabilirsin
+          {nameOf(partnerId)} bekleniyorâ€¦ filmi baÅŸlatabilirsin
         </div>
       )}
 
 
-      {/* Uçan tepkiler */}
+      {/* UÃ§an tepkiler */}
       <div className="pointer-events-none absolute inset-0 z-[15] overflow-hidden">
         {floatingEmojis.map((f) => (
           <span
@@ -1971,7 +2000,7 @@ const CinemaTheater: React.FC<{
 
 /* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
-/* Gömme (iframe) oynatıcı — YouTube, Vimeo, film siteleri...          */
+/* GÃ¶mme (iframe) oynatÄ±cÄ± â€” YouTube, Vimeo, film siteleri...          */
 /* ------------------------------------------------------------------ */
 
 const CinemaEmbed: React.FC<{
@@ -2001,16 +2030,16 @@ const CinemaEmbed: React.FC<{
     };
   }, [room.id]);
 
-  // HTML değiştiğinde iframe'i SADECE BİR KEZ bas. Her render'da basmak videoyu
-  // baştan yükler ve izlemeyi imkânsız hale getirir.
+  // HTML deÄŸiÅŸtiÄŸinde iframe'i SADECE BÄ°R KEZ bas. Her render'da basmak videoyu
+  // baÅŸtan yÃ¼kler ve izlemeyi imkÃ¢nsÄ±z hale getirir.
   useEffect(() => {
     const node = containerRef.current;
     if (!node) return;
     node.innerHTML = html || '';
   }, [html]);
 
-  // Gömme izin vermeyen siteler için: birkaç saniye içinde yüklenmezse
-  // kullanıcıya yeni sekmede açma seçeneği sun (perde boş kalmasın).
+  // GÃ¶mme izin vermeyen siteler iÃ§in: birkaÃ§ saniye iÃ§inde yÃ¼klenmezse
+  // kullanÄ±cÄ±ya yeni sekmede aÃ§ma seÃ§eneÄŸi sun (perde boÅŸ kalmasÄ±n).
   useEffect(() => {
     if (!html) return;
     const timer = window.setTimeout(() => setEmbedFailed(true), 7000);
@@ -2022,7 +2051,7 @@ const CinemaEmbed: React.FC<{
       <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-black">
         <Loader2 className="w-10 h-10 text-amber-300 animate-spin" />
         <p className="text-amber-100/70 text-[11px] font-semibold tracking-widest uppercase">
-          Perde hazırlanıyor
+          Perde hazÄ±rlanÄ±yor
         </p>
       </div>
     );
@@ -2040,12 +2069,12 @@ const CinemaEmbed: React.FC<{
         <button
           onClick={() => {
             setIsTheaterMode((v) => !v);
-            // Tarayıcı tam ekranına da geç: film tüm ekranı kaplasın
+            // TarayÄ±cÄ± tam ekranÄ±na da geÃ§: film tÃ¼m ekranÄ± kaplasÄ±n
             onEnterFullscreen();
           }}
           className="px-2.5 py-1.5 rounded-full bg-black/70 text-[10px] font-bold text-amber-200 backdrop-blur-xs active:scale-95"
         >
-          {isTheaterMode ? '⤡ Küçült' : '⤢ Tam ekran'}
+          {isTheaterMode ? 'â¤¡ KÃ¼Ã§Ã¼lt' : 'â¤¢ Tam ekran'}
         </button>
       </div>
 
@@ -2053,7 +2082,7 @@ const CinemaEmbed: React.FC<{
         <div className="absolute inset-x-0 bottom-0 z-20 px-3 pb-2">
           <div className="flex items-center justify-between gap-2 rounded-2xl bg-black/85 backdrop-blur-xs px-3 py-2">
             <p className="text-[10px] text-white/70 leading-tight">
-              Bu site salonda açılmıyor olabilir
+              Bu site salonda aÃ§Ä±lmÄ±yor olabilir
             </p>
             <a
               href={room.video_url}
@@ -2061,7 +2090,7 @@ const CinemaEmbed: React.FC<{
               rel="noreferrer"
               className="shrink-0 px-2.5 py-1.5 rounded-full bg-amber-400 text-cinema-950 text-[10px] font-bold"
             >
-              Yeni sekmede aç ↗
+              Yeni sekmede aÃ§ â†—
             </a>
           </div>
         </div>
