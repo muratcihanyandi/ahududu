@@ -143,6 +143,34 @@ async def get_system_version():
         ]
     }
 
+
+# ---- Çok oyunculu oyun rölesi ----
+# Oyun (ör. Uno merdivenli) kendi oyun-içi arayüzünü bu soket üzerinden açık
+# tutar. Sunucu paketi yorumlamaz, yalnızca partnere aktarır ve boyut sınırı
+# koyar: kamera kareleri tek bir büyük mesajla soket döngüsünü tıkamasın.
+GAME_MAX_PACKET_BYTES = 60 * 1024        # kamera karesi (JPEG base64) sınırı
+GAME_MSG_PREFIX = "game_"
+
+
+async def relay_game_packet(partner_id: str, sender_id: str, data: dict,
+                            SUMMARY_ONLY: bool = False) -> None:
+    """Bir oyun paketini partnere ilet.
+
+    SUMMARY_ONLY: paket büyük alanlar (kamera/mikrofon verisi) içeriyorsa
+    yalnızca küçük özeti geçer; veri paketleri limite uymazsa düşer.
+    """
+    payload = dict(data)
+    payload["from"] = sender_id
+    if SUMMARY_ONLY:
+        payload.pop("data", None)
+    else:
+        blob = payload.get("data")
+        if isinstance(blob, str) and len(blob) > GAME_MAX_PACKET_BYTES:
+            logger.debug("game paketi çok büyük (%s bayt), atlandı", len(blob))
+            return
+    await ws_manager.send_to_user(partner_id, payload)
+
+
 # Real-time WebSocket connection
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
@@ -220,6 +248,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         "position": data.get("position"),
                         "is_playing": bool(data.get("is_playing")),
                     })
+                elif msg_type.startswith("game_"):
+                    # ---- Oyunlar (çok oyunculu) ----
+                    # "game_car" (araba konumu, 20 Hz), "game_cam_frame" (canlı
+                    # kamera karesi), "game_hello", "game_cam_status", "game_mic".
+                    # Paket olduğu gibi partnere aktarılır; sunucuda işlenmez.
+                    if msg_type == "game_car":
+                        await relay_game_packet(partner_id, user_id, data, SUMMARY_ONLY=True)
+                    else:
+                        await relay_game_packet(partner_id, user_id, data)
             except Exception as e:
                 logger.error(f"Error processing WS packet: {e}")
     except WebSocketDisconnect:
