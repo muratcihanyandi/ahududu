@@ -7,6 +7,7 @@ message carrying the new build id, delivered without any client request.
 
 import asyncio
 import json
+import os
 import sys
 import time
 
@@ -18,7 +19,7 @@ if sys.platform == "win32":
 
 PI_HOST = "192.168.2.170"
 PI_USER = "murat"
-PI_PASS = "3366"
+PI_PASS = os.getenv("AHUDUDU_PI_PASS", "")   # parola koda yazılmaz
 WS_URL = f"ws://{PI_HOST}:33470/ws/murat"
 BUILD_ID_FILE = "/app/backend/static/build-id.txt"
 

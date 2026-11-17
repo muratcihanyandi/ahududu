@@ -18,7 +18,7 @@ if sys.platform == "win32":
 
 PI_HOST = os.getenv("AHUDUDU_PI_HOST", "192.168.2.170")
 PI_USER = os.getenv("AHUDUDU_PI_USER", "murat")
-PI_PASS = os.getenv("AHUDUDU_PI_PASS", "3366")
+PI_PASS = os.getenv("AHUDUDU_PI_PASS", "")   # parola koda yazılmaz
 
 
 def connect():

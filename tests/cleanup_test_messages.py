@@ -6,6 +6,7 @@ Kullanım:
 """
 
 import argparse
+import os
 import sys
 
 import paramiko
@@ -15,7 +16,8 @@ if sys.platform == "win32":
 
 HOST = "192.168.2.170"
 USER = "murat"
-PASS = "3366"
+# SSH parolası koda YAZILMAZ (depo herkese açık): AHUDUDU_PI_PASS ortam değişkeni
+PASS = os.getenv("AHUDUDU_PI_PASS", "")
 CONTAINER = "ahududu-app"
 
 PATTERNS = [
