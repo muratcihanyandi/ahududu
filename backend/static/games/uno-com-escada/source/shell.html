@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Uno merdivenli — pist</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;font:14px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#ddd}
+#c{position:absolute;inset:0;margin:auto;width:100vw;height:100vh;display:block;object-fit:contain;touch-action:none}
+#msg{position:absolute;left:0;right:0;top:45%;text-align:center;letter-spacing:.08em;white-space:pre-wrap;padding:0 6vw}
+#hint{position:absolute;left:14px;bottom:calc(10px + env(safe-area-inset-bottom,0px));opacity:.75;text-shadow:0 1px 2px #000;transition:opacity 1.5s;pointer-events:none;font-size:12px;right:14px}
+#hg,#ht,#hs,#tag,#ui{display:none;position:absolute;pointer-events:none}
+#hg{right:1.6vh;bottom:1.6vh}
+#ht{left:50%;top:1.6vh;transform:translateX(-50%)}
+#hs{left:1.6vh;top:1.6vh}
+#tag{left:50%;bottom:2.2vh;transform:translateX(-50%);padding:.45em 1.1em;border-radius:1.2em;background:rgba(9,11,14,.62);color:#fff;white-space:nowrap}
+#ui{inset:0;pointer-events:auto;align-items:center;justify-content:center;background:rgba(6,8,10,.62);font-size:clamp(11px,1.72vh,17px);padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);box-sizing:border-box}
+#ui.ini{background:linear-gradient(rgba(6,8,10,.5),rgba(6,8,10,.82))}
+#ui>div{max-width:94vw;max-height:96vh;overflow:auto;padding:1.4em 2.2em;box-sizing:border-box;text-align:center}
+#ui h1{margin:0;font-size:3.1em;line-height:1.1;letter-spacing:.02em;color:#fff}
+#ui .sub{margin:.3em 0 1.3em;opacity:.8;letter-spacing:.12em;text-transform:uppercase;font-size:.9em}
+#ui h2{margin:0 0 .5em;font-size:1.05em;letter-spacing:.1em;text-transform:uppercase;color:#ff8a6a}
+#ui .cols{display:flex;gap:3.2em;justify-content:center;flex-wrap:wrap;text-align:left}
+#ui table{border-collapse:collapse}
+#ui td,#ui th{padding:.13em .7em .13em 0;font-weight:400;text-align:left}
+#ui td:first-child{color:#fff;font-weight:600;white-space:nowrap;padding-right:1.3em}
+#res{display:none;margin:0 0 1.4em;padding:1em 1.4em;border-radius:.8em;background:rgba(255,255,255,.07)}
+#res table{margin:0 auto}#res th,#res td{padding:.2em 1.1em;text-align:right}#res td{color:#fff;font-weight:600;font-variant-numeric:tabular-nums}#res p{margin:.7em 0 0}
+#ui .bt{margin-top:1.5em}
+#ui button{font:inherit;font-size:1.15em;font-weight:600;color:#fff;background:#d8351c;border:0;border-radius:.5em;padding:.6em 2em;margin:.35em .4em;cursor:pointer}
+#ui button+button{background:rgba(255,255,255,.16)}
+#ui button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+/* ---- çok oyunculu + kamera arayüzü (Türkçe ek) ---- */
+#ol{margin-top:1.2em;font-size:.9em;line-height:1.6;color:#cfd6dd;max-width:34em;margin-left:auto;margin-right:auto}
+#ol b{color:#fff}
+#ol kbd{display:inline-block;min-width:1.5em;padding:.05em .4em;border-radius:.3em;background:rgba(255,255,255,.16);color:#fff;font:inherit;font-weight:600;font-size:.92em}
+#camK{display:flex;align-items:center;justify-content:center;gap:.6em;margin:1.1em auto 0;font-size:.95em;color:#cfd6dd}
+#camK button{font-size:.9em;padding:.45em 1em;margin:0;background:rgba(255,255,255,.16)}
+#camK button.on{background:#1f9d55}
+#me{
+  position:absolute;pointer-events:auto;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));
+  width:clamp(84px,14vh,132px);border-radius:12px;overflow:hidden;background:rgba(9,11,14,.7);
+  box-shadow:0 6px 18px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.22);z-index:20;
+}
+#me video{display:block;width:100%;aspect-ratio:3/4;object-fit:cover;background:#000;transform:scaleX(-1)}
+#me .lb{position:absolute;left:0;right:0;bottom:0;padding:3px 6px;font-size:11px;font-weight:600;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.75));display:flex;justify-content:space-between}
+#me .mk{position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:999px;border:0;background:rgba(255,255,255,.9);color:#111;font-size:11px;cursor:pointer;padding:0;line-height:22px}
+#camN{
+  position:absolute;pointer-events:auto;right:12px;bottom:calc(12px + clamp(112px,19vh,176px) + env(safe-area-inset-bottom,0px));
+  width:clamp(84px,14vh,132px);border-radius:12px;overflow:hidden;background:rgba(9,11,14,.7);
+  border:1px solid rgba(255,255,255,.22);z-index:20;font-size:12px;color:#dde3ea;
+}
+#camN .lb{padding:8px;line-height:1.35;text-align:center}
+#camN .say{display:block;width:100%;border:0;background:#c2185b;color:#fff;font:inherit;font-weight:700;padding:6px;cursor:pointer}
+@media (max-width:640px){
+  #ui>div{padding:1em 1.2em}
+  #ui .cols{gap:1.4em}
+  #ui h1{font-size:2.2em}
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="msg">yükleniyor…</div>
+<div id="hint">W gaz · S fren/geri · A/D direksiyon · Boşluk el freni · C kamera · R piste dön</div>
+<canvas id="hg"></canvas><canvas id="ht"></canvas><canvas id="hs"></canvas><div id="tag"></div>
+<div id="ui"><div>
+<h1>Uno merdivenli</h1>
+<p class="sub">Fiat Uno Mille EP 1996 · pist</p>
+<div id="res"></div>
+<div class="cols">
+<div><h2>Klavye</h2><table>
+<tr><td>W veya ↑</td><td>gaz</td></tr>
+<tr><td>S veya ↓</td><td>fren ve geri</td></tr>
+<tr><td>A D veya ← →</td><td>direksiyon</td></tr>
+<tr><td>Boşluk</td><td>el freni</td></tr>
+<tr><td>C</td><td>kamerayı değiştir</td></tr>
+<tr><td>V (basılı)</td><td>arkaya bak</td></tr>
+<tr><td>R</td><td>piste dön</td></tr>
+<tr><td>Esc</td><td>duraklat, bu menü</td></tr>
+</table></div>
+<div><h2>Kumanda</h2><table>
+<tr><td>Sağ tetik</td><td>gaz</td></tr>
+<tr><td>Sol tetik</td><td>fren ve geri</td></tr>
+<tr><td>Sol analog</td><td>direksiyon</td></tr>
+<tr><td>A</td><td>el freni</td></tr>
+<tr><td>Y</td><td>kamerayı değiştir</td></tr>
+<tr><td>RB (basılı)</td><td>arkaya bak</td></tr>
+<tr><td>X</td><td>piste dön</td></tr>
+<tr><td>Start</td><td>bu menü</td></tr>
+</table></div>
+<div><h2>Araçlar</h2><table>
+<tr><td>M</td><td>sesi aç / kapat</td></tr>
+<tr><td>H</td><td>performans istatistikleri</td></tr>
+<tr><td>B</td><td>ölçüm (60 sn'lik rotalı tur)</td></tr>
+<tr><td>F</td><td>rotalı turu izle</td></tr>
+<tr><td>1 – 6</td><td>sabit kamera açıları</td></tr>
+<tr><td colspan="2" style="font-weight:400;color:#ddd;opacity:.75;padding-top:.5em">Otomatik vites · tur, start<br>çizgisi geçilince sayılır</td></tr>
+</table></div>
+</div>
+<div id="ol">
+<b>Beraber oynayın:</b> iki telefon da Ahududu'nun içinden oyunu açsın, ikiniz de aynı yarışta olursunuz.
+Sevgilinin arabası pistte canlı görünür, sesi kulaklıkta yönlü duyulur, canlı kamerası sağ alt köşede açılır —
+senin görüntün de onun ekranında senin gözünde olur. Kamera için bir kez izin vermen yeter.
+</div>
+<div id="camK">
+<span>Kameram</span>
+<button id="camOn" type="button">Aç</button><button id="camOff" type="button">Kapat</button>
+<span id="camStat" style="min-width:6em;text-align:left">kapalı</span>
+</div>
+<div class="bt"><button id="b0">Başla</button><button id="b1">Ölçüm</button></div>
+<button id="quit" type="button" style="display:none;background:rgba(255,255,255,.16)">Oyundan çık</button>
+</div></div>
+<div id="camN" style="display:none"><div class="lb">Sevgilinin kamerası<br><span style="opacity:.7">bağlanıyor…</span></div></div>
+<script>
+/*__CODE__*/
+</script>
+</body>
+</html>
