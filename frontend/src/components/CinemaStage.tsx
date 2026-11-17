@@ -97,6 +97,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(room.duration || 0);
   const [blockedAutoplay, setBlockedAutoplay] = useState(false);
@@ -105,6 +106,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [scrubPreview, setScrubPreview] = useState<number | null>(null);
 
+  const isCalendarRoom = Boolean(room.is_calendar || room.showtime_id);
   const isFrameSource = source === 'vimeo' || source === 'unsupported';
   const frameUrl = room.embed_url || room.video_url || '';
   const playableFrame = isPlayableEmbedUrl(frameUrl);
@@ -279,17 +281,19 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     if (sameCommand) return;
     appliedRef.current = { isPlaying: wantPlaying, position: target };
 
-    // Konumu yalnızca komut anında hizala.
-    if (adapter.kind === 'youtube') {
-      if (Math.abs(adapter.getTime() - target) > 0.8) adapter.setTime(target);
-    } else if (adapter.getTime() > 0 || target > 0) {
-      if (Math.abs(adapter.getTime() - target) > 0.5) adapter.setTime(target);
-    }
-
     if (wantPlaying) {
+      // Konumu yalnızca oynatma başlarken veya sarma anında hizala.
+      if (adapter.kind === 'youtube') {
+        if (Math.abs(adapter.getTime() - target) > 0.8) adapter.setTime(target);
+      } else if (adapter.getTime() > 0 || target > 0) {
+        if (Math.abs(adapter.getTime() - target) > 0.5) adapter.setTime(target);
+      }
       if (adapter.isPaused() && !adapter.isEnded()) adapter.play();
-    } else if (!adapter.isPaused()) {
-      adapter.pause();
+    } else {
+      // Duraklatma (pause): Asla konumu geriye veya ileriye sarma! Olduğu yerde durdur.
+      if (!adapter.isPaused()) {
+        adapter.pause();
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.isPlaying, state.position, state.anchorMs]);
@@ -398,6 +402,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   };
 
   const seekTo = (next: number) => {
+    if (isCalendarRoom) return;
     const target = clampPosition(next, duration || state.duration);
     adapterNow()?.setTime(target);
     setCurrentTime(target);
@@ -406,6 +411,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   };
 
   const seekBy = (delta: number) => {
+    if (isCalendarRoom) return;
     const adapter = adapterNow();
     const from = adapter ? adapter.getTime() : state.position;
     seekTo(from + delta);
@@ -416,7 +422,24 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     const next = !muted;
     adapter?.setMuted?.(next);
     setMuted(next);
+    if (!next && volume === 0) {
+      setVolume(0.5);
+      adapter?.setVolume?.(0.5);
+    }
     playHaptic(12);
+  };
+
+  const handleVolumeChange = (newVol: number) => {
+    const adapter = adapterNow();
+    setVolume(newVol);
+    adapter?.setVolume?.(newVol);
+    if (newVol === 0) {
+      setMuted(true);
+      adapter?.setMuted?.(true);
+    } else if (muted) {
+      setMuted(false);
+      adapter?.setMuted?.(false);
+    }
   };
 
   /* Sarma çubuğu: sürükleyerek hassas sarma */
@@ -639,6 +662,14 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         </button>
       )}
 
+      {/* Takvim seansı canlı rozeti */}
+      {isCalendarRoom && (
+        <div className="absolute top-3 left-4 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/75 backdrop-blur-md border border-amber-400/40 text-amber-300 text-[11px] font-semibold tracking-wide shadow-lg pointer-events-none">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+          <span>📅 Takvim Seansı · Canlı Yayın</span>
+        </div>
+      )}
+
       {/* Sinema alt barı */}
       <div
         className={`absolute inset-x-0 bottom-0 z-20 px-4 pb-3 pt-10 bg-gradient-to-t from-black/90 via-black/50 to-transparent ${
@@ -646,16 +677,18 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         }`}
       >
         <div className="flex items-center gap-3 max-w-3xl mx-auto">
-          <button
-            onClick={() => {
-              playHaptic(18);
-              seekBy(-10);
-            }}
-            className="p-2 rounded-full text-white/85 hover:text-white"
-            title="10 saniye geri"
-          >
-            <RotateCcw className="w-4 h-4" />
-          </button>
+          {!isCalendarRoom && (
+            <button
+              onClick={() => {
+                playHaptic(18);
+                seekBy(-10);
+              }}
+              className="p-2 rounded-full text-white/85 hover:text-white"
+              title="10 saniye geri"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          )}
           <button
             onClick={togglePlay}
             className="w-11 h-11 rounded-full bg-amber-400 text-cinema-950 flex items-center justify-center shadow-lg shadow-amber-400/30 active:scale-95"
@@ -663,16 +696,18 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
           >
             {state.isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
           </button>
-          <button
-            onClick={() => {
-              playHaptic(18);
-              seekBy(10);
-            }}
-            className="p-2 rounded-full text-white/85 hover:text-white"
-            title="10 saniye ileri"
-          >
-            <SkipForward className="w-4 h-4" />
-          </button>
+          {!isCalendarRoom && (
+            <button
+              onClick={() => {
+                playHaptic(18);
+                seekBy(10);
+              }}
+              className="p-2 rounded-full text-white/85 hover:text-white"
+              title="10 saniye ileri"
+            >
+              <SkipForward className="w-4 h-4" />
+            </button>
+          )}
 
           <span className="text-[10px] text-white/70 font-mono tabular-nums w-9 text-right">
             {formatTime(currentTime)}
@@ -686,18 +721,21 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
 
           <button
             onClick={(e) => {
+              if (isCalendarRoom) return;
               const el = e.currentTarget as HTMLElement;
               const rect = el.getBoundingClientRect();
               const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
               seekTo(ratio * totalDuration);
             }}
-            onPointerDown={startScrubbing}
-            onPointerMove={moveScrubbing}
-            onPointerUp={endScrubbing}
-            onPointerCancel={cancelScrubbing}
-            className="flex-1 h-1.5 rounded-full bg-white/20 overflow-hidden relative touch-none"
+            onPointerDown={isCalendarRoom ? undefined : startScrubbing}
+            onPointerMove={isCalendarRoom ? undefined : moveScrubbing}
+            onPointerUp={isCalendarRoom ? undefined : endScrubbing}
+            onPointerCancel={isCalendarRoom ? undefined : cancelScrubbing}
+            className={`flex-1 h-1.5 rounded-full bg-white/20 overflow-hidden relative ${
+              isCalendarRoom ? 'pointer-events-none opacity-80 cursor-default' : 'touch-none'
+            }`}
             style={{ touchAction: 'none' }}
-            title="Sarma"
+            title={isCalendarRoom ? 'Canlı Seans İlerlemesi (sarma kapalı)' : 'Sarma'}
           >
             <span
               className="absolute left-0 top-0 h-full rounded-full bg-gradient-to-r from-amber-300 to-rose-400"
@@ -710,23 +748,38 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
             {formatTime(totalDuration)}
           </span>
 
-          <button
-            onClick={toggleMute}
-            className="p-2 rounded-full text-white/85 hover:text-white"
-            title={muted ? 'Sesi aç' : 'Sesi kapat'}
-          >
-            {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={() => {
-              playHaptic(18);
-              seekTo(0);
-            }}
-            className="p-2 rounded-full text-white/60 hover:text-white"
-            title="Baştan başlat"
-          >
-            <SkipBack className="w-4 h-4" />
-          </button>
+          {/* Kişisel / Yerel Ses Kontrolü (karşı tarafı etkilemez) */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={toggleMute}
+              className="p-2 rounded-full text-white/85 hover:text-white"
+              title={muted || volume === 0 ? 'Sesi aç (kişisel)' : 'Sesi kapat (kişisel)'}
+            >
+              {muted || volume === 0 ? <VolumeX className="w-4 h-4 text-rose-300" /> : <Volume2 className="w-4 h-4" />}
+            </button>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={muted ? 0 : volume}
+              onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+              className="w-14 sm:w-16 h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-amber-400 touch-none"
+              title="Kişisel ses seviyesi (yalnızca senin cihazın)"
+            />
+          </div>
+          {!isCalendarRoom && (
+            <button
+              onClick={() => {
+                playHaptic(18);
+                seekTo(0);
+              }}
+              className="p-2 rounded-full text-white/60 hover:text-white"
+              title="Baştan başlat"
+            >
+              <SkipBack className="w-4 h-4" />
+            </button>
+          )}
           {source !== 'youtube' && (
             <button
               onClick={toggleFullscreen}

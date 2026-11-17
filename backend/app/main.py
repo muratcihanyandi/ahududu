@@ -65,6 +65,16 @@ async def watch_build_changes():
             logger.warning("app_update broadcast failed: %s", e)
 
 
+async def watch_calendar_showtimes():
+    """Takvimdeki seansların saati geldiğinde otomatik salon açıp filmi başlatır."""
+    while True:
+        try:
+            await cinema_calendar.check_and_start_due_showtimes()
+        except Exception as e:
+            logger.debug("Takvim izleme kontrolü hatası: %s", e)
+        await asyncio.sleep(5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Initializing Ahududu database...")
@@ -88,12 +98,15 @@ async def lifespan(app: FastAPI):
         logger.warning("Mektup yedeği alınamadı: %s", e)
 
     watcher = asyncio.create_task(watch_build_changes())
+    calendar_watcher = asyncio.create_task(watch_calendar_showtimes())
     try:
         yield
     finally:
         watcher.cancel()
+        calendar_watcher.cancel()
         with suppress(asyncio.CancelledError):
             await watcher
+            await calendar_watcher
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -142,7 +155,6 @@ async def get_system_version():
             "letter_archive", "dark_cinema_calendar", "voice_messages"
         ]
     }
-
 
 # ---- Çok oyunculu oyun rölesi ----
 # Oyun (ör. Uno merdivenli) kendi oyun-içi arayüzünü bu soket üzerinden açık
@@ -226,14 +238,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                             "room_id": data.get("room_id"),
                         })
                 elif msg_type == "cinema_position_reply":
-                    # Salona biri girdiğinde, oynayan tarafın CANLI konumu.
-                    # Tek tur: soru soruldu, cevap geldi, iş bitti.
-                    # (Sürekli checkpoint YOK — kullanıcı isteğiyle kaldırıldı.)
+                    # Salona biri girdiğinde veya duraklatıldığında, oynayan tarafın CANLI konumu.
                     room_id = data.get("room_id")
                     position = data.get("position")
                     if room_id is not None and position is not None:
                         try:
-                            cinema_room_module.resolve_position(int(room_id), float(position))
+                            cinema_room_module.resolve_position(int(room_id), float(position), user_id=user_id)
                         except Exception as e:  # noqa: BLE001
                             logger.debug("cinema_position_reply işlenemedi: %s", e)
                 elif msg_type == "cinema_heartbeat":

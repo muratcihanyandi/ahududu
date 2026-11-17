@@ -273,6 +273,8 @@ export interface CinemaRoom {
   created_by: UserId;
   is_playing: boolean;
   is_active: boolean;
+  is_calendar?: boolean;
+  showtime_id?: number | null;
   position: number;
   duration: number;
   updated_by?: UserId;

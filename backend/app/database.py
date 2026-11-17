@@ -51,10 +51,12 @@ COLUMN_ADDITIONS = {
         ("longitude", "DOUBLE PRECISION"),
         ("place_name", "VARCHAR(200)"),
     ],
-    # Sinema: film sitelerinden çözülen gerçek HLS akışı (kara ekran düzeltmesi)
+    # Sinema: film sitelerinden çözülen gerçek HLS akışı (kara ekran düzeltmesi) + takvim odası
     "cinema_rooms": [
         ("stream_url", "VARCHAR(1500)"),
         ("stream_referer", "VARCHAR(1000)"),
+        ("is_calendar", "BOOLEAN DEFAULT FALSE"),
+        ("showtime_id", "INTEGER"),
     ],
 }
 

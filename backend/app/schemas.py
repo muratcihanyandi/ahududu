@@ -320,6 +320,8 @@ class CinemaRoomCreate(BaseModel):
     poster_url: Optional[str] = None
     kind: Optional[str] = "film"
     created_by: str = "murat"
+    is_calendar: Optional[bool] = False
+    showtime_id: Optional[int] = None
 
 
 class CinemaRoomResponse(BaseModel):
@@ -337,6 +339,8 @@ class CinemaRoomResponse(BaseModel):
     created_by: str
     is_playing: bool
     is_active: bool
+    is_calendar: Optional[bool] = False
+    showtime_id: Optional[int] = None
     position: float
     duration: float
     updated_by: Optional[str]
@@ -348,8 +352,8 @@ class CinemaRoomResponse(BaseModel):
 class CinemaControl(BaseModel):
     user_id: str
     action: str                       # play, pause, seek, adopt, leave
-    position: Optional[float] = 0.0
-    duration: Optional[float] = 0.0
+    position: Optional[float] = None
+    duration: Optional[float] = None
 
 
 class CinemaReaction(BaseModel):

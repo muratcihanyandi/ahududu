@@ -349,22 +349,34 @@ async def open_showtime(
             video_url=show.video_url,
             source=resolved["source"],
             embed_url=resolved.get("embed_url"),
+            stream_url=resolved.get("stream_url"),
+            stream_referer=resolved.get("stream_referer"),
             poster_url=show.poster_url or resolved.get("poster_url"),
-            kind="embed" if resolved.get("embed_url") else "film",
+            kind="embed" if resolved.get("embed_url") else ("hls" if resolved.get("stream_url") else "film"),
             created_by=payload.user_id,
             is_playing=False,
             is_active=False,
+            is_calendar=True,
+            showtime_id=show.id,
             position=0.0,
             duration=0.0,
         )
         db.add(room)
         await db.flush()
         show.room_id = room.id
+    else:
+        room.is_calendar = True
+        room.showtime_id = show.id
+        if resolved.get("stream_url"):
+            room.stream_url = resolved["stream_url"]
+            room.stream_referer = resolved.get("stream_referer")
+            room.kind = "hls"
 
     # Tek aktif salon: diğerlerini kapat
     all_rooms = await db.execute(select(CinemaRoom))
     for other in all_rooms.scalars().all():
-        other.is_active = False
+        if other is not room:
+            other.is_active = False
 
     room.is_active = True
     room.is_playing = True
@@ -384,21 +396,148 @@ async def open_showtime(
             "video_url": room.video_url,
             "source": room.source,
             "embed_url": room.embed_url,
+            "stream_url": room.stream_url,
+            "stream_referer": room.stream_referer,
             "poster_url": room.poster_url,
             "kind": room.kind,
             "created_by": room.created_by,
             "is_playing": True,
             "is_active": True,
+            "is_calendar": True,
+            "showtime_id": show.id,
             "position": 0,
             "duration": room.duration or 0,
             "updated_by": payload.user_id,
-            "showtime_id": show.id,
         },
         "started_by": payload.user_id,
         "showtime_id": show.id,
         "title": show.title,
     })
     return _payload(show, payload.user_id)
+
+
+# --------------------------------------------------------------------------
+# Takvim saati geldiğinde otomatik salon açma ve direkt başlatma
+# --------------------------------------------------------------------------
+
+async def check_and_start_due_showtimes():
+    """Seans saati gelen takvim filmleri için otomatik salon açar ve filmi başlatır."""
+    import logging
+    log = logging.getLogger("ahududu.cinema.scheduler")
+    from backend.app.database import AsyncSessionLocal
+    now_local = datetime.now()
+    today_str = now_local.date().isoformat()
+
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(CinemaShowtime)
+                .where(CinemaShowtime.show_date == today_str)
+                .where(CinemaShowtime.is_cancelled.is_(False))
+                .where(CinemaShowtime.is_published.is_(True))
+                .order_by(CinemaShowtime.show_time)
+            )
+            showtimes = result.scalars().all()
+            for show in showtimes:
+                # Zaten açılmış ve başlatılmışsa atla
+                if show.started_at is not None and show.room_id is not None:
+                    continue
+
+                start_dt = _start_at(show)
+                if not start_dt:
+                    continue
+
+                diff_seconds = (now_local - start_dt).total_seconds()
+                # Seans saati geldiğinde (veya üzerinden 1 saatten az geçtiğinde) direkt başlat
+                if 0 <= diff_seconds <= 3600:
+                    try:
+                        resolved = await resolve_link_deep(show.video_url)
+                        room = CinemaRoom(
+                            title=show.title,
+                            video_url=resolved["video_url"],
+                            source=resolved["source"],
+                            embed_url=resolved.get("embed_url"),
+                            stream_url=resolved.get("stream_url"),
+                            stream_referer=resolved.get("stream_referer"),
+                            poster_url=show.poster_url or resolved.get("poster_url"),
+                            kind="embed" if resolved.get("embed_url") else ("hls" if resolved.get("stream_url") else "film"),
+                            created_by="calendar",
+                            is_playing=True,
+                            is_active=True,
+                            is_calendar=True,
+                            showtime_id=show.id,
+                            position=0.0,
+                            duration=0.0,
+                            updated_by="calendar",
+                            last_seen_at=now_utc(),
+                        )
+                        db.add(room)
+                        await db.flush()
+
+                        # Diğer tüm aktif odaları kapat
+                        all_rooms = await db.execute(select(CinemaRoom))
+                        for other in all_rooms.scalars().all():
+                            if other.id != room.id and other.is_active:
+                                other.is_active = False
+
+                        show.room_id = room.id
+                        show.started_at = now_utc()
+                        await db.commit()
+                        await db.refresh(room)
+                        await db.refresh(show)
+
+                        log.info("Takvim seansı saati geldi, otomatik başlatıldı: %s (show_id=%d, room_id=%d)", show.title, show.id, room.id)
+
+                        room_dict = {
+                            "id": room.id,
+                            "title": room.title,
+                            "video_url": room.video_url,
+                            "source": room.source,
+                            "embed_url": room.embed_url,
+                            "stream_url": room.stream_url,
+                            "stream_referer": room.stream_referer,
+                            "poster_url": room.poster_url,
+                            "kind": room.kind,
+                            "created_by": room.created_by,
+                            "is_playing": True,
+                            "is_active": True,
+                            "is_calendar": True,
+                            "showtime_id": show.id,
+                            "position": 0.0,
+                            "duration": room.duration or 0.0,
+                            "updated_by": "calendar",
+                        }
+
+                        await ws_manager.broadcast({
+                            "type": "cinema_room_created",
+                            "room": room_dict,
+                        })
+
+                        await ws_manager.broadcast({
+                            "type": "cinema_started",
+                            "room": room_dict,
+                            "started_by": "calendar",
+                            "showtime_id": show.id,
+                            "title": show.title,
+                        })
+
+                        await ws_manager.broadcast({
+                            "type": "cinema_play",
+                            "room_id": room.id,
+                            "position": 0.0,
+                            "is_playing": True,
+                            "started": True,
+                            "is_calendar": True,
+                        })
+
+                        await ws_manager.broadcast({
+                            "type": "cinema_calendar_updated",
+                            "showtime": _payload(show),
+                        })
+                    except Exception as item_err:
+                        log.error("Seans otomatik açılamadı (%s): %s", show.title, item_err)
+    except Exception as exc:
+        log.warning("Takvim kontrolü sırasında hata: %s", exc)
 
 
 # --------------------------------------------------------------------------

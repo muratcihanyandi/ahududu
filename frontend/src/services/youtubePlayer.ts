@@ -87,6 +87,7 @@ export class HTML5PlayerAdapter extends BaseAdapter implements PlayerAdapter {
   private muteFallbackTried = false;
   private duration = 0;
   private seekedTimer: number | null = null;
+  private userWantsPlay = false;
 
   constructor(
     private video: HTMLVideoElement,
@@ -226,10 +227,15 @@ export class HTML5PlayerAdapter extends BaseAdapter implements PlayerAdapter {
 
   play(): void {
     this.suppress();
+    this.userWantsPlay = true;
     const result = this.video.play();
     if (result && typeof result.catch === 'function') {
-      result.catch(() => {
-        // Autoplay engellendi: sessize alıp dene, kullanıcıya "sesi aç" göster.
+      result.catch((err: any) => {
+        // Durdurma komutu geldiyse veya istek pause ile bölündüyse autoplay deneme
+        if (!this.userWantsPlay) return;
+        if (err && (err.name === 'AbortError' || String(err).includes('interrupted'))) return;
+
+        // Gerçek Autoplay engellendi: sessize alıp dene, kullanıcıya "sesi aç" göster.
         if (this.muteFallbackTried) {
           this.events.onAutoplayBlocked?.();
           return;
@@ -239,14 +245,23 @@ export class HTML5PlayerAdapter extends BaseAdapter implements PlayerAdapter {
         this.suppress(800);
         this.video
           .play()
-          .then(() => this.events.onAutoplayBlocked?.())
-          .catch(() => this.events.onAutoplayBlocked?.());
+          .then(() => {
+            if (!this.userWantsPlay) {
+              this.video.pause();
+            } else {
+              this.events.onAutoplayBlocked?.();
+            }
+          })
+          .catch(() => {
+            if (this.userWantsPlay) this.events.onAutoplayBlocked?.();
+          });
       });
     }
   }
 
   pause(): void {
     this.suppress();
+    this.userWantsPlay = false;
     this.video.pause();
   }
 
@@ -290,6 +305,18 @@ export class HTML5PlayerAdapter extends BaseAdapter implements PlayerAdapter {
 
   isMuted(): boolean {
     return this.video.muted;
+  }
+
+  setVolume(vol: number): void {
+    const clamped = Math.max(0, Math.min(1, vol));
+    this.video.volume = clamped;
+    if (clamped > 0 && this.video.muted) {
+      this.video.muted = false;
+    }
+  }
+
+  getVolume(): number {
+    return this.video.volume;
   }
 
   destroy(): void {
@@ -709,6 +736,28 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
     return this.muted;
   }
 
+  setVolume(vol: number): void {
+    const clamped = Math.max(0, Math.min(100, Math.round(vol * 100)));
+    try {
+      this.player?.setVolume?.(clamped);
+      if (clamped > 0 && this.muted) {
+        this.player?.unMute?.();
+        this.muted = false;
+      }
+    } catch {
+      /* yok say */
+    }
+  }
+
+  getVolume(): number {
+    try {
+      const v = this.player?.getVolume?.();
+      return typeof v === 'number' ? v / 100 : 1;
+    } catch {
+      return 1;
+    }
+  }
+
   destroy(): void {
     this.destroyed = true;
     if (this.autoplayCheckTimer) window.clearTimeout(this.autoplayCheckTimer);
@@ -909,14 +958,16 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
 
   /** Oynatmak istiyoruz ama oynatıcı durdu: yeniden dene (sınırlı sayıda). */
   private tryResume(): void {
-    if (this.disposed || this.resumeAttempts >= 6) return;
+    if (this.disposed || !this.resumeWanted || this.resumeAttempts >= 6) return;
     this.resumeAttempts += 1;
     const video = this.videoEl;
     try {
       const p = video.play();
       if (p && typeof p.catch === 'function') {
-        p.catch(() => {
-          // Otomatik oynatma engeli: sessize alıp bir kez daha dene.
+        p.catch((err: any) => {
+          // Durdurulmuşsa veya pause ile kesildiyse asla sessize alıp oynatma!
+          if (!this.resumeWanted) return;
+          if (err && (err.name === 'AbortError' || String(err).includes('interrupted'))) return;
           try {
             video.muted = true;
             video.play().catch(() => {});
@@ -979,6 +1030,7 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
 
   pause(): void {
     this.setResumeWanted(false);
+    this.resumeAttempts = 999;
     super.pause();
   }
 

@@ -214,6 +214,8 @@ class CinemaRoom(Base):
     position = Column(Float, default=0.0)                 # saniye
     duration = Column(Float, default=0.0)                 # saniye
     updated_by = Column(String(50), nullable=True)
+    is_calendar = Column(Boolean, default=False)          # Takvimden mi açıldı
+    showtime_id = Column(Integer, nullable=True)          # Takvim seans kimliği
     last_seen_at = Column(DateTime(timezone=True), nullable=True)   # partner odada mı
     created_at = Column(DateTime(timezone=True), default=now_utc)
     updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)

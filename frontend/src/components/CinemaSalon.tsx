@@ -676,15 +676,49 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
       }
 
       // ---- Başlatma / oynatma / duraklatma / sarma ----
-      // `play` ve `pause` KENDÄ° komutumuzda da uygulanÄ±r: sunucu "geride olan"
-      // saniyesini seÃ§ip geri gÃ¶nderir, iki cihaz da ona hizalanÄ±r.
-      const isPlayCommand = data.action === 'play' || data.updated_by === currentUserId;
       if (data.action === 'play' || data.action === 'pause' || data.action === 'seek') {
-        if (data.updated_by === currentUserId && data.action !== 'play') {
-          // Kendi duraklatma/sarma komutumuz: oynatÄ±cÄ±ya zaten uygulandÄ±.
+        if (data.action === 'pause') {
+          // Karşı taraf durdurduysa bizde de durdurulur ve durduğumuz saniye sunucuya bildirilir
+          if (data.updated_by !== currentUserId) {
+            const video = document.querySelector('video') as HTMLVideoElement | null;
+            const currentPos = video && Number.isFinite(video.currentTime) ? video.currentTime : (playbackRef.current.position || 0);
+            wsClient.send({
+              type: 'cinema_position_reply',
+              room_id: data.room_id,
+              position: currentPos,
+            });
+            setPlayback((prev) => ({
+              ...prev,
+              position: currentPos,
+              isPlaying: false,
+              duration: data.duration || room.duration || prev.duration || 0,
+              anchorMs: Date.now(),
+              updatedBy: data.updated_by,
+            }));
+          } else {
+            setPlayback((prev) => ({
+              ...prev,
+              isPlaying: false,
+              anchorMs: Date.now(),
+            }));
+          }
           return;
         }
-        if (isPlayCommand || data.action === 'pause') {
+
+        if (data.action === 'play') {
+          // Oynat komutu: sunucunun belirlediği saniyeye iki cihaz da hizalanır ve başlar
+          setPlayback({
+            position: data.position,
+            isPlaying: true,
+            duration: data.duration || room.duration || 0,
+            anchorMs: Date.now(),
+            updatedBy: data.updated_by,
+          });
+          return;
+        }
+
+        if (data.action === 'seek') {
+          if (data.updated_by === currentUserId) return;
           setPlayback({
             position: data.position,
             isPlaying: data.is_playing,
@@ -692,8 +726,8 @@ export const CinemaSalon: React.FC<CinemaSalonProps> = ({ currentUserId, onBackH
             anchorMs: Date.now(),
             updatedBy: data.updated_by,
           });
+          return;
         }
-        return;
       }
 
       if (data.updated_by === currentUserId) return;

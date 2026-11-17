@@ -265,6 +265,8 @@ def _room_payload(room: CinemaRoom) -> dict:
         "created_by": room.created_by,
         "is_playing": bool(room.is_playing),
         "is_active": bool(room.is_active),
+        "is_calendar": bool(getattr(room, "is_calendar", False)),
+        "showtime_id": getattr(room, "showtime_id", None),
         "position": room.position or 0.0,
         "duration": room.duration or 0.0,
         "updated_by": room.updated_by,
@@ -814,6 +816,8 @@ async def create_room(payload: CinemaRoomCreate, db: AsyncSession = Depends(get_
             created_by=payload.created_by or "murat",
             is_playing=False,
             is_active=False,
+            is_calendar=bool(payload.is_calendar),
+            showtime_id=payload.showtime_id,
             position=0.0,
             duration=0.0,
         )
@@ -1006,12 +1010,14 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
     # Bu cihazın bildirdiği konum (varsa).
     reported = float(payload.position) if payload.position is not None else None
 
-    if action == "play":
+    if action == "seek":
+        if getattr(room, "is_calendar", False):
+            raise HTTPException(status_code=400, detail="Takvim seanslarında ileri/geri sarma yapılamaz")
+        room.position = float(payload.position or 0.0)
+    elif action == "play":
         room.is_playing = True
     elif action == "pause":
         room.is_playing = False
-    elif action == "seek":
-        room.position = float(payload.position or 0.0)
     elif action in ("adopt", "join"):
         # ---- SALONA SONRADAN GİREN: TEK SEFERLİK SENKRON ----
         #
@@ -1103,25 +1109,86 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
     else:
         raise HTTPException(status_code=400, detail="Bilinmeyen işlem")
 
-    if reported is not None and action in ("play", "pause", "seek"):
+    if reported is not None and action in ("pause", "seek"):
         room.position = reported
-        # Bu cihazın konumunu hatırla: "geride olan" seçiminde kullanılır.
         _device_positions.setdefault(room.id, {})[payload.user_id] = reported
+    elif reported is not None and action == "play":
+        _device_positions.setdefault(room.id, {}).setdefault(payload.user_id, reported)
 
-    # ---- OYNAT: geride olan esas alınır ----
+    # ---- DURDUR: İki tarafta da durdurulur ve karşı tarafın pozisyonu öğrenilir ----
+    if action == "pause":
+        partner_id = settings.partner_of(payload.user_id)
+        # Karşı tarafın o an durduğu pozisyonu tek tur canlı sor
+        try:
+            partner_pos = await ask_position(room.id, payload.user_id, partner_id, wait_seconds=0.8)
+            if partner_pos is not None:
+                _device_positions.setdefault(room.id, {})[partner_id] = float(partner_pos)
+        except Exception:
+            pass
+
+    # ---- OYNAT: Senkronizasyon Modelleri ----
     if action == "play":
-        positions = _device_positions.get(room.id, {})
-        # Dururken kaydedilen konumlar (iki cihazın bıraktığı yer).
-        if len(positions) >= 2:
-            earliest_user = min(positions, key=lambda u: positions[u])
-            room.position = max(0.0, positions[earliest_user])
-            logger.info(
-                "Sinema play: geride olan=%s (%.1fs) -> herkes buradan devam",
-                earliest_user, room.position,
-            )
-            behind_by = earliest_user
+        is_calendar = bool(getattr(room, "is_calendar", False))
+        positions = _device_positions.setdefault(room.id, {})
+
+        if is_calendar:
+            # 1) TAKVİM SEANSI:
+            # "Durdurup başlatıldığında eğer bir kişi 11:08 diğeri 11:03 deyse 11:00 dan devam edecek film.
+            #  Yani geride olan kişinin 3 saniye gerisinden devam edecek."
+            partner_id = settings.partner_of(payload.user_id)
+            if partner_id not in positions:
+                try:
+                    partner_pos = await ask_position(room.id, payload.user_id, partner_id, wait_seconds=0.8)
+                    if partner_pos is not None:
+                        positions[partner_id] = float(partner_pos)
+                except Exception:
+                    pass
+
+            if len(positions) >= 2:
+                earliest_user = min(positions, key=lambda u: positions[u])
+                min_pos = positions[earliest_user]
+                room.position = max(0.0, min_pos - 3.0)
+                logger.info(
+                    "Takvim seansı play: geride olan=%s (%.1fs) -> 3s gerisi: %.1fs",
+                    earliest_user, min_pos, room.position,
+                )
+                behind_by = earliest_user
+            elif len(positions) == 1:
+                single_pos = list(positions.values())[0]
+                room.position = max(0.0, single_pos - 3.0)
+                logger.info("Takvim seansı play: tek cihaz (%.1fs) -> 3s gerisi: %.1fs", single_pos, room.position)
+                behind_by = payload.user_id
+            else:
+                room.position = max(0.0, (room.position or 0.0) - 3.0)
+                behind_by = None
         else:
-            behind_by = None
+            # 2) TAKVİMSİZ HIZLI İZLE:
+            # "kim film açarsa yönetici o olsun. Durdurma ve başlatma işlemini iki kişide yapabilsin
+            #  ancak süre senkronizasyonu sadece filmi açan kişiye göre senkronize edilsin.
+            #  Başlata tıklandığında filmi açan kişiye göre iki kişininde dakikasını eşitlesin."
+            leader = room.created_by or "murat"
+            if leader in positions:
+                room.position = max(0.0, positions[leader])
+                logger.info(
+                    "Hızlı izle play: yönetici=%s (%.1fs) -> iki kişi de eşitlendi",
+                    leader, room.position,
+                )
+            else:
+                # Yöneticinin konumu henüz kayıtlı değilse canlı sor
+                try:
+                    live_pos = await ask_position(room.id, payload.user_id, leader, wait_seconds=1.0)
+                    if live_pos is not None:
+                        positions[leader] = float(live_pos)
+                        room.position = max(0.0, live_pos)
+                    else:
+                        room.position = room.position or 0.0
+                except Exception:
+                    room.position = room.position or 0.0
+                logger.info(
+                    "Hızlı izle play: yönetici=%s canlı/son pos=%.1fs -> iki kişi de eşitlendi",
+                    leader, room.position,
+                )
+            behind_by = leader
     else:
         behind_by = None
 
@@ -1185,8 +1252,15 @@ async def ask_position(room_id: int, requester_id: str, user_id: str, wait_secon
         _position_requests.pop(room_id, None)
 
 
-def resolve_position(room_id: int, position: float) -> None:
-    """Karşı taraf konumunu bildirdi: bekleyen soruyu yanıtla."""
+def record_device_position(room_id: int, user_id: str, position: float) -> None:
+    """Bir kullanıcının salondaki son bildirdiği konumu kaydeder."""
+    _device_positions.setdefault(room_id, {})[user_id] = float(position)
+
+
+def resolve_position(room_id: int, position: float, user_id: Optional[str] = None) -> None:
+    """Karşı taraf konumunu bildirdi: bekleyen soruyu yanıtla ve konumu kaydet."""
+    if user_id:
+        record_device_position(room_id, user_id, position)
     entry = _position_requests.get(room_id)
     if not entry:
         return

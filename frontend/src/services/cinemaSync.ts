@@ -66,6 +66,8 @@ export interface PlayerAdapter {
   isBuffering(): boolean;
   setMuted?(muted: boolean): void;
   isMuted?(): boolean;
+  setVolume?(volume: number): void;
+  getVolume?(): number;
   destroy?(): void;
 }
 
