@@ -9,8 +9,9 @@ import {
   CalendarDays,
   X,
   Check,
+  Send,
 } from 'lucide-react';
-import { GalleryItem, UserId } from '../types';
+import { ChatMessage, GalleryItem, UserId } from '../types';
 import { api, mediaUrl } from '../services/api';
 import { playHaptic } from '../services/haptics';
 
@@ -78,6 +79,8 @@ interface ChatAttachPanelProps {
   /** Panel içinden anlar / sinema gibi ana uygulama ekranları. */
   onOpenMemories: () => void;
   onOpenCinema: () => void;
+  /** Ortak galeriden seçilen fotoğraflar gönderildi (sohbet listesine eklensin). */
+  onPhotoSent: (msg: ChatMessage) => void;
   /** Kısa bilgi baloncuğu (hata/başarı). */
   showToast: (text: string) => void;
 }
@@ -195,6 +198,7 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
   onShareEvent,
   onOpenMemories,
   onOpenCinema,
+  onPhotoSent,
   showToast,
 }) => {
   const [sheet, setSheetRaw] = useState<SheetKind | null>(null);
@@ -210,6 +214,10 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
   };
   const [photos, setPhotos] = useState<GalleryItem[]>([]);
   const [photosLoading, setPhotosLoading] = useState(true);
+  /** Izgarada seçilen fotoğraflar (sıra numarası numaralı rozetle görünür). */
+  const [selectedPhotos, setSelectedPhotos] = useState<number[]>([]);
+  /** Toplu gönderim sürüyor mu? (çift dokunuşu önler) */
+  const [sendingPhotos, setSendingPhotos] = useState(false);
   const [busy, setBusy] = useState(false);
   /** "Tekrar dene"ye basınca içerik yeniden kurulur (anahtar). */
   const [retryKey, setRetryKey] = useState(0);
@@ -244,6 +252,65 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
   useEffect(() => {
     void loadPhotos();
   }, [loadPhotos, refreshKey, retryKey]);
+
+  /** Bir kareye dokun: seçime ekle / seçimden çıkar (sıra korunur). */
+  const togglePhoto = (photoId: number) => {
+    playHaptic(12);
+    setSelectedPhotos((prev) =>
+      prev.includes(photoId) ? prev.filter((id) => id !== photoId) : [...prev, photoId]
+    );
+  };
+
+  const clearPhotoSelection = () => {
+    setSelectedPhotos([]);
+  };
+
+  /**
+   * Seçilen fotoğrafları toplu gönder (WhatsApp albümü gibi: seçim sırasıyla).
+   * Gönderim bitince seçim temizlenir ve panel kapanır; sohbet görünür kalır.
+   */
+  const sendSelectedPhotos = async () => {
+    if (sendingPhotos || selectedPhotos.length === 0) return;
+    const picked = selectedPhotos
+      .map((id) => photos.find((photo) => photo.id === id))
+      .filter((photo): photo is GalleryItem => Boolean(photo));
+    if (!picked.length) {
+      setSelectedPhotos([]);
+      return;
+    }
+
+    setSendingPhotos(true);
+    playHaptic(20);
+    let sent = 0;
+    try {
+      for (const photo of picked) {
+        // Ortak galerideki dosya sunucuda zaten var: yalnızca sohbet mesajı yazılır.
+        const msg = await api.sendChatMessage({
+          sender: currentUserId,
+          message_type: photo.media_type === 'video' ? 'video' : 'image',
+          media_url: photo.media_url,
+        });
+        onPhotoSent(msg);
+        sent += 1;
+      }
+      showToast(sent > 1 ? `${sent} fotoğraf gönderildi 📷` : 'Fotoğraf gönderildi 📷');
+      setSelectedPhotos([]);
+      onRequestClose();
+    } catch (e) {
+      console.error('[Ahududu] Fotoğraflar gönderilemedi', e);
+      showToast(
+        sent > 0
+          ? `${sent} tanesi gitti, kalanlar gitmedi. Tekrar dener misin?`
+          : 'Fotoğraflar gitmedi, bir daha dener misin?'
+      );
+      // Gönderilenleri seçimden düş; kalanlar tekrar denenebilsin.
+      setSelectedPhotos((prev) =>
+        prev.filter((id) => !picked.slice(0, sent).some((photo) => photo.id === id))
+      );
+    } finally {
+      if (mountedRef.current) setSendingPhotos(false);
+    }
+  };
 
   /* --------------------------- Form durumları --------------------------- */
 
@@ -724,51 +791,14 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
             </div>
           )}
 
-          {/* ---- Telefon galerisi + ortak anılarımız ----
-               "Galeri" kutusu TELEFONUN galerisini açar (sistem seçicisi).
-               Aşağıdaki kareler ise ikimizin ortak albümü (Anılar). */}
+          {/* ---- Telefon galerisi: kutuların HEMEN ALTINDA ----
+               WhatsApp'taki gibi: son fotoğraflar ızgara halinde. Bir kareye
+               dokununca seçilir (birden fazla seçilebilir), seçilenler toplu
+               gönderilir. Başlık/ek düğme yok — doğrudan ızgara. */}
           <div className="mt-3">
-            <button
-              type="button"
-              onClick={() => {
-                playHaptic(15);
-                onPickFile('galeri');
-              }}
-              className="flex w-full items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50/70 px-3 py-2 text-left active:scale-[0.99]"
-            >
-              <span className="flex items-center gap-2">
-                <Images className="h-4 w-4 text-sky-500" />
-                <span>
-                  <span className="block text-[11.5px] font-bold text-berry-900">
-                    Telefon galerisinden fotoğraf seç
-                  </span>
-                  <span className="block text-[9.5px] text-stone-500">
-                    Cihazındaki fotoğraflar açılır
-                  </span>
-                </span>
-              </span>
-              <span className="shrink-0 text-[11px] font-bold text-berry-600">Seç ›</span>
-            </button>
-
-            <div className="mb-1.5 mt-2.5 flex items-center justify-between">
-              <span className="text-[10px] font-bold tracking-wide text-stone-500">
-                Ortak anılarımız
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  playHaptic(12);
-                  onOpenMemories();
-                }}
-                className="text-[10px] font-semibold text-berry-600"
-              >
-                Tümü ›
-              </button>
-            </div>
-
             {photosLoading ? (
               <div className="grid grid-cols-4 gap-1.5">
-                {Array.from({ length: 4 }).map((_, i) => (
+                {Array.from({ length: 8 }).map((_, i) => (
                   <div
                     key={i}
                     className="aspect-square animate-pulse rounded-xl bg-rose-100/70"
@@ -776,37 +806,96 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
                 ))}
               </div>
             ) : photos.length === 0 ? (
-              <button
-                type="button"
-                onClick={() => onPickFile('galeri')}
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-rose-200 bg-rose-50/60 py-3 text-[11px] font-semibold text-berry-600"
-              >
-                <Images className="h-4 w-4" />
-                Galerimizde henüz kare yok — bir tane seç
-              </button>
+              <div className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed border-rose-200 bg-rose-50/60 px-3 py-4 text-center">
+                <p className="text-[11px] font-semibold text-berry-700">
+                  Telefon galerisinde henüz fotoğraf yok
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onPickFile('galeri')}
+                  className="rounded-full bg-berry-500 px-3 py-1 text-[10.5px] font-bold text-white active:scale-95"
+                >
+                  Galeriden seç
+                </button>
+              </div>
             ) : (
               <div className="grid grid-cols-4 gap-1.5">
-                {photos.map((photo) => (
-                  <div
-                    key={photo.id}
-                    className="relative aspect-square overflow-hidden rounded-xl bg-rose-100"
-                  >
-                    <img
-                      src={mediaUrl(photo.thumbnail_url || photo.media_url)}
-                      alt={photo.title || 'Anımız'}
-                      loading="lazy"
-                      decoding="async"
-                      className="h-full w-full object-cover"
-                      onError={(e) => {
-                        // Yüklenemeyen bir kare tüm ızgarayı bozmasın.
-                        (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
-                      }}
-                    />
-                  </div>
-                ))}
+                {photos.map((photo, index) => {
+                  const selectedIndex = selectedPhotos.indexOf(photo.id);
+                  const isSelected = selectedIndex >= 0;
+                  return (
+                    <button
+                      key={photo.id}
+                      type="button"
+                      onClick={() => togglePhoto(photo.id)}
+                      aria-pressed={isSelected}
+                      aria-label={`${photo.title || `Fotoğraf ${index + 1}`}${
+                        isSelected ? ' — seçildi' : ''
+                      }`}
+                      className={`relative aspect-square overflow-hidden rounded-xl bg-rose-100 transition-transform active:scale-95 ${
+                        isSelected ? 'ring-2 ring-berry-500' : ''
+                      }`}
+                    >
+                      <img
+                        src={mediaUrl(photo.thumbnail_url || photo.media_url)}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        className={`h-full w-full object-cover transition-opacity ${
+                          isSelected ? 'opacity-70' : ''
+                        }`}
+                        onError={(e) => {
+                          // Yüklenemeyen bir kare tüm ızgarayı bozmasın.
+                          (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+                        }}
+                      />
+                      {/* Seçim dairesi: tıklayınca sıra numarası görünür */}
+                      <span
+                        className={`absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full border-2 text-[10px] font-bold ${
+                          isSelected
+                            ? 'border-white bg-berry-500 text-white'
+                            : 'border-white/90 bg-black/20 text-transparent'
+                        }`}
+                      >
+                        {isSelected ? selectedIndex + 1 : ''}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
+
+          {/* Seçili fotoğraflar: gönder düğmesi (WhatsApp gibi) */}
+          {selectedPhotos.length > 0 && (
+            <div className="mt-2 flex items-center justify-between gap-2 rounded-xl bg-berry-50 px-3 py-2">
+              <span className="text-[11px] font-bold text-berry-900">
+                {selectedPhotos.length} fotoğraf seçildi
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={clearPhotoSelection}
+                  className="rounded-full border border-rose-200 bg-white px-2.5 py-1 text-[10.5px] font-semibold text-stone-600 active:scale-95"
+                >
+                  Temizle
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void sendSelectedPhotos()}
+                  disabled={sendingPhotos}
+                  className="flex items-center gap-1 rounded-full bg-gradient-to-r from-berry-500 to-rose-500 px-3 py-1 text-[10.5px] font-bold text-white shadow-sm active:scale-95 disabled:opacity-60"
+                >
+                  {sendingPhotos ? (
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  ) : (
+                    <Send className="h-3 w-3" />
+                  )}
+                  Gönder
+                </button>
+              </div>
+            </div>
+          )}
 
           <p className="mt-2 text-center text-[9.5px] text-stone-400">
             Kapatmak için yukarıdaki tutamağa dokun ya da geri tuşuna bas

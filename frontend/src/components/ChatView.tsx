@@ -371,6 +371,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
     // Tür süzgecini HER seferinde seçimin kendisine göre ayarla.
     input.setAttribute('accept', PICK_ACCEPT[kind]);
+    // Galeri: WhatsApp gibi ÇOKLU seçim (birden fazla fotoğraf tek seçimde).
+    if (kind === 'galeri') {
+      input.setAttribute('multiple', 'multiple');
+    } else {
+      input.removeAttribute('multiple');
+    }
     // Kamera: Android/Chrome'da tek seçicide "Kamera" sekmesini öne çıkar.
     if (kind === 'camera') {
       input.setAttribute('capture', 'environment');
@@ -809,51 +815,61 @@ export const ChatView: React.FC<ChatViewProps> = ({
   /**
    * Galeri / Kamera / Belge seçimi.
    *
-   * Tür dosyanın kendisinden anlaşılır (belge seçicisi görsel de seçebilir):
+   * Galeri ÇOKLU seçim destekler (WhatsApp gibi): seçilen tüm fotoğraflar
+   * sırayla yüklenip gönderilir. Tür dosyanın kendisinden anlaşılır:
    * video → video, ses → sesli mesaj, görsel → fotoğraf, geri kalan → belge.
    */
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const input = e.target;
     const files = input.files;
     if (!files || files.length === 0) return;
-    const file = files[0];
+    const batch = Array.from(files);
     const kind = pickKindRef.current;
     setIsUploading(true);
     playHaptic(20);
 
-    try {
+    const typeOf = (file: File): ChatMessageType => {
       const mime = (file.type || '').toLowerCase();
-      const isVideo = mime.startsWith('video');
-      const isAudio = mime.startsWith('audio');
-      const isImage = mime.startsWith('image');
-      const msgType: ChatMessageType = isVideo
-        ? 'video'
-        : isAudio
-          ? 'voice'
-          : isImage
-            ? 'image'
-            : 'belge';
+      if (mime.startsWith('video')) return 'video';
+      if (mime.startsWith('audio')) return 'voice';
+      if (mime.startsWith('image')) return 'image';
+      return 'belge';
+    };
 
-      const uploadRes = await api.uploadMedia(file, msgType === 'belge' ? 'belge' : 'chat');
-
-      const newMsg = await api.sendChatMessage({
-        sender: currentUserId,
-        message_type: msgType,
-        media_url: uploadRes.url,
-        // Belgede ad lazım; sunucu/ad boşsa kategoriden bir etiket üretilir.
-        content:
-          msgType === 'belge'
-            ? file.name?.trim() || `Belge (${formatFileSize(file.size) || kind})`
-            : undefined,
-      });
-
-      appendSentMessage(newMsg);
-      if (msgType === 'belge') showToast('Belge gönderildi 📄');
-      // Panel hâlâ açıksa ızgaradaki yeni kare hemen görünsün.
+    let sent = 0;
+    try {
+      // Tek tek (sırayla) yükle: 40 MB'lık bir video ile iki foto aynı anda
+      // göndericide ağ boğulmasın, yükleme çubuğu doğru ilerlesin.
+      for (const file of batch) {
+        const msgType = typeOf(file);
+        const uploadRes = await api.uploadMedia(file, msgType === 'belge' ? 'belge' : 'chat');
+        const newMsg = await api.sendChatMessage({
+          sender: currentUserId,
+          message_type: msgType,
+          media_url: uploadRes.url,
+          // Belgede ad lazım; sunucu/ad boşsa kategoriden bir etiket üretilir.
+          content:
+            msgType === 'belge'
+              ? file.name?.trim() || `Belge (${formatFileSize(file.size) || kind})`
+              : undefined,
+        });
+        appendSentMessage(newMsg);
+        sent += 1;
+      }
+      if (batch.length > 1) {
+        showToast(`${sent} fotoğraf gönderildi 📷`);
+      } else if (sent === 1 && typeOf(batch[0]) === 'belge') {
+        showToast('Belge gönderildi 📄');
+      }
+      // Panel hâlâ açıksa ızgaradaki yeni kareler hemen görünsün.
       if (attachOpenRef.current) setAttachRefreshKey((key) => key + 1);
     } catch (err) {
       console.error(err);
-      showToast('Dosya yüklenemedi, tekrar dener misin?');
+      showToast(
+        sent > 0
+          ? `${sent} tanesi gönderildi, kalanlar gitmedi. Tekrar dener misin?`
+          : 'Dosya yüklenemedi, tekrar dener misin?'
+      );
     } finally {
       setIsUploading(false);
       if (pickResetTimerRef.current !== null) {
@@ -865,6 +881,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         input.value = '';
         // <input type=file>'in accept süzgeci seçimden hemen sonra normaline dönsün.
         input.setAttribute('accept', PICK_ACCEPT.galeri);
+        input.removeAttribute('multiple');
       }
     }
   };
@@ -1742,6 +1759,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 onShareEvent={shareEvent}
                 onOpenMemories={onOpenMemories}
                 onOpenCinema={onOpenCinema}
+                onPhotoSent={appendSentMessage}
                 showToast={showToast}
               />
             </ErrorBoundary>
