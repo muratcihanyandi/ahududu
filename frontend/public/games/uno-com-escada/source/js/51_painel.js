@@ -36,7 +36,13 @@ function hudStrip(cv, labels, widths, units, At, px, o) {
   return f;
 }
 function hudLayout() {
-  const H = HUD, L = H.L, dpr = devicePixelRatio || 1, r = Math.round(Math.min(Math.max(innerHeight * 0.105, 54), 124) * dpr), W = Math.round(r * 4.5), Hh = Math.round(r * 2.26);
+  const H = HUD, L = H.L, dpr = devicePixelRatio || 1;
+  // Dokunmatik/yatay telefonda gösterge paneli KÜÇÜLTÜLÜR: aksi halde (kısa
+  // yükseklik × 2.26) ekranı kaplıyor ve alttaki sürüş düğmelerinin üstüne
+  // biniyordu.
+  const touch = (typeof MOB !== 'undefined' && MOB.touch) || (navigator.maxTouchPoints || 0) > 0;
+  const k = touch ? (innerHeight > innerWidth ? 0.085 : 0.062) : 0;
+  const r = Math.round(Math.min(Math.max(innerHeight * (touch ? k : 0.105), touch ? 34 : 54), touch ? 78 : 124) * dpr), W = Math.round(r * 4.5), Hh = Math.round(r * 2.26);
   const A = H.A = hudAtlas(Math.round(r * 0.33)), B = H.B = hudAtlas(Math.round(r * 0.23)), C = H.C = hudAtlas(Math.round(r * 0.17));
   const c = H.cg; c.width = W; c.height = Hh; c.style.width = W / dpr + 'px'; c.style.height = Hh / dpr + 'px';
   const cx1 = Math.round(r * 1.12), cy = Math.round(r * 1.12), cx2 = W - cx1; L[0] = cx1; L[1] = cy; L[2] = cx2; L[3] = r; L[4] = W; L[5] = Hh;

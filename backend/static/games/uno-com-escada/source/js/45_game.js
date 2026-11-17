@@ -130,6 +130,9 @@ function gameRestart() {
 // um passo de física; a cada 2 passos (1/60 s) lê as teclas (gravadas, piloto automático ou teclado)
 function gameStep() {
   if ((GS.sub & 1) === 0) {
+    // dokunmatik kumanda: basılı düğmeleri her adımda yeniden uygula
+    // (gameRestart GS.held'i sıfırlar; düğme basılı kalmalı)
+    if (typeof mobApplyKeys === 'function') mobApplyKeys();
     const t = GS.tick60 / 60; let k;
     if (GS.replayOn && GS.tick60 < GS.replay.length) k = GS.replay[GS.tick60];
     else if (GS.ai) k = t < 0.5 ? 0 : aiKeys(t);

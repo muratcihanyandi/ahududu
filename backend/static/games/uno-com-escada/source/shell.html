@@ -11,6 +11,10 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font:14px/1.4 -ap
 #hint{position:absolute;left:14px;bottom:calc(10px + env(safe-area-inset-bottom,0px));opacity:.75;text-shadow:0 1px 2px #000;transition:opacity 1.5s;pointer-events:none;font-size:12px;right:14px}
 #hg,#ht,#hs,#tag,#ui{display:none;position:absolute;pointer-events:none}
 #hg{right:1.6vh;bottom:1.6vh}
+/* Dokunmatikte gaz/fren sağ altta: gösterge paneli sol kümelerin üstüne,
+   ekranın ORTASINA yakın durur ki düğmelerle çakışmasın. */
+body.has-touch #hg{right:auto;left:50%;bottom:auto;top:1.6vh;transform:translateX(-50%)}
+body.has-touch #ht{display:none !important}
 #ht{left:50%;top:1.6vh;transform:translateX(-50%)}
 #hs{left:1.6vh;top:1.6vh}
 #tag{left:50%;bottom:2.2vh;transform:translateX(-50%);padding:.45em 1.1em;border-radius:1.2em;background:rgba(9,11,14,.62);color:#fff;white-space:nowrap}
@@ -57,6 +61,48 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font:14px/1.4 -ap
   #ui .cols{gap:1.4em}
   #ui h1{font-size:2.2em}
 }
+/* ---- dokunmatik kumanda ---- */
+#touchui{display:block;position:fixed;inset:0;pointer-events:none;z-index:15;
+  padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+/* dokunmatik olmayan cihazda düğmeler görünmesin */
+body:not(.has-touch) #touchui{display:none}
+.tbtn{
+  position:absolute;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  border-radius:999px;border:2px solid rgba(255,255,255,.35);color:#fff;font:inherit;font-weight:800;
+  background:rgba(12,16,22,.42);backdrop-filter:blur(3px);box-shadow:0 4px 14px rgba(0,0,0,.35);
+  transition:transform .06s, background .06s;cursor:pointer;
+}
+.tbtn .ic{line-height:1;font-size:1em}
+.tbtn .lb{font-size:.52em;letter-spacing:.04em;opacity:.85}
+.tbtn.on{background:rgba(216,53,28,.78);border-color:#fff;transform:scale(.94)}
+/* Dokunmatikte sürüş düğmeleri başparmağın doğal yerinde: sol alt = direksiyon,
+   sağ alt = gaz/fren. Gösterge paneli küçültüldüğü için artık çakışmıyor. */
+.t-left{left:3vmin}
+.t-left.t-mid{width:17vmin;height:17vmin;bottom:3vmin;font-size:3.2vmin}
+.t-right2{left:calc(17vmin + 5vmin) !important;bottom:3vmin}
+.t-right{right:3vmin}
+.t-gas{right:3vmin;bottom:3vmin;width:19vmin;height:19vmin;font-size:3.4vmin}
+.t-brake{right:calc(19vmin + 4.5vmin);bottom:3vmin;width:14vmin;height:14vmin;font-size:2.6vmin}
+/* küçük yardımcı düğmeler: sol köşenin üstünde yatay sıra */
+.t-small{width:10.5vmin;height:10.5vmin;font-size:2vmin;bottom:calc(17vmin + 4.5vmin)}
+.t-hand{left:3vmin}
+.t-cam{left:calc(10.5vmin + 4vmin)}
+.t-reset{left:calc(2 * 10.5vmin + 5vmin)}
+/* dikey ekranda "telefonu yan çevir" ekranı (CSS ile 90° çevirme yok: HUD ve
+   düğmeleri bozuyordu) */
+#mobrotate{
+  display:none;position:fixed;inset:0;z-index:60;flex-direction:column;align-items:center;justify-content:center;
+  gap:.6em;background:rgba(6,8,10,.94);color:#eee;text-align:center;padding:8vmin;
+}
+#mobrotate .ph{font-size:16vmin;animation:rot 2.4s ease-in-out infinite}
+#mobrotate b{font-size:5vmin;color:#fff}
+#mobrotate span{font-size:3.2vmin;opacity:.75;line-height:1.5}
+#mobrotate .force{
+  margin-top:2vmin;font:inherit;font-size:3vmin;font-weight:700;color:#fff;
+  background:rgba(255,255,255,.16);border:0;border-radius:.6em;padding:.6em 1.4em;
+}
+@keyframes rot{0%,40%{transform:rotate(0)}60%,100%{transform:rotate(-90deg)}}
 </style>
 </head>
 <body>

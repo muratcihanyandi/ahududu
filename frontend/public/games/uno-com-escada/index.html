@@ -11,6 +11,10 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font:14px/1.4 -ap
 #hint{position:absolute;left:14px;bottom:calc(10px + env(safe-area-inset-bottom,0px));opacity:.75;text-shadow:0 1px 2px #000;transition:opacity 1.5s;pointer-events:none;font-size:12px;right:14px}
 #hg,#ht,#hs,#tag,#ui{display:none;position:absolute;pointer-events:none}
 #hg{right:1.6vh;bottom:1.6vh}
+/* Dokunmatikte gaz/fren sağ altta: gösterge paneli sol kümelerin üstüne,
+   ekranın ORTASINA yakın durur ki düğmelerle çakışmasın. */
+body.has-touch #hg{right:auto;left:50%;bottom:auto;top:1.6vh;transform:translateX(-50%)}
+body.has-touch #ht{display:none !important}
 #ht{left:50%;top:1.6vh;transform:translateX(-50%)}
 #hs{left:1.6vh;top:1.6vh}
 #tag{left:50%;bottom:2.2vh;transform:translateX(-50%);padding:.45em 1.1em;border-radius:1.2em;background:rgba(9,11,14,.62);color:#fff;white-space:nowrap}
@@ -57,6 +61,48 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font:14px/1.4 -ap
   #ui .cols{gap:1.4em}
   #ui h1{font-size:2.2em}
 }
+/* ---- dokunmatik kumanda ---- */
+#touchui{display:block;position:fixed;inset:0;pointer-events:none;z-index:15;
+  padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+/* dokunmatik olmayan cihazda düğmeler görünmesin */
+body:not(.has-touch) #touchui{display:none}
+.tbtn{
+  position:absolute;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  border-radius:999px;border:2px solid rgba(255,255,255,.35);color:#fff;font:inherit;font-weight:800;
+  background:rgba(12,16,22,.42);backdrop-filter:blur(3px);box-shadow:0 4px 14px rgba(0,0,0,.35);
+  transition:transform .06s, background .06s;cursor:pointer;
+}
+.tbtn .ic{line-height:1;font-size:1em}
+.tbtn .lb{font-size:.52em;letter-spacing:.04em;opacity:.85}
+.tbtn.on{background:rgba(216,53,28,.78);border-color:#fff;transform:scale(.94)}
+/* Dokunmatikte sürüş düğmeleri başparmağın doğal yerinde: sol alt = direksiyon,
+   sağ alt = gaz/fren. Gösterge paneli küçültüldüğü için artık çakışmıyor. */
+.t-left{left:3vmin}
+.t-left.t-mid{width:17vmin;height:17vmin;bottom:3vmin;font-size:3.2vmin}
+.t-right2{left:calc(17vmin + 5vmin) !important;bottom:3vmin}
+.t-right{right:3vmin}
+.t-gas{right:3vmin;bottom:3vmin;width:19vmin;height:19vmin;font-size:3.4vmin}
+.t-brake{right:calc(19vmin + 4.5vmin);bottom:3vmin;width:14vmin;height:14vmin;font-size:2.6vmin}
+/* küçük yardımcı düğmeler: sol köşenin üstünde yatay sıra */
+.t-small{width:10.5vmin;height:10.5vmin;font-size:2vmin;bottom:calc(17vmin + 4.5vmin)}
+.t-hand{left:3vmin}
+.t-cam{left:calc(10.5vmin + 4vmin)}
+.t-reset{left:calc(2 * 10.5vmin + 5vmin)}
+/* dikey ekranda "telefonu yan çevir" ekranı (CSS ile 90° çevirme yok: HUD ve
+   düğmeleri bozuyordu) */
+#mobrotate{
+  display:none;position:fixed;inset:0;z-index:60;flex-direction:column;align-items:center;justify-content:center;
+  gap:.6em;background:rgba(6,8,10,.94);color:#eee;text-align:center;padding:8vmin;
+}
+#mobrotate .ph{font-size:16vmin;animation:rot 2.4s ease-in-out infinite}
+#mobrotate b{font-size:5vmin;color:#fff}
+#mobrotate span{font-size:3.2vmin;opacity:.75;line-height:1.5}
+#mobrotate .force{
+  margin-top:2vmin;font:inherit;font-size:3vmin;font-weight:700;color:#fff;
+  background:rgba(255,255,255,.16);border:0;border-radius:.6em;padding:.6em 1.4em;
+}
+@keyframes rot{0%,40%{transform:rotate(0)}60%,100%{transform:rotate(-90deg)}}
 </style>
 </head>
 <body>
@@ -3862,6 +3908,21 @@ function rendererInit() {
 }
 WGSL.__probe = '#include common\n#include gbuf\n#include mesh_vert\n#ifdef PASS_CUBE\n#include cube_light\n#endif\n';
 
+// Yön (yatay/dikey) değişince çizim hedeflerini yeni boyuta göre yeniden kur.
+// Hedef dokular çözünürlüğü baştan alır; G.W/G.H de güncellenmelidir (kamera
+// en-boy oranı ve tam ekran üçgeni bunları okur), yoksa görüntü gerilir.
+function rendererResize(W, H) {
+  W = W & ~1; H = H & ~1;
+  if (!G.dev || W === G.W && H === G.H && R.tex) return false;
+  G.W = W; G.H = H;
+  if (G.canvas) { G.canvas.width = W; G.canvas.height = H; }
+  // Eski hedefleri bırak (GB kazanımı), sonra yeniden kur
+  try { for (const k in R.tex) { const t = R.tex[k]; if (Array.isArray(t)) t.forEach(x => x && x.destroy && x.destroy()); else if (t && t.destroy) t.destroy(); } } catch (e) { /* yok say */ }
+  rendererInit();
+  R.cam.first = true;
+  return true;
+}
+
 // ---- câmera e uniformes do quadro ----
 // CAMQ: registrador da câmera [olho xyz, alvo xyz, fov vertical, rolagem]. setCameraQ() lê dele (sem números por argumento).
 const CAMQ = new Float64Array(8), _lk = new Float64Array(9);
@@ -7367,6 +7428,9 @@ function gameRestart() {
 // um passo de física; a cada 2 passos (1/60 s) lê as teclas (gravadas, piloto automático ou teclado)
 function gameStep() {
   if ((GS.sub & 1) === 0) {
+    // dokunmatik kumanda: basılı düğmeleri her adımda yeniden uygula
+    // (gameRestart GS.held'i sıfırlar; düğme basılı kalmalı)
+    if (typeof mobApplyKeys === 'function') mobApplyKeys();
     const t = GS.tick60 / 60; let k;
     if (GS.replayOn && GS.tick60 < GS.replay.length) k = GS.replay[GS.tick60];
     else if (GS.ai) k = t < 0.5 ? 0 : aiKeys(t);
@@ -7934,7 +7998,13 @@ function hudStrip(cv, labels, widths, units, At, px, o) {
   return f;
 }
 function hudLayout() {
-  const H = HUD, L = H.L, dpr = devicePixelRatio || 1, r = Math.round(Math.min(Math.max(innerHeight * 0.105, 54), 124) * dpr), W = Math.round(r * 4.5), Hh = Math.round(r * 2.26);
+  const H = HUD, L = H.L, dpr = devicePixelRatio || 1;
+  // Dokunmatik/yatay telefonda gösterge paneli KÜÇÜLTÜLÜR: aksi halde (kısa
+  // yükseklik × 2.26) ekranı kaplıyor ve alttaki sürüş düğmelerinin üstüne
+  // biniyordu.
+  const touch = (typeof MOB !== 'undefined' && MOB.touch) || (navigator.maxTouchPoints || 0) > 0;
+  const k = touch ? (innerHeight > innerWidth ? 0.085 : 0.062) : 0;
+  const r = Math.round(Math.min(Math.max(innerHeight * (touch ? k : 0.105), touch ? 34 : 54), touch ? 78 : 124) * dpr), W = Math.round(r * 4.5), Hh = Math.round(r * 2.26);
   const A = H.A = hudAtlas(Math.round(r * 0.33)), B = H.B = hudAtlas(Math.round(r * 0.23)), C = H.C = hudAtlas(Math.round(r * 0.17));
   const c = H.cg; c.width = W; c.height = Hh; c.style.width = W / dpr + 'px'; c.style.height = Hh / dpr + 'px';
   const cx1 = Math.round(r * 1.12), cy = Math.round(r * 1.12), cx2 = W - cx1; L[0] = cx1; L[1] = cy; L[2] = cx2; L[3] = r; L[4] = W; L[5] = Hh;
@@ -8737,6 +8807,195 @@ try {
         me: { x: +(VEH.x || 0).toFixed(1), z: +(VEH.z || 0).toFixed(1) }
       };
     }
+  };
+} catch (e) { /* yok say */ }
+
+// ---- 56_mobile_touch.js
+// ============================================================================
+// MOBİL: yatay ekran + dokunmatik kumanda (Fable 5.2 sürümüne eklendi)
+// ----------------------------------------------------------------------------
+//   1) YÖN     : oyun açılınca yatay (landscape) kilidi istenir. Telefon yatay
+//                değilse "telefonu yan çevir" ekranı gösterilir (görüntüyü CSS
+//                ile 90° çevirmek yerine: o yol HUD'u ve düğmeleri bozuyordu).
+//   2) DOKUNMA : ekrana gaz/fren/direksiyon/el freni/kamera düğmeleri konur.
+//                Düğmeler oyunun KENDİ tuş bitlerini (K_W, K_S, ...) yazar;
+//                fizik kodu değişmez.
+//   3) BOYUT   : yön değişince çizim hedefleri yeniden kurulur (rendererResize);
+//                yoksa yatayda görüntü geriliyor ve kamera gökyüzünü gösteriyordu.
+// ----------------------------------------------------------------------------
+
+const MOB = {
+  touch: false,
+  keys: 0,          // basılı dokunma tuşları
+  wsHeld: 0,        // klavye tuşları (aynı anda tutulabilir)
+  locked: false,
+  lastW: 0, lastH: 0,
+  ready: false,     // oyun sahnesi kuruldu mu (resize ancak ondan sonra)
+  pending: false
+};
+
+function mobIsTouch() {
+  try {
+    return (navigator.maxTouchPoints || 0) > 0 ||
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  } catch (e) { return false; }
+}
+function mobIsPortrait() { return innerHeight > innerWidth; }
+
+// ---------------------------- 1) YÖN KİLİDİ ---------------------------------
+function mobLockLandscape() {
+  try {
+    const so = screen.orientation;
+    if (so && so.lock) {
+      so.lock('landscape').then(() => { MOB.locked = true; mobSync(); })
+        .catch(() => { MOB.locked = false; mobSync(); });
+    }
+  } catch (e) { /* desteklenmiyor */ }
+  mobSync();
+}
+
+// Yatay değilse "çevir" ekranı; yataysa oyunu göster
+function mobSync() {
+  const need = MOB.touch && mobIsPortrait();
+  const ov = document.getElementById('mobrotate');
+  if (ov) ov.style.display = need ? 'flex' : 'none';
+  // dikeyde oyunu duraklat (araba boşta ilerlemesin)
+  if (need && typeof uiPause === 'function' && typeof ST !== 'undefined' && UI.st === ST.JOGO) {
+    try { uiPause(); } catch (e) { /* yok say */ }
+  }
+  mobResize();
+}
+
+// ---------------------------- 2) BOYUT -------------------------------------
+// Yön değişince çizim hedeflerini yeniden kur. Sahne henüz kurulmadıysa istek
+// saklanır ve main() bittiğinde uygulanır.
+function mobResize() {
+  if (typeof G === 'undefined' || !G.dev) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  W = Math.min(Math.max(W & ~1, 320), 5120);
+  H = Math.min(Math.max(H & ~1, 180), 2880);
+  if (W === MOB.lastW && H === MOB.lastH) return;
+  MOB.lastW = W; MOB.lastH = H;
+  if (!MOB.ready || typeof rendererResize !== 'function') { MOB.pending = true; return; }
+  try {
+    rendererResize(W, H);
+    if (typeof hudLayout === 'function') hudLayout();
+  } catch (e) { console.warn('[mob] yeniden boyutlandırma:', e); }
+}
+
+// ------------------------ 3) DOKUNMATİK KUMANDA ----------------------------
+function mobSetKey(bit, on) {
+  if (on) MOB.keys |= bit; else MOB.keys &= ~bit;
+  mobApplyKeys();
+}
+// gameRestart() GS.held'i sıfırlar; basılı düğmeler her adımda yeniden uygulanır.
+function mobApplyKeys() {
+  if (typeof GS === 'undefined' || !MOB.touch) return;
+  const want = MOB.wsHeld | MOB.keys;
+  if (GS.held !== want) GS.held = want;
+}
+
+const MOB_BTN = [
+  { id: 'gas', bit: () => K_W, icon: '▲', label: 'GAZ', side: 'right', size: 'big' },
+  { id: 'brake', bit: () => K_S, icon: '▼', label: 'FREN', side: 'right', size: 'mid' },
+  { id: 'left', bit: () => K_A, icon: '◀', label: 'SOL', side: 'left', size: 'mid' },
+  { id: 'right', bit: () => K_D, icon: '▶', label: 'SAĞ', side: 'left', size: 'mid', extra: 't-right2' },
+  { id: 'hand', bit: () => K_SPACE, icon: '✋', label: 'EL FRENİ', side: 'left', size: 'small' },
+  { id: 'cam', bit: () => K_C, icon: '🎥', label: 'KAMERA', side: 'left', size: 'small', tap: true },
+  { id: 'reset', bit: () => K_R, icon: '↺', label: 'PİSTE DÖN', side: 'right', size: 'small', tap: true }
+];
+
+function mobBuildControls() {
+  if (document.getElementById('touchui')) return;
+  const wrap = document.createElement('div');
+  wrap.id = 'touchui';
+
+  for (const b of MOB_BTN) {
+    const el = document.createElement('button');
+    el.className = 'tbtn t-' + b.side + ' t-' + b.size + ' t-' + b.id + (b.extra ? ' ' + b.extra : '');
+    el.type = 'button';
+    el.innerHTML = '<span class="ic">' + b.icon + '</span><span class="lb">' + b.label + '</span>';
+    if (b.tap) {
+      el.addEventListener('pointerdown', ev => {
+        ev.preventDefault();
+        const code = b.bit();
+        mobSetKey(code, true);
+        el.classList.add('on');
+        setTimeout(() => { mobSetKey(code, false); el.classList.remove('on'); }, 90);
+      });
+    } else {
+      const press = ev => { ev.preventDefault(); el.classList.add('on'); mobSetKey(b.bit(), true); };
+      const release = ev => { if (ev) ev.preventDefault(); el.classList.remove('on'); mobSetKey(b.bit(), false); };
+      el.addEventListener('pointerdown', press);
+      el.addEventListener('pointerup', release);
+      el.addEventListener('pointercancel', release);
+      el.addEventListener('pointerleave', ev => { if (el.classList.contains('on')) release(ev); });
+      el.addEventListener('lostpointercapture', release);
+    }
+    wrap.appendChild(el);
+  }
+  document.body.appendChild(wrap);
+}
+
+// "Telefonu yan çevir" ekranı
+function mobBuildRotateOverlay() {
+  if (document.getElementById('mobrotate')) return;
+  const ov = document.createElement('div');
+  ov.id = 'mobrotate';
+  ov.innerHTML = '<div class="ph">📱</div><b>Telefonu yan çevir</b>' +
+    '<span>Oyun yatay ekranda oynanıyor.<br>Sürüklerken oyun duraklatıldı.</span>' +
+    '<button type="button" class="force">Yine de dikey oyna</button>';
+  ov.querySelector('.force').addEventListener('click', () => {
+    MOB.forcePortrait = true;
+    ov.style.display = 'none';
+  });
+  document.body.appendChild(ov);
+}
+
+function mobHookKeyboard() {
+  try {
+    addEventListener('keydown', e => { const k = KEYMAP[e.code]; if (k) MOB.wsHeld |= k; }, true);
+    addEventListener('keyup', e => { const k = KEYMAP[e.code]; if (k) MOB.wsHeld &= ~k; }, true);
+    addEventListener('blur', () => { MOB.wsHeld = 0; MOB.keys = 0; if (typeof GS !== 'undefined') GS.held = 0; });
+  } catch (e) { /* yok say */ }
+}
+
+function mobBoot() {
+  MOB.touch = mobIsTouch();
+  if (MOB.touch) {
+    mobBuildControls();
+    mobBuildRotateOverlay();
+    mobHookKeyboard();
+    document.body.classList.add('has-touch');
+    mobLockLandscape();
+  }
+  addEventListener('resize', () => mobSync());
+  addEventListener('orientationchange', () => setTimeout(mobSync, 250));
+}
+
+// Sahne kurulduktan sonra ölçümü uygula ve yön ekranını tazele
+function mobAfterScene() {
+  MOB.ready = true;
+  if (MOB.pending) { MOB.pending = false; MOB.lastW = 0; }
+  mobResize();
+  mobSync();
+}
+
+BUILD.push(async () => {
+  try { mobBoot(); } catch (e) { console.warn('[mob] başlatılamadı', e); }
+  try { mobAfterScene(); } catch (e) { console.warn('[mob] sahne sonrası:', e); }
+});
+
+// Teşhis: konsoldan window.__diag ile bakılabilir
+try {
+  window.__mob = MOB;
+  window.__diag = {
+    keys() { return { held: GS.held, touch: MOB.keys, ws: MOB.wsHeld, tick60: GS.tick60 }; },
+    car() { return { x: +VEH.x.toFixed(2), vx: +VEH.vx.toFixed(2), speed: +Math.sqrt(VEH.vx * VEH.vx + VEH.vy * VEH.vy).toFixed(2), steer: +VEH.steer.toFixed(3) }; },
+    view() { return { W: G.W, H: G.H, cw: G.canvas ? G.canvas.width : -1, ch: G.canvas ? G.canvas.height : -1, ratio: +(G.W / G.H).toFixed(3), portrait: mobIsPortrait(), overlay: !!(document.getElementById('mobrotate') && document.getElementById('mobrotate').style.display !== 'none') }; },
+    lights() { const s = []; for (const [k, b] of [['K_W', K_W], ['K_S', K_S], ['K_A', K_A], ['K_D', K_D], ['K_SPACE', K_SPACE]]) if (GS.held & b) s.push(k); return s; },
+    cam() { return { pos: Array.from(R.cam.pos), fov: +R.cam.fovy.toFixed(3) }; }
   };
 } catch (e) { /* yok say */ }
 

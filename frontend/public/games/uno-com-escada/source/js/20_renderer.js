@@ -198,6 +198,21 @@ function rendererInit() {
 }
 WGSL.__probe = '#include common\n#include gbuf\n#include mesh_vert\n#ifdef PASS_CUBE\n#include cube_light\n#endif\n';
 
+// Yön (yatay/dikey) değişince çizim hedeflerini yeni boyuta göre yeniden kur.
+// Hedef dokular çözünürlüğü baştan alır; G.W/G.H de güncellenmelidir (kamera
+// en-boy oranı ve tam ekran üçgeni bunları okur), yoksa görüntü gerilir.
+function rendererResize(W, H) {
+  W = W & ~1; H = H & ~1;
+  if (!G.dev || W === G.W && H === G.H && R.tex) return false;
+  G.W = W; G.H = H;
+  if (G.canvas) { G.canvas.width = W; G.canvas.height = H; }
+  // Eski hedefleri bırak (GB kazanımı), sonra yeniden kur
+  try { for (const k in R.tex) { const t = R.tex[k]; if (Array.isArray(t)) t.forEach(x => x && x.destroy && x.destroy()); else if (t && t.destroy) t.destroy(); } } catch (e) { /* yok say */ }
+  rendererInit();
+  R.cam.first = true;
+  return true;
+}
+
 // ---- câmera e uniformes do quadro ----
 // CAMQ: registrador da câmera [olho xyz, alvo xyz, fov vertical, rolagem]. setCameraQ() lê dele (sem números por argumento).
 const CAMQ = new Float64Array(8), _lk = new Float64Array(9);

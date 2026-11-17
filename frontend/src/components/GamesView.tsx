@@ -147,7 +147,7 @@ export const GamePlayer: React.FC<GamePlayerProps> = ({ game, currentUserId, onC
         src={src}
         title={game.title}
         className="flex-1 w-full border-0 bg-black"
-        allow="camera; microphone; fullscreen; gamepad; autoplay"
+        allow="camera; microphone; fullscreen; gamepad; autoplay; screen-orientation"
         allowFullScreen
       />
     </div>
