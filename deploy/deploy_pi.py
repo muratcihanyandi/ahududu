@@ -165,20 +165,26 @@ def game_bundle_digest():
     (Bir kez tam olarak bu yaşandı: 47_perf.js'in başındaki BOM işareti oyun
     paketini bozuyordu, paket hiç yenilenmemişti.) Bu özet dağıtımdan sonra
     canlı sunucudan okunup yerelle karşılaştırılır.
+
+    Sıralama ve özet biçimi `remote_game_bundle_digest` ile BİREBİR aynıdır;
+    aksi hâlde aynı dosyalar farklı özet üretir.
     """
     import hashlib
 
-    digest = hashlib.sha256()
     root = os.path.join(STATIC_DIR, "games")
+    entries = []
     for dirpath, _dirnames, filenames in os.walk(root):
-        for name in sorted(filenames):
+        for name in filenames:
             if not (name.endswith(".html") or name.endswith(".js")):
                 continue
             path = os.path.join(dirpath, name)
             rel = "./" + os.path.relpath(path, root).replace("\\", "/")
-            digest.update(rel.encode("utf-8"))
             with open(path, "rb") as f:
-                digest.update(f.read())
+                entries.append((rel, hashlib.sha256(f.read()).hexdigest()))
+    digest = hashlib.sha256()
+    for rel, file_hash in sorted(entries, key=lambda x: x[0]):
+        digest.update(rel.encode("utf-8"))
+        digest.update(bytes.fromhex(file_hash))
     return digest.hexdigest()
 
 
