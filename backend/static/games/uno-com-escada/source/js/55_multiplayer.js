@@ -1,41 +1,162 @@
 // ============================================================================
-// ÇOK OYUNCULU — Murat & Selin aynı pistte (Fable 5.2 sürümüne eklendi)
+// ÇOK OYUNCULU — Murat & Selin aynı pistte
 // ----------------------------------------------------------------------------
-// Oyun tek kişilikti; bu dosya oyuna ağ katmanını ve ikinci arabayı ekler.
 //   1) SOKET  : Ahududu'nun /ws/<kullanıcı> soketine bağlanır.
-//   2) ARABA  : Partnerin Unosu pistte canlı çizilir (farklı renk, aynı model).
+//   2) ARABA  : Partnerin Unosu pistte CANLI çizilir (kendi arabamızın ayrı
+//               kopyası: kendi objeleri, kendi slotları, partnerin rengi).
 //   3) SES    : Partnerin motor sesi kameraya göre sağdan/soldan gelir.
-//   4) KAMERA : Partnerin canlı görüntüsü sağ altta; kendi görüntün ayna olarak.
-//   5) MİK    : "Basılı tut: konuş" düğmesi (16 kHz PCM).
-// Ağ yoksa her şey sessizce kapanır; oyun eskisi gibi tek kişilik oynanır.
+//   4) YARIŞ  : Herkes aynı anda "Başla"ya basınca geri sayım başlar; iki araba
+//               da aynı anda start çizgisinden kalkar ve tur süreleri adil olur.
 //
-// Önemli tasarım notu (renderer): sahnede yalnızca 64 "obje slotu" var ve
-// hepsini bizim arabamız kullanıyor. Bu yüzden ikinci araba YENİ SLOT AÇMAZ;
-// partneri, kendi arabamızın slotlarına yazdığımız matrislerle çizer. Slot
-// matrisleri mpBeginFrame'de ayrılan alanda tutulur, mpPartnerDraw bitince
-// geri yazılır (kendi arabamız bu yüzden yerinden kaymaz).
-// Direksiyon slotu (CAR.slotSteer) ödünç ALINMAZ: aynı karede yazılırsa
-// dümenin ekran kartı kaynağı iki kez bağlanır (createBindGroup çakışır).
+// KAMERA YOKTUR: video akışı (getUserMedia/WebRTC/JPEG yayını) bu sürümde
+// tamamen kaldırıldı. Bu, telefonda her saniye işlemci ve soket yükü
+// yaratıyordu (mobil FPS'in düşmesinin başlıca sebeplerinden biri). Mikrofon
+// ("basılı tut: konuş") yalnızca partner ekrana girdiğinde açılan küçük bir
+// düğme olarak duruyor; hiçbir şey otomatik açılmaz.
+//
+// ARABA ÇİZİMİ (önemli): Bu oyunda objelerin sırası CAR.build() içinde
+// belirlenir: gövde = slotBody, 4 tekerlek = slotWheel[], direksiyon =
+// slotSteer. Partner için CAR'ın gövde/tekerlek meshleri KENDİ objelerimize
+// ekleniyor; yani partnerin arabası ayrı objeler ve ayrı slotlarla çizilir —
+// kendi arabamızın matrisleri hiç ödünç alınmaz (eski sürüm slotları takas
+// ediyordu; bu hem titremeye hem de partnerin bazen görünmemesine yol açıyordu).
+// Eski kodun CAR.fam.bgl3 / carAtlas() üzerinden yaptığı bind group'a da gerek
+// kalmadı: MeshSet.draw() zaten R.drawables sırasında doğru atlası bağlar.
 // ----------------------------------------------------------------------------
 
 const GAME_ID = 'uno-com-escada';
 const GAME_NAMES = { murat: 'Murat', selin: 'Selin' };
+// Bu dosya her zaman ana sayfanın içinde çalışır (oyun iframe'i kendi
+// penceresidir). Eski kodda kalan `IS_TOP` referansı bir ReferenceError
+// yüzünden çok oyunculuyu baştan düşürüyordu; artık burada tanımlıdır.
+const IS_TOP = (() => { try { return window.top === window.self; } catch (e) { return false; } })();
+const MP_PAINT = [0.70, 0.13, 0.34];      // partnerin arabasının rengi: pembe-böğürtlen
+const MP_MINE = [0.13, 0.33, 0.68];       // benim arabamın rengi (açılışta bir kez yazılır)
+const MP_TICK_HZ = 20;                    // saniyede gönderilen durum paketi
+const MP_COUNTDOWN = 3.2;                 // "Başla"dan sonra geri sayım (sn)
 
 // ---------------------------- 1) SOKET -------------------------------------
+// Ana sayfa (Ahududu kabuğu) zaten aynı kullanıcı için bir soket açmış olabilir.
+// İki ayrı soket açmak sunucuda iki bağlantı demek; kampüs/otel Wi-Fi'sinde
+// birleşimi kaldırmayan yönlendiricilerde bağlantı düşmesine yol açıyordu.
+// Bu yüzden oyunun paketleri mümkünse kabuğun soketinden geçer.
+//
+// ÖNEMLİ: Oyun AYRI bir iframe penceresinde çalışır. Eski kod yalnızca
+// `window.__ahududuGameBus` arıyordu; o nesne ise kabuğun kendi penceresine
+// yazılıyordu ve oyundan hiçbir zaman görülemiyordu. Ayrıca bir `on(...)`
+// dinleyicisi de yoktu: kabuktan gelen partner paketleri hiç işlenmiyor,
+// "Başla"nın gönderdiği geri sayım karşı tarafta yarışı başlatmıyordu.
+// Artık köprü iki yolla kurulur:
+//   • aynı köken: kabuk `__ahududuGameBus` nesnesini BU pencereye yazar,
+//   • her durumda: `postMessage({__ahududu:1, kind:'send'|'ping'|...})`.
+const BRIDGE_TAG = '__ahududu';
+const MPSHARE = (() => {
+  try {
+    const direct = window.__ahududuGameBus;
+    const handlers = new Set();          // gelen partner paketleri
+    const watchers = new Set();          // bağlantı durumu değişimleri
+    const pending = {};                  // durum yoklaması yanıtları: id -> fn
+    let seq = 0;
+
+    const emit = open => { share.ready = !!open; watchers.forEach(fn => { try { fn(!!open); } catch (e) { /* yok say */ } }); };
+    const post = m => {
+      try { if (window.parent && window.parent !== window) window.parent.postMessage(Object.assign({ [BRIDGE_TAG]: 1 }, m), '*'); } catch (e) { /* yok say */ }
+    };
+
+    const share = {
+      ready: false,
+      /** Köprü kuruldu mu (kabuk oyun iframe'ini tanıdı mı)? */
+      present() { return !!(direct || this.ready); },
+      open() { if (direct) { try { return !!direct.open(); } catch (e) { /* yok say */ } } return !!this.ready; },
+      send(o) {
+        if (direct) { try { return !!direct.send(o); } catch (e) { /* yok say */ } }
+        post({ kind: 'send', payload: o });
+        return !!this.ready;
+      },
+      on(fn) { if (typeof fn === 'function') handlers.add(fn); },
+      onState(fn) { if (typeof fn === 'function') watchers.add(fn); },
+      fullscreen() {
+        if (direct && typeof direct.requestFullscreen === 'function') { try { direct.requestFullscreen(); return; } catch (e) { /* yok say */ } }
+        post({ kind: 'fullscreen' });
+      },
+      /** Kabuk gerçekten cevap veriyor mu? Kabuk yoksa kendi soketimizi açarız. */
+      probe() {
+        return new Promise(resolve => {
+          if (direct) { resolve(true); return; }
+          const id = ++seq;
+          pending[id] = () => resolve(true);
+          post({ kind: 'ping' });
+          post({ kind: 'state?', id });
+          setTimeout(() => { if (pending[id]) { delete pending[id]; resolve(false); } }, 1500);
+        });
+      }
+    };
+
+    addEventListener('message', ev => {
+      const d = ev.data;
+      if (!d || d[BRIDGE_TAG] !== 1) return;
+      if (d.kind === 'recv' && d.payload) {
+        handlers.forEach(fn => { try { fn(d.payload); } catch (e) { /* yok say */ } });
+      } else if (d.kind === 'state') {
+        if (d.id >= 0 && pending[d.id]) { const fn = pending[d.id]; delete pending[d.id]; fn(!!d.open); }
+        else if (d.id === -1) emit(d.open);
+      } else if (d.kind === 'ready') {
+        emit(true);
+      }
+    });
+
+    post({ kind: 'hello' });             // kabuk bizi tanısın
+    return share;
+  } catch (e) { return null; }
+})();
+
 const NET = {
   ws: null, opened: false, closedByUser: false, offlineTries: 0,
-  json(o) { try { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); } catch (e) { /* yok say */ } },
+  get live() { return this.opened || (MPSHARE ? MPSHARE.open() : false); },
+  json(o) {
+    if (MPSHARE && MPSHARE.open()) {
+      if (MPSHARE.send(o) !== false) return;
+    }
+    try { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); } catch (e) { /* yok say */ }
+  },
+  // Oyun kendi soketini açar; kabuğun soketi ayaktaysa ve bu pencere bir
+  // iframe değilse kabuğun soketi tercih edilir.
   connect() {
-    if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return;
+    if (typeof location === 'undefined') return;
+    const httpMode = /^https?:$/.test(location.protocol);
+    if (!httpMode) return;                                   // file:// (deneme) → yalnızca çevrimdışı
+    if (MPSHARE && MPSHARE.open()) { this.opened = false; MP.retryAt = 0; mpUiRefresh(); return; }
+    if (MPSHARE && !this._probed) { this._probed = true; MPSHARE.probe().then(ok => { if (ok) { MP.retryAt = 0; NET.opened = false; mpUiRefresh(); } else NET._openOwn(); }); return; }
+    this._openOwn();
+  },
+  _openOwn() {
     this.close();
     this.closedByUser = false;
-    const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + MP.userId;
+    // Doğru sunucu: uygulama localhost'tan (Capacitor) açıldığında soket canlı
+    // sunucuya gitmelidir (websocket.ts ile aynı kural).
+    let host = location.host, proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    // Test/teşhis: ?wsserver=host:port veya ?wsport=N ile soket adresi
+    // değiştirilebilir (yerel röle sunucusuyla çift oyunculu deneme).
+    try {
+      const wsOverride = new URLSearchParams(location.search).get('wsserver');
+      const wsPort = new URLSearchParams(location.search).get('wsport');
+      if (wsOverride) { host = wsOverride; proto = /^https/.test(location.protocol) ? 'wss://' : 'ws://'; }
+      else if (wsPort) { host = location.hostname + ':' + wsPort; proto = 'ws://'; }
+    } catch (e) { /* yok say */ }
+    if (!host) { MP.retryAt = performance.now() + 5000; return; }
+    if (location.hostname === 'localhost' && location.port !== '33470' && location.port !== '5173') {
+      let server = 'https://ahududu.fakeyol.com';
+      try { server = localStorage.getItem('ahududu_server_url') || server; } catch (e) { /* yok say */ }
+      host = server.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+      proto = server.indexOf('https') === 0 ? 'wss://' : 'ws://';
+    }
+    const url = proto + host + '/ws/' + MP.userId;
     let ws;
-    try { ws = new WebSocket(url); } catch (e) { return; }
+    try { ws = new WebSocket(url); } catch (e) { MP.retryAt = performance.now() + 5000; return; }
     this.ws = ws;
     ws.onopen = () => {
       NET.opened = true; NET.offlineTries = 0; MP.retryAt = 0;
-      NET.json({ type: 'game_hello', game: GAME_ID, cam: CAM.ready ? 1 : 0 });
+      NET.json({ type: 'game_hello', game: GAME_ID });
       mpUiRefresh();
     };
     ws.onmessage = ev => { let d; try { d = JSON.parse(ev.data); } catch (e) { return; } mpOnPacket(d); };
@@ -43,8 +164,7 @@ const NET = {
       const was = NET.ws === ws;
       NET.opened = false;
       if (was) NET.ws = null;
-      MP.partnerOn = false;
-      mpHideRemoteUi();
+      MP.partnerOn = false; MP.hasT = false;
       mpUiRefresh();
       if (NET.closedByUser) return;
       NET.offlineTries++;
@@ -62,14 +182,13 @@ const NET = {
 // ---------------------------- 2) OYUNCU ------------------------------------
 const MP = {
   userId: 'murat', partnerId: 'selin', myName: 'Murat', partnerName: 'Selin',
-  partnerOn: false, retryAt: 0, sentAt: -1e9, lastRxCarAt: 0,
+  partnerOn: false, retryAt: 0, sentAt: -1e9, lastRxCarAt: 0, bootAt: 0,
   // partnerin arabası: T = ağdan gelen hedef, S = ekranda yumuşatılan kopya
-  T: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0 },
+  T: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0, s: 0, d: 0 },
   S: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0 },
   hasT: false, carReady: false,
-  // slot tasarrufu (kendi arabanın slotlarına yazar)
-  reserve: null, bodySlot: -1, wheelSlot: [0, 0, 0, 0],
-  paint: [0.70, 0.13, 0.34]     // partnerin arabasının rengi: pembe-böğürtlen
+  set: null, bodyObj: 0, wheelObj: [0, 0, 0, 0],
+  paint: MP_PAINT
 };
 
 function mpResolveUser() {
@@ -89,127 +208,106 @@ function mpSetUser(id) {
   MP.partnerName = GAME_NAMES[MP.partnerId];
 }
 
-// ------------------- 3) PARTNER ARABASI (slot takası) ----------------------
-// Kendi arabamızın slot matrislerinin canlı kopyası; mpBeginFrame'de saklanır.
-const MPSAVE = { body: m4(), wheel: [m4(), m4(), m4(), m4()], bodyP: new Float32Array(4), wheelP: [new Float32Array(4), new Float32Array(4), new Float32Array(4), new Float32Array(4)] };
-const MPM = { g: m4(), t: m4(), rz: m4(), m: m4() };
-
+// ------------------- 3) PARTNER ARABASI (ayrı objeler) ---------------------
+// CAR'ın meshlerini kendi objelerimize ekler: gövde + 4 tekerlek. Direksiyon
+// gibi ek parçalar da (varsa) partnerin gövdesine bağlanır ki iç kısım boş
+// görünmesin.
 function mpBuildPartnerCar() {
   if (MP.carReady) return true;
   try {
-    if (typeof R === 'undefined' || typeof CAR === 'undefined' || !CAR.set || !CAR.hubs) return false;
-    MP.bodySlot = CAR.slotBody;
-    // Tekerlek slotları: CARP'ınki varsa onlar (görünmez yedek araba), yoksa kendi tekerleklerimiz.
-    // Asla CAR.slotSteer kullanılmaz.
-    const carpAlive = typeof CARP !== 'undefined' && CARP.slotBody > 0 && CARP !== CAR;
-    const free = carpAlive ? CARP.slotWheel : null;
-    for (let i = 0; i < 4; i++) MP.wheelSlot[i] = free && free[i] > 0 ? free[i] : CAR.slotWheel[i];
-    MP.reserve = MPSAVE;
-    // Kendi araba setinde hangi slotların gövde/tekerlek olduğunu bilmiyoruz;
-    // partner çizimi kendi vb/ib listesiyle carBuild fonksiyonlarına dayanmaz,
-    // doğrudan CAR.set.items'taki (vb, ib, count) üçlüsünü yeniden kullanır.
-    MP.items = CAR.set.items.map(it => ({ vb: it.vb, ib: it.ib, count: it.count, slot: it.slot, flags: it.flags, r: it.r, cx: it.cx, cy: it.cy, cz: it.cz }));
-    MP.fam = CAR.fam;
-    MP.carReady = true;
-    // Atlas dokusu: araba kendi kartını oluştururken alır; burada aynı dokuyu
-    // paylaşmak için bir kez oluşturup bind group'u kuruyoruz (slot işgali yok).
-    try {
-      const tex = (typeof carAtlas === 'function') ? carAtlas() : null;
-      if (tex && MP.fam.bgl3) MP.atlasBG = G.dev.createBindGroup({ layout: MP.fam.bgl3, entries: [{ binding: 0, resource: tex.createView() }] });
-    } catch (e) { MP.atlasBG = null; }
-    // Partneri çizen çizilebilir nesne: kendi arabamızdan SONRA çizilir.
-    if (MP.fam && MP.fam.bgl3 && typeof R.drawables !== 'undefined') {
-      R.drawables.push({
-        __mp: 1,
-        draw(pass, ctx) {
-          if (!MP.canDraw || !MP.hasT || !MP.atlasBG) return;
-          if (ctx.kind === KIND.SHADOW && ctx.cascade === 3) return;
-          pass.setBindGroup(3, MP.atlasBG);
-          mpBodyDraw(pass, ctx);
-        }
-      });
+    if (typeof R === 'undefined' || typeof CAR === 'undefined' || !CAR.set) return false;
+    const fam = CAR.fam, src = CAR.set;
+    if (!fam || !src.items || !src.items.length) return false;
+    const set = MP.set = new MeshSet(fam);
+    MP.bodyObj = objSlot();
+    for (let i = 0; i < 4; i++) MP.wheelObj[i] = objSlot();
+    for (let i = 0; i < src.items.length; i++) {
+      const it = src.items[i];
+      const slot = it.slot === CAR.slotBody ? MP.bodyObj
+        : it.slot === CAR.slotWheel[0] ? MP.wheelObj[0]
+          : it.slot === CAR.slotWheel[1] ? MP.wheelObj[1]
+            : it.slot === CAR.slotWheel[2] ? MP.wheelObj[2]
+              : it.slot === CAR.slotWheel[3] ? MP.wheelObj[3]
+                : MP.bodyObj;                     // direksiyon vb. → gövdeyle birlikte hareket eder
+      set.add({ vb: it.vb, ib: it.ib, count: it.count, bounds: { c: [it.cx, it.cy, it.cz], r: it.r } }, slot, it.flags, it.maxDist);
     }
+    // Partnerin meshleri artık KENDİ listesinde. CAR.set'ten çıkarılır:
+    // aksi hâlde aynı meshler kendi arabanın matrisiyle ikinci kez çizilir
+    // (partner arabası üst üste biner, gölge geçişi bind grubu olmadan çizim
+    // yapıp komut tamponunu geçersiz kılar → ekran donar).
+    src.items.length = 0;
+    // Partner çizilebilirler listesinde kendi arabamızdan SONRA gelir; böylece
+    // camları (transparent) da doğru sırada bağlanır.
+    R.drawables.push(set);
+    // Camlar: kendi arabamızla aynı meshler, partnerin gövde nesnesine bağlı.
+    // (GlassSet.bind = çizimden hemen önce hangi gövde nesnesinin kullanılacağı)
+    if (typeof CAR.glass !== 'undefined' && CAR.glass && CAR.glass.items) {
+      const gl = new GlassSet();
+      for (const g of CAR.glass.items) gl.add_({ vb: g.vb, ib: g.ib, count: g.count }, MP.bodyObj);
+      gl.bind = () => MP.bodyObj;
+      R.transparents.push(gl);
+      CAR.glass.items.length = 0;                // camlar da partnerde çizilir (kopya)
+    }
+    MP.carReady = true;
     return true;
   } catch (e) { console.warn('[uno-mp] partner arabası kurulamadı:', e); return false; }
 }
-// Bir karede partneri çiz: gövde ve tekerlek slotlarına partner matrisini yaz
-function mpBodyDraw(pass, ctx) {
-  const pipe = MP.fam.pipe[ctx.kind]; if (!pipe) return;
-  const bit = 1 << ctx.kind, items = MP.items, obj = R.objData;
-  let set = false;
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i]; if (!(it.flags & bit)) continue;
-    const slot = it.slot === MP.bodySlot ? MP.bodySlot : (MP.wheelSlot.includes(it.slot) ? it.slot : -1);
-    if (slot < 0) continue;                                        // direksiyon vb. çizilmez
-    const o = slot * 64;
-    const x = obj[o] * it.cx + obj[o + 4] * it.cy + obj[o + 8] * it.cz + obj[o + 12];
-    const y = obj[o + 1] * it.cx + obj[o + 5] * it.cy + obj[o + 9] * it.cz + obj[o + 13];
-    const z = obj[o + 2] * it.cx + obj[o + 6] * it.cy + obj[o + 10] * it.cz + obj[o + 14];
-    const dx = x - ctx.cx, dy = y - ctx.cy, dz = z - ctx.cz, md = it.maxDist + it.r;
-    if (dx * dx + dy * dy + dz * dz > md * md) continue;
-    const pl = ctx.planes, np = ctx.nPlanes; let vis = true;
-    for (let k = 0; k < np; k++) if (pl[k * 4] * x + pl[k * 4 + 1] * y + pl[k * 4 + 2] * z + pl[k * 4 + 3] < -it.r) { vis = false; break; }
-    if (!vis) continue;
-    if (!set) { pass.setPipeline(pipe); set = true; }
-    R.dyn2[0] = slot * 256;
-    pass.setBindGroup(2, R.objBG, R.dyn2, 0, 1);
-    pass.setVertexBuffer(0, it.vb); pass.setIndexBuffer(it.ib, 'uint32'); pass.drawIndexed(it.count);
-  }
+// Kendi arabamızın rengini bir kez yazar (partnerin arabası farklı renkte olsun).
+function mpPaintMine() {
+  try {
+    const P = objParams(CAR.slotBody);
+    if (!P[1] && !P[2] && !P[3]) { P[1] = MP_MINE[0]; P[2] = MP_MINE[1]; P[3] = MP_MINE[2]; }
+  } catch (e) { /* yok say */ }
 }
-
-// Kare başında kendi arabamızın slot matrisleri önbelleğe alınır; sonunda geri konur.
+// --- kare önbellekleri (her karede nesne oluşturmamak için) ---
+const MPF = {
+  g: m4(), t: m4(), w: m4()    // gövde zemini, ek dönme, tekerlek matrisi
+};
+// Kare başında: partnerin matrisleri yumuşatılıp dünyaya yazılır.
 function mpBeginFrame() {
   if (!MP.carReady) return;
-  const obj = R.objData, b = MP.bodySlot;
-  MPSAVE.body.set(obj.subarray(b * 64, b * 64 + 16));
-  MPSAVE.bodyP.set(obj.subarray(b * 64 + 32, b * 64 + 36));
-  for (let i = 0; i < 4; i++) {
-    const s = MP.wheelSlot[i];
-    MPSAVE.wheel[i].set(obj.subarray(s * 64, s * 64 + 16));
-    MPSAVE.wheelP[i].set(obj.subarray(s * 64 + 32, s * 64 + 36));
-  }
-  MP.canDraw = false;
-  if (!MP.hasT) return;
-  // yumuşatma
-  const S = MP.S, T = MP.T, k = 0.25, ky = 0.3;
+  if (!MP.hasT) { MP.set.on = false; return; }
+  const S = MP.S, T = MP.T, g = MPF.g;
+  // Son paketten bu yana geçen süre 50 ms'den (20 Hz) uzunsa aynı hızla
+  // ilerlet; ekran 60 Hz olduğu için yoksa araba zıplayarak gider.
+  const now = performance.now(), gap = Math.min((now - MP.lastRxCarAt) / 1000, 0.2);
+  if (gap > 0.06 && T.spd) { S.x += Math.cos(T.yaw) * T.spd * gap * 0.5; S.z += Math.sin(T.yaw) * T.spd * gap * 0.5; }
+  const k = 0.34, ky = 0.4;
   S.x += (T.x - S.x) * k; S.y += (T.y - S.y) * k; S.z += (T.z - S.z) * k;
   let dy = T.yaw - S.yaw; if (dy > PI) dy -= TAU; else if (dy < -PI) dy += TAU;
   S.yaw += dy * ky; S.spd += (T.spd - S.spd) * k; S.gear = T.gear; S.acc = T.acc;
-  // gövde matrisi
-  const G = MPM.g, B = MPSAVE.body, c = Math.cos(S.yaw), s = Math.sin(S.yaw), ox = -(VP.L / 2 - VP.a);
-  G[0] = c; G[1] = 0; G[2] = s; G[3] = 0;
-  G[4] = 0; G[5] = 1; G[6] = 0; G[7] = 0;
-  G[8] = -s; G[9] = 0; G[10] = c; G[11] = 0;
-  G[12] = S.x + c * ox; G[13] = S.y; G[14] = S.z + s * ox; G[15] = 1;
-  m4ident(MPM.t); MPM.t[13] = 0.18; m4mul(B, G, MPM.t);
-  // malzeme parametreleri: fren lambası (p0.x), renk (p1.rgb = partner rengi)
-  const P = MPSAVE.bodyP;
+  // gövde matrisi (kendi arabamızdaki kurulumla aynı: gövde zemin tabanlı)
+  const c = Math.cos(S.yaw), s = Math.sin(S.yaw), ox = -(VP.L / 2 - VP.a);
+  g[0] = c; g[1] = 0; g[2] = s; g[3] = 0;
+  g[4] = 0; g[5] = 1; g[6] = 0; g[7] = 0;
+  g[8] = -s; g[9] = 0; g[10] = c; g[11] = 0;
+  g[12] = S.x + c * ox; g[13] = S.y; g[14] = S.z + s * ox; g[15] = 1;
+  // gövde: zeminde 0.18 m yukarı (malzemenin gövde tabanı)
+  m4ident(MPF.t); MPF.t[13] = 0.18;
+  const BG = objModel(MP.bodyObj), BP = objPrev(MP.bodyObj);
+  for (let i = 0; i < 16; i++) BP[i] = BG[i];        // önceki kare = mblur kaynağı
+  m4mul(BG, g, MPF.t);
+  // malzeme parametreleri: fren lambası, geri vites, farlar + partnerin rengi
+  const P = objParams(MP.bodyObj);
   P[0] = S.acc < -0.05 ? 1 : 0; P[1] = S.gear === 0 ? 1 : 0; P[2] = 1;
-  const b64 = MP.bodySlot * 64;
-  for (let i = 0; i < 4; i++) R.objData[b64 + 32 + i] = P[i];
-  R.objData[b64 + 36] = MP.paint[0]; R.objData[b64 + 37] = MP.paint[1]; R.objData[b64 + 38] = MP.paint[2]; R.objData[b64 + 39] = 0;
-  // tekerlekler: aynı yerleşim (hub), dönme hızı hızdan
-  const spin = S.spd / VP.R;
+  P[4] = MP.paint[0]; P[5] = MP.paint[1]; P[6] = MP.paint[2]; P[7] = 0;
+  // tekerlekler: kendi arabamızla aynı yerleşim (CAR.hubs), dönme hızı hızdan
+  const spin = S.spd / VP.R, blur = Math.abs(spin), w = MPF.w;
   for (let i = 0; i < 4; i++) {
-    const s2 = MP.wheelSlot[i], h = CAR.hubs[i], left = (i & 1) === 1;
+    const h = CAR.hubs[i], left = (i & 1) === 0;
     const a = left ? PI : 0, ca = Math.cos(a), sa = Math.sin(a);
-    const g = left ? spin : -spin, cg = Math.cos(g), sg = Math.sin(g);
-    const RZ = MPM.rz;
-    RZ[0] = ca * cg; RZ[1] = sg; RZ[2] = -sa * cg; RZ[3] = 0;
-    RZ[4] = -ca * sg; RZ[5] = cg; RZ[6] = sa * sg; RZ[7] = 0;
-    RZ[8] = sa; RZ[9] = 0; RZ[10] = ca; RZ[11] = 0;
-    RZ[12] = h[0]; RZ[13] = h[1]; RZ[14] = h[2]; RZ[15] = 1;
-    m4mul(MPSAVE.wheel[i], B, RZ);
-    const o = s2 * 64 + 32;
-    R.objData[o] = Math.abs(spin);                         // yuvarlanma bulanıklığı
+    const gi = left ? spin : -spin, cg = Math.cos(gi), sg = Math.sin(gi);
+    w[0] = ca * cg; w[1] = sg; w[2] = -sa * cg; w[3] = 0;
+    w[4] = -ca * sg; w[5] = cg; w[6] = sa * sg; w[7] = 0;
+    w[8] = sa; w[9] = 0; w[10] = ca; w[11] = 0;
+    w[12] = h[0]; w[13] = h[1]; w[14] = h[2]; w[15] = 1;
+    const WM = objModel(MP.wheelObj[i]), WP = objPrev(MP.wheelObj[i]);
+    for (let j = 0; j < 16; j++) WP[j] = WM[j];
+    m4mul(WM, g, w);
+    objParams(MP.wheelObj[i])[0] = blur;            // yuvarlanma bulanıklığı
   }
-  MP.canDraw = true;
+  MP.set.on = true;
 }
-// Partner çizildikten sonra kendi arabamızın matrisleri geri yazılır.
-// (Not: gövde/tekerlek matrisleri GPU komutları hazırlanırken okunur, geri
-// yazmak yalnızca bir sonraki kareyi bozmamak için gerekli değildir; yine de
-// her karede yeniden yazılır. ARABA ve PARTNER aynı karede doğru görünür.)
-function mpPartnerDraw() { /* çizim draw() içinde */ }
 
 // ---------------------------- 4) SES ---------------------------------------
 const MPSND = { ready: false, ctx: null, gain: null, panner: null, osc: null, osc2: null, filter: null };
@@ -223,8 +321,8 @@ function mpSoundInit() {
     let head = gain, panner = null;
     if (ctx.createPanner) {
       panner = ctx.createPanner();
-      panner.panningModel = 'HRTF'; panner.distanceModel = 'linear';
-      panner.refDistance = 6; panner.maxDistance = 80; panner.rolloffFactor = 1;
+      panner.panningModel = 'equalpower'; panner.distanceModel = 'linear';
+      panner.refDistance = 6; panner.maxDistance = 60; panner.rolloffFactor = 0.6;
       gain.connect(panner); head = panner;
     } else if (ctx.createStereoPanner) {
       panner = ctx.createStereoPanner(); gain.connect(panner); head = panner;
@@ -240,179 +338,45 @@ function mpSoundInit() {
     MPSND.ready = true;
   } catch (e) { /* ses yoksa oyun sessiz sürer */ }
 }
+let _mpSndAt = 0;
 function mpSoundFrame() {
   const C = MPSND.ctx;
   if (!C) return;
+  // Ekolayzer güncellemeleri 60 Hz yerine 10 Hz: her karede setTargetAtTime
+  // çağırmak ses iş parçacığını gereksiz yere meşgul ediyordu.
+  const t0 = performance.now();
+  if (t0 - _mpSndAt < 100) return;
+  _mpSndAt = t0;
   if (C.state === 'suspended') C.resume().catch(() => {});
-  if (!MP.hasT || !MP.partnerOn) { try { MPSND.gain.gain.value = 0; } catch (e) {} return; }
+  if (!MP.hasT || !MP.partnerOn || typeof GS === 'undefined') { try { MPSND.gain.gain.value = 0; } catch (e) { } return; }
   const D = MP.S, dx = D.x - GS.cx, dz = D.z - GS.cz, dy = D.y - GS.cy;
   const dist = Math.sqrt(dx * dx + dz * dz + dy * dy);
   const muted = (typeof SND !== 'undefined' && SND.mute) ? 0 : 1;
-  const vol = dist > 80 ? 0 : (1 - dist / 80) * (1 - dist / 80) * 0.55 * muted;
+  const vol = dist > 60 ? 0 : (1 - dist / 60) * (1 - dist / 60) * 0.5 * muted;
   const t = C.currentTime, sp = Math.abs(D.spd);
   try {
-    MPSND.gain.gain.setTargetAtTime(vol, t, 0.08);
+    MPSND.gain.gain.setTargetAtTime(vol, t, 0.12);
     const rpm = 850 + Math.min(sp, 45) * 175;
-    MPSND.osc.frequency.setTargetAtTime(rpm / 30, t, 0.06);
-    MPSND.osc2.frequency.setTargetAtTime(rpm / 60, t, 0.06);
-    MPSND.filter.frequency.setTargetAtTime(420 + Math.min(sp, 45) * 70, t, 0.1);
+    MPSND.osc.frequency.setTargetAtTime(rpm / 30, t, 0.08);
+    MPSND.osc2.frequency.setTargetAtTime(rpm / 60, t, 0.08);
+    MPSND.filter.frequency.setTargetAtTime(420 + Math.min(sp, 45) * 70, t, 0.12);
     const c = Math.cos(GS.yaw), s = Math.sin(GS.yaw);
     const rx = dz * c - dx * s, fw = dx * c + dz * s;     // kameraya göre sağ/ön
     const p = MPSND.panner;
+    if (!p) return;
     if (p.positionX) { p.positionX.value = rx; p.positionY.value = dy; p.positionZ.value = fw + 2; }
     else if (p.setPosition) p.setPosition(rx, dy, fw + 2);
     else if (p.pan) p.pan.value = Math.max(-1, Math.min(1, rx / 20));
   } catch (e) { /* yok say */ }
 }
 
-// ---------------------------- 5) KAMERA ------------------------------------
-const CAM = { ready: false, want: false, remoteReady: false, stream: null, video: null, cv: null, g: null, timer: null, sending: false, lastSend: 0, lastReq: 0, frames: 0, remoteFrames: 0 };
-function camSupported() { return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
-
-function camInit() {
-  const on = document.getElementById('camOn'), off = document.getElementById('camOff');
-  if (on) on.onclick = () => { if (CAM.ready) camStop(); else camAsk(); };
-  if (off) off.onclick = () => camStop();
-  const q = document.getElementById('quit');
-  if (q) q.onclick = () => { try { if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'ahududu:game-quit' }, '*'); else history.back(); } catch (e) { history.back(); } };
-  try { if (/[?&]return=/i.test(location.search || '') && q) q.style.display = 'inline-block'; } catch (e) {}
-  mpUiRefresh();
-}
-// Tarayıcıda getUserMedia izin istemini kendisi gösterir; Capacitor kabuğunda
-// önce köprüden izin istenir (aynı izni iki kez sormamak için).
-function camAsk() {
-  if (!camSupported()) { camStatus('bu tarayıcıda kamera yok'); return; }
-  const CAP = window.Capacitor;
-  if (CAP && CAP.Plugins && CAP.Plugins.Camera) {
-    try { CAP.Plugins.Camera.requestPermissions({ permissions: ['camera'] }).then(camStart).catch(camStart); return; } catch (e) { /* devam */ }
-  }
-  camStart();
-}
-function camStart() {
-  if (!camSupported()) { camStatus('bu tarayıcıda kamera yok'); return; }
-  if (CAM.ready) { CAM.want = true; return; }
-  camStatus('kamera açılıyor…');
-  let req;
-  try {
-    req = navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 640 }, frameRate: { ideal: 24, max: 30 } },
-      audio: false
-    });
-  } catch (e) { camStatus('açılamadı'); return; }
-  req.then(stream => {
-    CAM.stream = stream; CAM.ready = true; CAM.want = true;
-    const v = document.createElement('video');
-    v.autoplay = true; v.muted = true; v.playsInline = true; v.setAttribute('playsinline', '');
-    v.srcObject = stream;
-    const p = v.play(); if (p && p.catch) p.catch(() => {});
-    CAM.video = v;
-    CAM.cv = document.createElement('canvas'); CAM.cv.width = 320; CAM.cv.height = 427;
-    CAM.g = CAM.cv.getContext('2d');
-    mpSelfUi();
-    if (!CAM.timer) CAM.timer = setInterval(camTick, 100);
-    camStatus('açık');
-    NET.json({ type: 'game_cam_status', on: true });
-    mpUiRefresh();
-  }).catch(err => {
-    CAM.ready = false; CAM.want = false;
-    const n = err && err.name;
-    camStatus(n === 'NotAllowedError' ? 'tarayıcı izni yok' : n === 'NotFoundError' ? 'kamera bulunamadı' : 'açılamadı');
-    mpUiRefresh();
-  });
-}
-function camStop() {
-  CAM.want = false; CAM.ready = false;
-  if (CAM.timer) { clearInterval(CAM.timer); CAM.timer = null; }
-  if (CAM.stream) { CAM.stream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} }); CAM.stream = null; }
-  if (CAM.video) CAM.video.srcObject = null;
-  micStop();
-  const box = document.getElementById('me'); if (box) box.style.display = 'none';
-  NET.json({ type: 'game_cam_status', on: false });
-  camStatus('kapalı');
-  mpUiRefresh();
-}
-function camStatus(t) { const el = document.getElementById('camStat'); if (el) el.textContent = t; }
-// Kendi görüntün: sağ altta küçük ayna (dokununca küçülür)
-function mpSelfUi() {
-  let box = document.getElementById('me');
-  if (!box) {
-    box = document.createElement('div'); box.id = 'me';
-    const v = document.createElement('video');
-    v.autoplay = true; v.muted = true; v.playsInline = true; v.setAttribute('playsinline', '');
-    const lb = document.createElement('div'); lb.className = 'lb';
-    const mk = document.createElement('button'); mk.className = 'mk'; mk.type = 'button'; mk.textContent = '✕'; mk.title = 'Kamerayı kapat';
-    mk.onclick = ev => { ev.stopPropagation(); camStop(); };
-    box.appendChild(v); box.appendChild(lb); box.appendChild(mk);
-    document.body.appendChild(box);
-    v.addEventListener('pointerdown', () => { box.style.width = box.style.width === '52px' ? '' : '52px'; });
-  }
-  const v = box.querySelector('video');
-  if (v && CAM.stream) v.srcObject = CAM.stream;
-  const lb = box.querySelector('.lb');
-  if (lb) lb.innerHTML = '<span>' + MP.myName + '</span>';
-  box.style.display = 'block';
-}
-// Partnerin görüntüsü: sağ altta; her kare geldiğinde <img> yenilenir
-function mpRemoteUi() {
-  let box = document.getElementById('camN');
-  if (!box) {
-    box = document.createElement('div'); box.id = 'camN';
-    const im = document.createElement('img');
-    im.style.cssText = 'display:block;width:100%;aspect-ratio:3/4;object-fit:cover;transform:scaleX(-1);background:#000';
-    im.alt = '';
-    const lb = document.createElement('div'); lb.className = 'lb';
-    const say = document.createElement('button'); say.className = 'say'; say.type = 'button'; say.textContent = '🎤 Basılı tut: konuş';
-    say.addEventListener('pointerdown', ev => { ev.preventDefault(); micTalk(true); });
-    say.addEventListener('pointerup', ev => { ev.preventDefault(); micTalk(false); });
-    say.addEventListener('pointerleave', () => micTalk(false));
-    say.addEventListener('pointercancel', () => micTalk(false));
-    box.appendChild(im); box.appendChild(lb); box.appendChild(say);
-    document.body.appendChild(box);
-  }
-  const lb = box.querySelector('.lb');
-  if (lb) lb.innerHTML = '<b>' + MP.partnerName + '</b><br><span style="opacity:.7">canlı</span>';
-  box.style.display = 'block';
-  return box;
-}
-function mpHideRemoteUi() {
-  const box = document.getElementById('camN');
-  if (box) box.style.display = 'none';
-  CAM.remoteReady = false;
-}
-// Kendi karelerimizi JPEG olarak yolla (≈10 fps, 320×427)
-function camTick() {
-  if (!CAM.ready || !CAM.g || CAM.sending) return;
-  if (performance.now() - CAM.lastSend < 100) return;
-  const v = CAM.video;
-  if (!v || v.readyState < 2 || !v.videoWidth) return;
-  try {
-    const cw = CAM.cv.width, ch = CAM.cv.height, vw = v.videoWidth, vh = v.videoHeight;
-    const scale = Math.max(cw / vw, ch / vh), sw = cw / scale, sh = ch / scale;
-    CAM.g.drawImage(v, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cw, ch);
-    CAM.sending = true;
-    CAM.cv.toBlob(blob => {
-      CAM.sending = false;
-      if (!blob || blob.size > 140000) return;    // dev kare soketi tıkamasın
-      const rd = new FileReader();
-      rd.onload = () => { CAM.lastSend = performance.now(); CAM.frames++; NET.json({ type: 'game_cam_frame', data: String(rd.result || '') }); };
-      rd.onerror = () => { CAM.sending = false; };
-      rd.readAsDataURL(blob);
-    }, 'image/jpeg', 0.6);
-  } catch (e) { CAM.sending = false; }
-}
-function camMaybeRequest() {
-  if (CAM.ready || !NET.opened) return;
-  const now = performance.now();
-  if (now - CAM.lastReq < 20000) return;
-  CAM.lastReq = now;
-  NET.json({ type: 'game_cam_req' });
-}
-
-// ---------------------------- 6) MİKROFON ----------------------------------
-// Bas-konuş: 16 kHz, 16-bit PCM parçaları (≈200 ms)
+// ---------------------------- 5) MİKROFON ----------------------------------
+// Bas-konuş: 16 kHz, 16-bit PCM parçaları (≈200 ms). Yalnızca partner varken
+// görünen küçük düğmeyle açılır; kamera/mikrofon hiçbir zaman kendiliğinden
+// başlamaz.
 const MIC = { ctx: null, node: null, stream: null, timer: null, buf: [] };
 function micTalk(on) {
-  const say = document.querySelector('#camN .say');
+  const say = document.querySelector('#mpSay .say');
   if (!on) { micStop(); return; }
   if (MIC.ctx) return;
   if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return;
@@ -444,11 +408,11 @@ function micTalk(on) {
 }
 function micStop() {
   if (MIC.timer) { clearInterval(MIC.timer); MIC.timer = null; }
-  if (MIC.node) { try { MIC.node.disconnect(); } catch (e) {} MIC.node = null; }
-  if (MIC.stream) { MIC.stream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} }); MIC.stream = null; }
-  if (MIC.ctx) { try { MIC.ctx.close(); } catch (e) {} MIC.ctx = null; }
+  if (MIC.node) { try { MIC.node.disconnect(); } catch (e) { } MIC.node = null; }
+  if (MIC.stream) { MIC.stream.getTracks().forEach(t => { try { t.stop(); } catch (e) { } }); MIC.stream = null; }
+  if (MIC.ctx) { try { MIC.ctx.close(); } catch (e) { } MIC.ctx = null; }
   MIC.buf = [];
-  const say = document.querySelector('#camN .say');
+  const say = document.querySelector('#mpSay .say');
   if (say) say.textContent = '🎤 Basılı tut: konuş';
 }
 const MICPLAY = { ctx: null };
@@ -456,7 +420,7 @@ function mpPlayMic(b64) {
   try {
     if (!MICPLAY.ctx) { const AC = window.AudioContext || window.webkitAudioContext; MICPLAY.ctx = new AC(); }
     const ctx = MICPLAY.ctx;
-    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    if (ctx.state === 'suspended') ctx.resume().catch(() => { });
     const bin = atob(b64), n = bin.length >> 1;
     if (!n) return;
     const buf = ctx.createBuffer(1, n, 16000), ch = buf.getChannelData(0);
@@ -469,19 +433,20 @@ function mpPlayMic(b64) {
   } catch (e) { /* yok say */ }
 }
 
-// ---------------------------- 7) PAKETLER ----------------------------------
+// ---------------------------- 6) PAKETLER ----------------------------------
+// d = [x, y, z, yaw, hız, vites, gaz/fren, s, d]
 function mpSelfState() {
   const V = VEH;
   return [Math.round(V.x * 100) / 100, Math.round(V.y * 100) / 100, Math.round(V.z * 100) / 100,
     Math.round(V.yaw * 1000) / 1000, Math.round(Math.sqrt(V.vx * V.vx + V.vy * V.vy) * 100) / 100,
-    V.gear | 0, (V.throttle - V.brake) >= 0 ? 1 : -1];
+    V.gear | 0, (V.throttle - V.brake) >= 0 ? 1 : -1,
+    Math.round(V.s * 10) / 10, Math.round(V.d * 10) / 10];
 }
+let _frameNo = 0;
 function mpSendCar() {
-  if (!NET.opened) return;
-  const now = performance.now();
-  if (now - MP.sentAt < 50) return;                  // 20 Hz
-  if (UI.st !== ST.JOGO && UI.st !== ST.PAUSA && UI.st !== ST.RESULT && UI.st !== ST.FITA && UI.st !== ST.INICIO) return;
-  MP.sentAt = now;
+  if (!NET.live) return;
+  if ((++_frameNo % Math.max(1, Math.round(60 / MP_TICK_HZ))) !== 0) return;   // 20 Hz
+  if (typeof UI !== 'undefined' && UI.st !== ST.JOGO && UI.st !== ST.FITA) return;
   NET.json({ type: 'game_car', d: mpSelfState() });
 }
 function mpOnCar(d) {
@@ -489,7 +454,7 @@ function mpOnCar(d) {
   const T = MP.T;
   const jump = !MP.hasT || Math.abs(T.x - d[0]) + Math.abs(T.z - d[2]) > 30;
   T.x = +d[0] || 0; T.y = +d[1] || 0; T.z = +d[2] || 0; T.yaw = +d[3] || 0;
-  T.spd = +d[4] || 0; T.gear = +d[5] || 0; T.acc = +d[6] || 0;
+  T.spd = +d[4] || 0; T.gear = +d[5] || 0; T.acc = +d[6] || 0; T.s = +d[7] || 0; T.d = +d[8] || 0;
   if (jump) { MP.S.x = T.x; MP.S.y = T.y; MP.S.z = T.z; MP.S.yaw = T.yaw; MP.S.spd = T.spd; MP.hasT = true; }
   if (!MP.partnerOn) { MP.partnerOn = true; mpUiRefresh(); }
   MP.lastRxCarAt = performance.now();
@@ -498,78 +463,138 @@ function mpOnPacket(d) {
   if (!d || typeof d !== 'object') return;
   switch (d.type) {
     case 'game_hello':
-      // Kimlik URL'deki u= ile belirlenir ve DEĞİŞTİRİLMEZ: gelen paketin
-      // "from" alanı karşı tarafın kimliğidir, kendi kimliğimiz değil.
-      if (d.from === MP.userId) break;          // kendi yankımız (olmamalı) — yok say
+      if (d.from === MP.userId) break;          // kendi yankımız — yok say
       MP.partnerOn = true;
+      if (!MP.sentAt || MP.sentAt < 0) MP.sentAt = 0;
       mpUiRefresh();
       break;
     case 'game_car': mpOnCar(d.d); break;
     case 'game_bye': MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); break;
-    case 'game_cam_status':
-      if (d.on) { CAM.remoteReady = true; mpRemoteUi(); } else mpHideRemoteUi();
-      break;
-    case 'game_cam_frame':
-      if (typeof d.data === 'string' && d.data.indexOf('data:image/') === 0) {
-        const box = mpRemoteUi(), im = box.querySelector('img');
-        if (im) im.src = d.data;
-        CAM.remoteReady = true; CAM.remoteFrames++;
-        camMaybeRequest();
-      }
-      break;
-    case 'game_cam_req':
-      if (!CAM.ready && !CAM.want && camSupported()) camStart();
-      break;
+    case 'game_countdown': mpOnCountdown(d); break;
+    case 'game_start': mpOnStart(d); break;
     case 'game_mic':
       if (typeof d.data === 'string') mpPlayMic(d.data);
       break;
   }
 }
 function mpUiRefresh() {
-  const st = document.getElementById('camStat');
-  if (st) {
-    st.textContent = 'kameran: ' + (CAM.ready ? 'açık' : 'kapalı') + ' · ' +
-      (MP.partnerOn ? MP.partnerName + (CAM.remoteReady ? ' canlı' : ' oyunda') : 'bekleniyor…');
-  }
-  const on = document.getElementById('camOn'), off = document.getElementById('camOff');
-  if (on) on.classList.toggle('on', CAM.ready);
-  if (off) off.classList.toggle('on', !CAM.ready);
+  const st = document.getElementById('mpStat');
+  if (st) st.textContent = MP.partnerOn ? MP.partnerName + ' oyunda · arabası pistte' : 'bekleniyor… (sevgilin de oyunu açmalı)';
+  const say = document.getElementById('mpSay');
+  if (say) say.style.display = MP.partnerOn ? 'block' : 'none';
+}
+
+// ---------------------------- 7) EŞZAMANLI BAŞLANGIÇ -----------------------
+// İki telefonda da "Başla"ya basılınca oyun YEREL olarak beklemeden başlarsa
+// start çizgisinden birkaç saniye farkla kalkılır ve tur süreleri
+// karşılaştırılamaz. Bu bölüm ortak bir başlangıç saati kurar:
+//   • "Başla"ya basan, diğerine game_countdown gönderir (3 saniyelik geri sayım),
+//   • geri sayım bitince yerel saatte T0 = now + 3 sn (her iki tarafta eşit),
+//   • game_start T0'ı taşır; iki uç da aynı mutlak saate göre devam eder.
+const MPSTART = { at: 0, pending: false, timer: null, cdEnd: 0, cdStart: 0 };
+function mpUptime() { return performance.timeOrigin + performance.now(); }
+function mpServerOffset(at) {
+  // gönderen tarafın saati ile bizimki arasındaki farkı ağ gecikmesi kadar
+  // ("tek yön" ~= (güncel görünen gidiş dönüş / 2)) eşitle
+  const now = mpUptime(), skew = (at - now) - (MP.clock.midLag || 0);
+  if (MP.clock.offset === 0 || Math.abs(skew) > 2000) MP.clock.offset = skew;
+  return skew;
+}
+MP.clock = { offset: 0, midLag: 0 };
+function mpLocalFromServer(at) { return at - MP.clock.offset; }
+function mpArmStart() {
+  // yerel geri sayım çizildi mi ve bitti mi?
+  if (!MPSTART.pending) return;
+  if (mpUptime() < MPSTART.at) return;
+  MPSTART.pending = false;
+  try { uiDrive(); } catch (e) { console.warn('[uno-mp] yarış başlatılamadı', e); }
+}
+function mpOnCountdown(d) {
+  const at = +d.at || 0;
+  if (!at) return;
+  mpServerOffset(at);
+  const local = mpLocalFromServer(at);
+  if (local <= mpUptime()) { mpOnStart(d); return; }
+  MPSTART.at = local; MPSTART.pending = true;
+  mpUiRefresh();
+}
+function mpOnStart(d) {
+  const at = +d.at || 0;
+  if (at) mpServerOffset(at);
+  if (at) MPSTART.at = mpLocalFromServer(at);
+  mpArmStart();
+}
+// "Başla" düğmesi oyunda basıldığında 52_ui.js tarafından çağrılır.
+// Dönüş: true = geri sayım kuruldu (oyun beklemeli), false = kurulamadı.
+function mpAnnounceStart() {
+  if (!NET.live) { MPSTART.pending = false; return false; }
+  const at = mpUptime() + MP_COUNTDOWN * 1000 + 400;    // paketin gidişi için pay
+  NET.json({ type: 'game_countdown', game: GAME_ID, at: Math.round(at), from: MP.userId });
+  MPSTART.at = mpLocalFromServer(at);
+  MPSTART.pending = true;
+  return true;
 }
 
 // ---------------------------- 8) DÖNGÜ KANCALARI ---------------------------
-// Oyunun kendi fonksiyonlarına doğrudan kanca atılır (45_game.js ve 52_ui.js
-// içinde `MP_...` çağrıları vardır). Hooks kayıp/yoksa da oyun çalışır.
-function mpInstallHooks() {
-  MP.hooked = true;
+// Partner arabasını, ağdan ilk konum gelmeden de start çizgisinde göster
+// (ikiniz de aynı anda giriyorsanız birbirinizi hemen görürsünüz).
+function mpSeedPartnerAtGrid() {
+  if (MP.hasT || !MP.carReady || typeof VEH === 'undefined') return;
+  try {
+    const V = VEH, T = MP.T;
+    T.x = MP.S.x = V.x; T.y = MP.S.y = V.y; T.z = MP.S.z = V.z; T.yaw = MP.S.yaw = V.yaw;
+    T.spd = MP.S.spd = 0; MP.hasT = true;
+    mpBeginFrame();
+  } catch (e) { /* yok say */ }
 }
 function mpNetHousekeeping() {
   const now = performance.now();
+  if (MP.partnerOn && !MP.hasT && now - MP.bootAt > 1500) mpSeedPartnerAtGrid();
   if (!NET.opened && MP.retryAt && now >= MP.retryAt) { MP.retryAt = 0; NET.connect(); }
-  // partner uzun süre paket göndermediyse kaybolsun (60 sn)
-  if (MP.hasT && MP.partnerOn && now - MP.lastRxCarAt > 60000) { MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); }
-  camMaybeRequest();
+  // partner uzun süre paket göndermediyse kaybolsun (30 sn)
+  if (MP.hasT && MP.partnerOn && now - MP.lastRxCarAt > 30000) { MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); }
+  if (MPSTART.pending) mpArmStart();
 }
 
 function mpBoot() {
   mpResolveUser();
+  MP.bootAt = performance.now();
   mpSoundInit();
-  camInit();
-  mpInstallHooks();
+  mpBuildPartnerCar();
+  mpPaintMine();
+  // Kabuktan gelen partner paketleri (önceden hiç bağlanmamıştı: partnerin
+  // arabası ve geri sayım hiç ulaşmıyordu).
+  try { if (MPSHARE && MPSHARE.on) MPSHARE.on((d) => mpOnPacket(d)); } catch (e) { /* yok say */ }
+  // Bağlantı durumu: kabuk soketi açılırsa oyunun kendi soketi kapatılır (tek
+  // bağlantı); kabuk düşerse kendi yedeğimiz açılır.
+  try {
+    if (MPSHARE && typeof MPSHARE.onState === 'function') MPSHARE.onState((open) => {
+      if (open) {
+        if (NET.ws) { NET.close(); }
+        NET.opened = false;
+        MP.retryAt = 0;
+        NET.json({ type: 'game_hello', game: GAME_ID });   // yeni bağlantıda kendimizi tanıt
+      } else if (!NET.ws) {
+        NET.closedByUser = false; MP.retryAt = 0;
+        NET._probed = true;                                 // artık köprü yanıt vermiyor
+        NET._openOwn();
+      }
+      mpUiRefresh();
+    });
+  } catch (e) { /* yok say */ }
   NET.connect();
-  try { if (/[?&]cam=1/i.test(location.search || '') && camSupported()) setTimeout(camStart, 1500); } catch (e) {}
 }
-BUILD.push(async () => { try { mpBuildPartnerCar(); } catch (e) {} try { mpBoot(); } catch (e) { console.warn('[uno-mp] başlatılamadı', e); } });
+BUILD.push(async () => { try { mpBuildPartnerCar(); } catch (e) { } try { mpBoot(); } catch (e) { console.warn('[uno-mp] başlatılamadı', e); } });
 // Teşhis: konsoldan window.__mp ile çok oyunculu durumu inceleyebilirsin
 try {
   window.__mp = {
-    net: NET, mp: MP, cam: CAM, snd: MPSND,
+    net: NET, mp: MP, snd: MPSND,
     state() {
       return {
         userId: MP.userId, partnerName: MP.partnerName,
-        wsOpen: NET.opened, wsState: NET.ws ? NET.ws.readyState : -1,
+        wsOpen: NET.opened || (MPSHARE ? MPSHARE.open() : false), wsState: NET.ws ? NET.ws.readyState : -1,
+        viaShell: !!(MPSHARE && MPSHARE.open()),
         partnerOn: MP.partnerOn, partnerCar: MP.carReady, hasPartnerPos: MP.hasT,
-        camMine: CAM.ready, camPartner: CAM.remoteReady,
-        framesSent: CAM.frames, framesGot: CAM.remoteFrames,
         partner: { x: +(MP.S.x || 0).toFixed(1), z: +(MP.S.z || 0).toFixed(1) },
         me: { x: +(VEH.x || 0).toFixed(1), z: +(VEH.z || 0).toFixed(1) }
       };

@@ -9,6 +9,9 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font:14px/1.4 -ap
 #c{position:absolute;inset:0;margin:auto;width:100vw;height:100vh;display:block;object-fit:contain;touch-action:none}
 #msg{position:absolute;left:0;right:0;top:45%;text-align:center;letter-spacing:.08em;white-space:pre-wrap;padding:0 6vw}
 #hint{position:absolute;left:14px;bottom:calc(10px + env(safe-area-inset-bottom,0px));opacity:.75;text-shadow:0 1px 2px #000;transition:opacity 1.5s;pointer-events:none;font-size:12px;right:14px}
+/* Telefonda klavye ipucu yok: düğmelerin üstüne biniyordu. Dokunmatik
+   cihazda ekranın altında düğmeler zaten kumandayı gösteriyor. */
+body.has-touch #hint{display:none}
 #hg,#ht,#hs,#tag,#ui{display:none;position:absolute;pointer-events:none}
 #hg{right:1.6vh;bottom:1.6vh}
 /* Dokunmatikte gaz/fren sağ altta: gösterge paneli sol kümelerin üstüne,
@@ -34,61 +37,68 @@ body.has-touch #ht{display:none !important}
 #ui button{font:inherit;font-size:1.15em;font-weight:600;color:#fff;background:#d8351c;border:0;border-radius:.5em;padding:.6em 2em;margin:.35em .4em;cursor:pointer}
 #ui button+button{background:rgba(255,255,255,.16)}
 #ui button:focus-visible{outline:2px solid #fff;outline-offset:2px}
-/* ---- çok oyunculu + kamera arayüzü (Türkçe ek) ---- */
+/* ---- çok oyunculu arayüz (Türkçe ek) — kamera arayüzü tamamen kaldırıldı ---- */
 #ol{margin-top:1.2em;font-size:.9em;line-height:1.6;color:#cfd6dd;max-width:34em;margin-left:auto;margin-right:auto}
 #ol b{color:#fff}
 #ol kbd{display:inline-block;min-width:1.5em;padding:.05em .4em;border-radius:.3em;background:rgba(255,255,255,.16);color:#fff;font:inherit;font-weight:600;font-size:.92em}
-#camK{display:flex;align-items:center;justify-content:center;gap:.6em;margin:1.1em auto 0;font-size:.95em;color:#cfd6dd}
-#camK button{font-size:.9em;padding:.45em 1em;margin:0;background:rgba(255,255,255,.16)}
-#camK button.on{background:#1f9d55}
-#me{
-  position:absolute;pointer-events:auto;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));
-  width:clamp(84px,14vh,132px);border-radius:12px;overflow:hidden;background:rgba(9,11,14,.7);
-  box-shadow:0 6px 18px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.22);z-index:20;
+#mpStat{margin-top:.7em;font-size:.92em;color:#ffb4c8;font-weight:600}
+#mpSay{
+  display:none;position:absolute;pointer-events:auto;left:50%;transform:translateX(-50%);
+  bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:20;
 }
-#me video{display:block;width:100%;aspect-ratio:3/4;object-fit:cover;background:#000;transform:scaleX(-1)}
-#me .lb{position:absolute;left:0;right:0;bottom:0;padding:3px 6px;font-size:11px;font-weight:600;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.75));display:flex;justify-content:space-between}
-#me .mk{position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:999px;border:0;background:rgba(255,255,255,.9);color:#111;font-size:11px;cursor:pointer;padding:0;line-height:22px}
-#camN{
-  position:absolute;pointer-events:auto;right:12px;bottom:calc(12px + clamp(112px,19vh,176px) + env(safe-area-inset-bottom,0px));
-  width:clamp(84px,14vh,132px);border-radius:12px;overflow:hidden;background:rgba(9,11,14,.7);
-  border:1px solid rgba(255,255,255,.22);z-index:20;font-size:12px;color:#dde3ea;
+#mpSay .say{
+  display:block;border:0;border-radius:999px;background:#c2185b;color:#fff;font-size:12px;font-weight:800;
+  padding:9px 16px;cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.4);touch-action:none;
 }
-#camN .lb{padding:8px;line-height:1.35;text-align:center}
-#camN .say{display:block;width:100%;border:0;background:#c2185b;color:#fff;font:inherit;font-weight:700;padding:6px;cursor:pointer}
+body.has-touch #mpSay{bottom:calc(30vmin + env(safe-area-inset-bottom,0px));left:auto;right:2.6vmin;transform:none}
+body.has-touch #mpSay .say{padding:7px 12px;font-size:11px}
 @media (max-width:640px){
   #ui>div{padding:1em 1.2em}
   #ui .cols{gap:1.4em}
   #ui h1{font-size:2.2em}
 }
 /* ---- dokunmatik kumanda ---- */
-#touchui{display:block;position:fixed;inset:0;pointer-events:none;z-index:15;
+#touchui{display:block;position:fixed;inset:0;pointer-events:none;z-index:15;overflow:hidden;
   padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
 /* dokunmatik olmayan cihazda düğmeler görünmesin */
 body:not(.has-touch) #touchui{display:none}
+/* Büyük dokunma hedefleri: parmak ucuyla ıskalamadan basılsın diye düğmeler
+   ve yazıları büyütüldü. Konumlar aynı köşelerden hizalıdır, böylece sağ/sol
+   kümeler birbirine ve gösterge paneline değmez. */
 .tbtn{
   position:absolute;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
-  border-radius:999px;border:2px solid rgba(255,255,255,.35);color:#fff;font:inherit;font-weight:800;
-  background:rgba(12,16,22,.42);backdrop-filter:blur(3px);box-shadow:0 4px 14px rgba(0,0,0,.35);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;
+  border-radius:999px;border:2.5px solid rgba(255,255,255,.42);color:#fff;font:inherit;font-weight:800;
+  background:rgba(12,16,22,.5);backdrop-filter:blur(3px);box-shadow:0 6px 18px rgba(0,0,0,.42);
   transition:transform .06s, background .06s;cursor:pointer;
 }
-.tbtn .ic{line-height:1;font-size:1em}
-.tbtn .lb{font-size:.52em;letter-spacing:.04em;opacity:.85}
-.tbtn.on{background:rgba(216,53,28,.78);border-color:#fff;transform:scale(.94)}
+.tbtn .ic{line-height:1.05;font-size:1.08em;text-shadow:0 1px 3px rgba(0,0,0,.5)}
+.tbtn .lb{font-size:.34em;letter-spacing:.03em;opacity:.95;white-space:nowrap;line-height:1.15;margin-top:.15em}
+.tbtn.on{background:rgba(216,53,28,.82);border-color:#fff;transform:scale(.94)}
 /* Dokunmatikte sürüş düğmeleri başparmağın doğal yerinde: sol alt = direksiyon,
    sağ alt = gaz/fren. Gösterge paneli küçültüldüğü için artık çakışmıyor. */
-.t-left{left:3vmin}
-.t-left.t-mid{width:17vmin;height:17vmin;bottom:3vmin;font-size:3.2vmin}
-.t-right2{left:calc(17vmin + 5vmin) !important;bottom:3vmin}
-.t-right{right:3vmin}
-.t-gas{right:3vmin;bottom:3vmin;width:19vmin;height:19vmin;font-size:3.4vmin}
-.t-brake{right:calc(19vmin + 4.5vmin);bottom:3vmin;width:14vmin;height:14vmin;font-size:2.6vmin}
+.t-left{left:2.6vmin}
+.t-left.t-mid{width:22vmin;height:22vmin;bottom:2.6vmin;font-size:4.6vmin}
+.t-right2{left:calc(22vmin + 5.2vmin) !important;bottom:2.6vmin}
+.t-right{right:2.6vmin}
+.t-gas{right:2.6vmin;bottom:2.6vmin;width:24vmin;height:24vmin;font-size:5vmin}
+.t-brake{right:calc(24vmin + 4.4vmin);bottom:2.6vmin;width:18vmin;height:18vmin;font-size:3.8vmin}
 /* küçük yardımcı düğmeler: sol köşenin üstünde yatay sıra */
-.t-small{width:10.5vmin;height:10.5vmin;font-size:2vmin;bottom:calc(17vmin + 4.5vmin)}
-.t-hand{left:3vmin}
-.t-cam{left:calc(10.5vmin + 4vmin)}
-.t-reset{left:calc(2 * 10.5vmin + 5vmin)}
+.t-small{width:14vmin;height:14vmin;font-size:3.1vmin;bottom:calc(22vmin + 3.4vmin)}
+.t-hand{left:2.6vmin}
+.t-cam{left:calc(14vmin + 3.4vmin)}
+.t-reset{left:calc(2 * 14vmin + 4.2vmin)}
+/* çok kısa yatay ekranda (tarayıcı çubuğu açıkken) düğmeler bir tık küçülür,
+   yoksa üstteki küçük sıra gösterge paneline değer */
+@media (max-height:400px),(max-width:700px){
+  .t-left.t-mid{width:19vmin;height:19vmin;font-size:4vmin}
+  .t-right2{left:calc(19vmin + 4.6vmin) !important}
+  .t-gas{width:21vmin;height:21vmin;font-size:4.4vmin}
+  .t-brake{right:calc(21vmin + 4vmin);width:16vmin;height:16vmin;font-size:3.4vmin}
+  .t-small{width:12vmin;height:12vmin;font-size:2.7vmin;bottom:calc(19vmin + 3vmin)}
+  .t-cam{left:calc(12vmin + 3vmin)}
+  .t-reset{left:calc(2 * 12vmin + 3.6vmin)}
+}
 /* dikey ekranda "telefonu yan çevir" ekranı (CSS ile 90° çevirme yok: HUD ve
    düğmeleri bozuyordu) */
 #mobrotate{
@@ -145,19 +155,15 @@ body:not(.has-touch) #touchui{display:none}
 </table></div>
 </div>
 <div id="ol">
-<b>Beraber oynayın:</b> iki telefon da Ahududu'nun içinden oyunu açsın, ikiniz de aynı yarışta olursunuz.
-Sevgilinin arabası pistte canlı görünür, sesi kulaklıkta yönlü duyulur, canlı kamerası sağ alt köşede açılır —
-senin görüntün de onun ekranında senin gözünde olur. Kamera için bir kez izin vermen yeter.
-</div>
-<div id="camK">
-<span>Kameram</span>
-<button id="camOn" type="button">Aç</button><button id="camOff" type="button">Kapat</button>
-<span id="camStat" style="min-width:6em;text-align:left">kapalı</span>
+<b>Beraber oynayın:</b> iki telefon da Ahududu'nun içinden oyunu açsın, ikiniz de aynı pistte olursunuz.
+Sevgilinin arabası pistte canlı görünür (pembe), motor sesi kameraya göre sağdan/soldan gelir.
+İkiniz de <b>Başla</b>'ya bastığınızda 3-2-1 geri sayım aynı anda başlar; iki araba start çizgisinden birlikte kalkar.
+<div id="mpStat">bekleniyor…</div>
 </div>
 <div class="bt"><button id="b0">Başla</button><button id="b1">Ölçüm</button></div>
 <button id="quit" type="button" style="display:none;background:rgba(255,255,255,.16)">Oyundan çık</button>
 </div></div>
-<div id="camN" style="display:none"><div class="lb">Sevgilinin kamerası<br><span style="opacity:.7">bağlanıyor…</span></div></div>
+<div id="mpSay"><button class="say" type="button">🎤 Basılı tut: konuş</button></div>
 <script>
 (()=>{'use strict';
 const WGSL = {};
@@ -2923,7 +2929,62 @@ const GAME = { ready: false, mode: Q.get('scene') || 'game', capture: Q.has('cap
 GAME.ui = Q.has('ui') ? Q.get('ui') !== '0' : !(Q.has('cap') || Q.has('perf') || Q.has('replay') || Q.has('auto') || Q.has('scene') || navigator.webdriver);
 // Tempo em vetor tipado (escrita por quadro sem caixa na heap): RT[0] = tempo acumulado (s), RT[1] = dt do quadro renderizado, RT[2] = dt pedido ao jogo
 const RT = new Float64Array([0, 1 / 60, 1 / 60, 0]);   // RT[3] = intervalo real do último quadro (ms), para as estatísticas
-const G = { dev: null, ctx: null, fmt: 'bgra8unorm', W: 0, H: 0, hasTS: false, hasF32Filter: true, canvas: null };
+const G = {
+  dev: null, ctx: null, fmt: 'bgra8unorm', W: 0, H: 0, hasTS: false, hasF32Filter: true, canvas: null, memMB: 0,
+  // Mobil algısı BURADA yapılır, gpuInit() içinde değil: 20_renderer.js sabit
+  // dokuların boyutunu (SHADOW_RES, SKY_W...) dosya yüklenirken hesaplıyor ve
+  // gpuInit() daha sonra (main içinde) çalışıyor. Önce false kalıyordu, bu
+  // yüzden telefonda 4096² gölge + 4096×1024 gökyüzü kuruluyordu.
+  mobile: !Q.has('detay') && !Q.has('res') && gpuIsMobile()
+};
+// Telefonda uyarlanabilir çözünürlük açık (son çare cihaz kaybı hariç).
+if (G.mobile) G.resScale = resScaleSaved();
+
+// ---------------------------------------------------------------------------
+// MOBİL GPU BÜTÇESİ (siyah ekranın asıl sebebi)
+// ---------------------------------------------------------------------------
+// Hedef dokular ekran çözünürlüğündedir. Telefonda (DPR 2, ~2340×1080) bu
+// 4680×2160 demek: yalnızca ara hedefler 5 × 77 MB tutuyor ve toplam GPU
+// dokusu ~1 GB'a çıkıyordu. Mobil GPU'ların belleği bu kadarına yetmediği
+// için cihaz düşüyor (device lost / uncaptured error) ve oyun hiçbir şey
+// çizmiyordu: ekranda yalnızca HTML düğmeleri kalıyordu.
+// Çözüm: çizim çözünürlüğünü uzun kenarla ~1600 pikselde sınırla ve gölge /
+// gökyüzü / ortam haritalarını da küçült. Görüntü bulanıklaşmasın diye
+// yalnızca GPU'su zorlanan (mobil) cihazlarda uygulanır; ?res=WxH ve ?detay=1
+// ile yine tam kaliteye dönülebilir.
+const MOBILE_MAX_LONG = 1600;
+// Uyarlanabilir çözünürlük: telefonda çözünürlük kare süresine göre ölçeklenir
+// (bkz. 58_perf_auto.js). ?res=WxH ile ya da ?detay=1 ile sabitlenir.
+const RES_SCALE_KEY = 'uno-res-scale';
+function resScaleSaved() {
+  try { const v = +localStorage.getItem(RES_SCALE_KEY); return v >= 0.5 && v <= 1.2 ? v : 1; } catch (e) { return 1; }
+}
+function resScaleSet(v) { try { localStorage.setItem(RES_SCALE_KEY, String(v.toFixed(2))); } catch (e) { /* yok say */ } }
+// Mobil mi? UA her zaman güvenilir değil (uygulama içi WebView'de değiştirilen
+// UA, masaüstü testleri). Bu yüzden dokunmatik + ekran boyu da bakılır: bir
+// dokunmatik cihazda 720p'yi aşan DPR-ölçekli ekran, mobil GPU bütçesi isteyen
+// bir cihaz demektir.
+function gpuIsMobile() {
+  try {
+    const ua = navigator.userAgent || '';
+    if (/Android|iPhone|iPad|iPod|Mobile|Tablet|Silk/i.test(ua)) return true;
+    const touch = (navigator.maxTouchPoints || 0) > 0;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const long = Math.max(innerWidth, innerHeight) * dpr;
+    return (touch && long >= 1280) || ((navigator.maxTouchPoints || 0) > 2 && Math.min(innerWidth, innerHeight) < 900);
+  } catch (e) { return false; }
+}
+// yön değişince de doğru çalışsın: kısa kenar sabittir
+function screenSize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (G.mobile) {
+    const long = Math.max(innerWidth, innerHeight) * dpr;
+    const maxLong = MOBILE_MAX_LONG * (G.resScale || 1);
+    if (long > maxLong) { const k = maxLong / long; W = Math.round(W * k); H = Math.round(H * k); }
+  }
+  return [clamp(W & ~1, 320, 5120), clamp(H & ~1, 180, 2880)];
+}
 
 async function gpuInit() {
   if (!navigator.gpu) throw new Error('Bu tarayıcı WebGPU desteklemiyor. Android\'de Chrome 121+ ya da Edge deneyin.');
@@ -2952,17 +3013,70 @@ async function gpuInit() {
     dev = await ad.requestDevice({ requiredFeatures: feats });
   }
   G.dev = dev;
+  G.limitTex = lim.maxTextureDimension2D;
   G.dev.addEventListener('uncapturederror', e => { console.error('GPU: ' + e.error.message); G.lastErr = e.error.message; });
+  // Cihaz düşerse (bellek taşması, sürücü sıfırlaması, uygulama arkaya
+  // alınması) eskiden hiçbir şey yapılmıyordu: siyah ekran öyle kalıyordu.
+  // Artık önce daha düşük çözünürlükle kurtarılmaya çalışılır, o da olmazsa
+  // ekrana anlaşılır bir mesaj yazılır.
+  G.dev.lost.then(info => gpuLost(info));
   G.canvas = document.getElementById('c');
+  G.scale = 1;
   const res = (Q.get('res') || '').split('x');
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  G.W = res.length === 2 ? +res[0] : Math.round(innerWidth * dpr);
-  G.H = res.length === 2 ? +res[1] : Math.round(innerHeight * dpr);
-  G.W = clamp(G.W & ~1, 320, 5120); G.H = clamp(G.H & ~1, 180, 2880);
+  if (res.length === 2) { G.W = clamp(+res[0] & ~1, 320, 5120); G.H = clamp(+res[1] & ~1, 180, 2880); }
+  else { const s = screenSize(); G.W = s[0]; G.H = s[1]; }
   G.canvas.width = G.W; G.canvas.height = G.H;
   G.ctx = G.canvas.getContext('webgpu');
   G.fmt = navigator.gpu.getPreferredCanvasFormat();
   G.ctx.configure({ device: G.dev, format: G.fmt, alphaMode: 'opaque' });
+  gpuMemCheck();
+}
+
+// ---- GPU bellek güvenlik ağı ----------------------------------------------
+// Ekran boyutlu hedeflerin toplam dokusunun kaba tahmini (bayt/piksel).
+// Bütçe aşılırsa çizim çözünürlüğü adım adım düşürülür. Bu kontrol mobil
+// algısından BAĞIMSIZ çalışır: algı yanılsa bile oyun asla ~1 GB'lık hedefler
+// kurmaz (ki bunu mobil GPU kaldıramıyor ve siyah ekran kalıyordu).
+const MEM_BUDGET_MOBILE_MB = 300, MEM_BUDGET_HARD_MB = 500, MEM_MAX_LONG = 2600;
+function gpuMemEstimate(W, H) {
+  // Ekran boyutlu hedefler (21_post.js + 20_renderer.js), piksel başına ~69 B:
+  // gA 4 + gB 8 + gC 4 + gV 4 + depth 4 + hdr 8 + hist×2 16 + vel 4 + mb 8 + yarım 6.
+  const perPx = 69;
+  // Sabit dokular (mobilde ölçüldü ~222 MB): gölge 1024²×3 + statik 2048², gökyüzü
+  // 2048×512, ortam 256²×6, arazi/zona, pano atlası 4096×2048, çim atlası 512²×48.
+  const fixed = G.mobile ? 222 : 400;
+  return W * H * perPx / 1048576 + fixed;
+}
+function gpuMemCheck() {
+  const budget = G.mobile ? MEM_BUDGET_MOBILE_MB : MEM_BUDGET_HARD_MB;
+  const maxLong = G.mobile ? Math.round(MOBILE_MAX_LONG * (G.resScale || 1)) : MEM_MAX_LONG;
+  // uzun kenar sınırı (yön ne olursa olsun)
+  const long = Math.max(G.W, G.H);
+  if (long > maxLong) { const k = maxLong / long; G.W = Math.max(320, (G.W * k) & ~1); G.H = Math.max(180, (G.H * k) & ~1); }
+  G.memMB = Math.round(gpuMemEstimate(G.W, G.H));
+  while (G.memMB > budget && G.W > 800) { G.W = (G.W * 0.85) & ~1; G.H = (G.H * 0.85) & ~1; G.memMB = Math.round(gpuMemEstimate(G.W, G.H)); }
+  if (G.canvas) { G.canvas.width = G.W; G.canvas.height = G.H; }
+  console.info('[gpu] çizim ' + G.W + '×' + G.H + ' · tahmini GPU belleği ~' + G.memMB + ' MB' + (G.mobile ? ' (mobil)' : ''));
+}
+
+// Cihaz kaybı: bir kez düşük çözünürlükle yeniden başlat, sonra mesaj göster.
+function gpuLost(info) {
+  const why = (info && info.reason) || 'unknown', msg = (info && info.message) || '';
+  console.error('[gpu] cihaz düştü: ' + why + ' ' + msg);
+  G.lastErr = 'GPU cihazı düştü (' + why + ')';
+  if (GAME.lostHandled) return;
+  GAME.lostHandled = true;
+  try {
+    // Bir sonraki açılışta daha düşük çözünürlükle başla: uyarlanabilir
+    // ölçek kaydedilir, cihaz kaybının tekrarlanması engellenir.
+    if (G.mobile) resScaleSet(Math.max(0.5, (G.resScale || 1) * 0.7));
+    if (GAME.ready && !GAME.relaunched) { GAME.relaunched = true; location.replace(withParam('res', '960x432')); return; }
+  } catch (e) { /* yok say */ }
+  const el = document.getElementById('msg');
+  if (el) { el.textContent = 'Grafik kartı oyunu durdurdu.\nSayfayı yenileyin; sürerse "res=960x432" adresiyle açın.'; el.style.whiteSpace = 'pre-wrap'; }
+}
+function withParam(k, v) {
+  const q = new URLSearchParams(location.search); q.set(k, v); return location.pathname + '?' + q.toString() + location.hash;
 }
 
 const TU = { RT: 0x10, TB: 0x04, CS: 0x01, CD: 0x02, ST: 0x08 };
@@ -3709,7 +3823,10 @@ function worldMapBuild() {
 
 // ---- 20_renderer.js
 // Núcleo do renderizador diferido: recursos, uniformes de quadro, famílias de material e o grafo de passes.
-const SHADOW_RES = 2048, SHADOW_S_RES = 4096, ENV_RES = 512, ENV_MIPS = 7, SKY_W = 4096, SKY_H = 1024, VOL_DIST = 220;
+// Gölge/gökyüzü/ortam hedefleri. Mobilde küçültülür: eskiden gölge 4096² +
+// 3 × 2048², gökyüzü 4096×1024 ve ortam 512²×6 idi.
+const MOBF = (typeof G !== 'undefined' && G.mobile) ? 0.5 : 1;
+const SHADOW_RES = Math.round(2048 * MOBF), SHADOW_S_RES = Math.round(4096 * MOBF), ENV_RES = Math.round(512 * MOBF), ENV_MIPS = MOBF < 1 ? 6 : 7, SKY_W = Math.round(4096 * MOBF), SKY_H = Math.round(1024 * MOBF), VOL_DIST = 220;
 const SKY_EL0 = -0.14, SKY_ELR = PI / 2 + 0.14;
 const SH_DEFS = { SHADOW_RES: SHADOW_RES + '.0', ENV_MIPS: ENV_MIPS + '.0', ENV_MIP_K: (ENV_RES * 2 / (PI * 1.5)).toFixed(2), VOL_DIST: VOL_DIST + '.0', SKY_EL0: SKY_EL0.toFixed(5), SKY_ELR: SKY_ELR.toFixed(5) };
 // A altura do terreno usa rgba16float (filtrável em qualquer GPU), então não há
@@ -3775,6 +3892,10 @@ function mkPost(name, defs, targets, extra) {
 const bgOf = (pipe, g, res) => G.dev.createBindGroup({ layout: pipe.bgls[g], entries: res.map((r, i) => ({ binding: i, resource: r instanceof GPUBuffer ? { buffer: r } : r })) });
 
 const R = {
+  // gen: hedeflerin nesli. Pencerede yeniden boyutlandırmada dokular yeniden
+  // kurulur; bunlara bağlı SAKLANAN bind group'lar bu sayaçla geçersiz olur
+  // (bkz. fwdBindGroupStale). Yoksa yok edilmiş dokular kullanılıp ekran siyah kalıyordu.
+  gen: 0,
   drawables: [], transparents: [], families: {}, frameIdx: 0, ready: false,
   objData: new Float32Array(64 * 64), objCount: 1, passData: new Float32Array(16 * 64),
   ctx: { kind: 0, planes: new Float32Array(24), nPlanes: 4, cx: 0, cy: 0, cz: 0, cascade: 0, lod: 1 },
@@ -3786,6 +3907,10 @@ const R = {
   wind: new Float32Array([0.8, 0.6, 1.0]),   // direção (x,z) e força do vento; F.wind.w = tempo, F.misc.x = dt
   fog: new Float32Array([0.0008, 1 / 55, 0, 0.05]), fogCol: new Float32Array([0, 0, 0, 1.0]),
   exposure: 1, debug: 0, noJitter: false, timing: null, pending: [],
+  // uyarlanabilir performans kolları (58_perf_auto.js)
+  noMotionBlur: false,   // hareket bulanıklığı geçişini atla (en pahalı tam ekran işi)
+  cubeEveryN: 1,         // küp haritanın kaç karede bir güncelleneceği
+  shadowCascades: 3      // çizilen gölge katmanı sayısı (3 → 2)
 };
 
 // Slots de uniforme de objeto (256 bytes cada: model, prevModel, 4 vec4 de parâmetros). Slot 0 = identidade.
@@ -3868,6 +3993,10 @@ function rendererInit() {
   R.frameBuf = mkBuf(FR.size, BU.U); R.objBuf = mkBuf(64 * 256, BU.U); R.passBuf = mkBuf(16 * 256, BU.U);
   // alvos
   const T = R.tex = {};
+  // Hareket bulanıklığı telefonlarda baştan kapalı: kullanılmayan hedefler
+  // (T.vel, T.mb, T.tile ≈ 3 × tam ekran RGBA16F = ~30 MB) hiç kurulmaz.
+  // Kare döngüsü R.mbOn'a bakar (21_post.js).
+  R.mbOn = G.mobile ? false : true;
   T.gA = mkTex(W, H, 'rgba8unorm-srgb'); T.gB = mkTex(W, H, 'rgba16float'); T.gC = mkTex(W, H, 'rgba8unorm'); T.gV = mkTex(W, H, 'rg16float'); T.depth = mkTex(W, H, 'depth32float');
   T.hdr = mkTex(W, H, 'rgba16float'); T.hist = [mkTex(W, H, 'rgba16float'), mkTex(W, H, 'rgba16float')]; T.vel = mkTex(W, H, 'rg16float');
   T.mb = mkTex(W, H, 'rgba16float');
@@ -3880,7 +4009,8 @@ function rendererInit() {
   T.noise = mkTex(512, 512, 'rgba8unorm', TU.RT | TU.TB, { mipLevelCount: 10 });
   T.noise3 = dev.createTexture({ size: [64, 64, 64], dimension: '3d', format: 'rgba8unorm', usage: TU.RT | TU.TB });
   const V = R.view = {};
-  for (const k of ['gA', 'gB', 'gC', 'gV', 'depth', 'hdr', 'vel', 'mb', 'shadowS', 'sky', 'noise', 'envDepth']) V[k] = T[k].createView();
+  for (const k of ['gA', 'gB', 'gC', 'gV', 'depth', 'hdr', 'shadowS', 'sky', 'noise', 'envDepth']) V[k] = T[k].createView();
+  if (R.mbOn) { V.vel = T.vel.createView(); V.mb = T.mb.createView(); }
   V.hist = T.hist.map(t => t.createView()); V.half = T.half.map(t => t.createView());
   V.shadow = T.shadow.createView({ dimension: '2d-array' }); V.shadowL = [0, 1, 2].map(i => T.shadow.createView({ dimension: '2d', baseArrayLayer: i, arrayLayerCount: 1 }));
   V.env = T.env.createView({ dimension: 'cube' }); V.noise3 = T.noise3.createView({ dimension: '3d' });
@@ -3911,15 +4041,59 @@ WGSL.__probe = '#include common\n#include gbuf\n#include mesh_vert\n#ifdef PASS_
 // Yön (yatay/dikey) değişince çizim hedeflerini yeni boyuta göre yeniden kur.
 // Hedef dokular çözünürlüğü baştan alır; G.W/G.H de güncellenmelidir (kamera
 // en-boy oranı ve tam ekran üçgeni bunları okur), yoksa görüntü gerilir.
+// MOBİL: hedefler eskiden ekran çözünürlüğündeydi (4680×2160 → ~1 GB GPU
+// belleği) ve telefon hiç açılmıyordu. Artık boyut screenSize() +
+// gpuMemCheck() ile sınırlanır; gölge/gökyüzü/ortam dokuları da MOBF ile küçük.
+//
+// ÖNEMLİ: dokular SİLİNMEDEN önce GPU'nun kuyruğu boşaltılır. Yoksa o an
+// gönderilmiş bir kare hâlâ eski dokulara yazmaya çalışıyor ve sürücü
+// "Destroyed texture ... used in a submit" hatası veriyor; kare hiç
+// çizilmiyor ve ekran SİYAH kalıyordu (dikey/yatay dönüşte olan buydu).
+// onSubmittedWorkDone() bir sonraki microtask'ta çözülür: bu yüzden yeniden
+// kurma geri çağrısıyla yapılır, kare döngüsü de bu arada bekler.
 function rendererResize(W, H) {
+  if (!G.dev) return false;
+  if (!(W > 0 && H > 0)) { W = G.W; H = G.H; }
+  if (!W || !H) { const s = screenSize(); W = s[0]; H = s[1]; }
   W = W & ~1; H = H & ~1;
-  if (!G.dev || W === G.W && H === G.H && R.tex) return false;
+  if (W === G.W && H === G.H && R.tex) return false;
+  // Aynı anda iki yeniden kurulum olmasın: yön değişimi art arda iki kez
+  // tetiklenebiliyor (resize + orientationchange). İkinci çağrı birinciyi
+  // beklerse eski/yeni dokular birbirine karışmaz.
+  if (R.resizing) { R.pendingResize = [W, H]; return false; }
   G.W = W; G.H = H;
+  gpuMemCheck();                              // bütçe aşılırsa G.W/G.H'yü düşürür
+  W = G.W; H = G.H;
+  R.resizing = true;                          // kare döngüsü bu sırada çizmesin
   if (G.canvas) { G.canvas.width = W; G.canvas.height = H; }
-  // Eski hedefleri bırak (GB kazanımı), sonra yeniden kur
-  try { for (const k in R.tex) { const t = R.tex[k]; if (Array.isArray(t)) t.forEach(x => x && x.destroy && x.destroy()); else if (t && t.destroy) t.destroy(); } } catch (e) { /* yok say */ }
-  rendererInit();
-  R.cam.first = true;
+  // Eski dokuları SAKLA ve R.tex'i HEMEN bırak: kare döngüsü "R.tex var mı"
+  // diye bakıp çizmemezlik etsin. Yoksa silinmiş dokularla her kare gönderiliyor
+  // ve sürücü "Destroyed texture ... used in a submit" hatasını tekrar tekrar
+  // veriyordu (ekran siyah kalıyordu).
+  const old = R.tex;
+  R.tex = null;
+  const done = G.dev.queue.onSubmittedWorkDone ? G.dev.queue.onSubmittedWorkDone() : Promise.resolve();
+  const rebuild = () => {
+    try {
+      // Canvas boyutu değiştiği için WebGPU bağlamını YENİDEN YAPILANDIR.
+      // Bu, uçuşta kare yokken yapılmalı: eski yüzey (ör. 738×1600) ile yeni
+      // canvas (1600×738) uyuşmazsa kareler görünmez ve ekran SİYAH kalır —
+      // dikey→yatay dönüşte kullanıcının gördüğü buydu.
+      if (G.ctx) { try { G.ctx.configure({ device: G.dev, format: G.fmt, alphaMode: 'opaque' }); } catch (e) { console.warn('[resize] bağlam:', e); } }
+      // Eski hedefleri bırak (GB kazanımı), sonra yeniden kur
+      try { for (const k in old) { const t = old[k]; if (Array.isArray(t)) t.forEach(x => x && x.destroy && x.destroy()); else if (t && t.destroy) t.destroy(); } } catch (e) { /* yok say */ }
+      rendererInit();                 // R.tex'i yeniden doldurur
+      R.gen = (R.gen || 0) + 1;       // saklanan bind group'ları geçersiz kıl
+      R.cam.first = true;
+    } catch (e) { console.warn('[resize] yeniden kurma:', e); }
+    finally {
+      R.resizing = false;
+      // Bekleyen bir boyut isteği varsa şimdi uygula (serileştirme).
+      const p = R.pendingResize; R.pendingResize = null;
+      if (p) { try { rendererResize(p[0], p[1]); } catch (e) { /* yok say */ } }
+    }
+  };
+  done.then(rebuild, rebuild);                // hata olsa da yeniden kur
   return true;
 }
 
@@ -4017,7 +4191,13 @@ function staticShadowSetup() {
 }
 function setPass(slot, vp, pos) { const p = R.passData, o = slot * 64; p.set(vp, o); p[o + 16] = pos[0]; p[o + 17] = pos[1]; p[o + 18] = pos[2]; p[o + 19] = slot; }
 function ctxFrom(kind, vp, nPlanes, pos, cascade) { const c = R.ctx; c.kind = kind; frustumPlanes(c.planes, vp, nPlanes); c.nPlanes = nPlanes; c.cx = pos[0]; c.cy = pos[1]; c.cz = pos[2]; c.cascade = cascade; return c; }
-function drawAll(pass, ctx, slot, bg1) { drawRange(pass, ctx, slot, bg1, 0, R.drawables.length); }
+function drawAll(pass, ctx, slot, bg1) {
+  // Statik dünya gölgesinde (ctx.cascade === 3) yalnızca worldOnly nesneler
+  // çizilir: araba/parçacık gibi oynayan nesneler oraya girmez.
+  const d = R.drawables;
+  if (ctx.kind === KIND.SHADOW && ctx.cascade === 3) { for (let i = 0; i < d.length; i++) if (d[i].worldOnly) d[i].draw(pass, ctx); }
+  else drawRange(pass, ctx, slot, bg1, 0, d.length);
+}
 function drawRange(pass, ctx, slot, bg1, i0, i1) {
   pass.setBindGroup(0, R.globBG); R.dyn1[0] = slot * 256; pass.setBindGroup(1, bg1, R.dyn1, 0, 1); R.dyn2[0] = 0; pass.setBindGroup(2, R.objBG, R.dyn2, 0, 1);
   const d = R.drawables; for (let i = i0; i < i1; i++) d[i].draw(pass, ctx);
@@ -4048,20 +4228,35 @@ function renderFrame() {
   for (let i = 0; i < 3; i++) setPass(1 + i, R.casc.vp[i], c.pos);
   // uma face do cubemap de ambiente por quadro (ciclo completo a cada 6 quadros)
   // duas faces do cubemap de ambiente por quadro, cada uma na posição atual do carro (ciclo completo a cada 3 quadros)
-  const face = (R.frameIdx * 2) % 6; R.cube.cur.set(R.cube.pos);
-  for (let k = 0; k < 2; k++) { cubeSetup(face + k); setPass(5 + face + k, R.cube.vp, R.cube.cur); m4inv(R.cube.view, R.cube.vp); R.passData.set(R.cube.view, (11 + k) * 64); }
+  // UYARLANABİLİR: telefonda çok yavaşsa yansıma haritası her N karede bir güncellenir
+  // (R.cubeEveryN); o aralıkta eski yansıma kullanılır, ekran kararmaz.
+  const cubeOn = (R.cubeEveryN <= 1) || (R.frameIdx % R.cubeEveryN === 0);
+  const face = cubeOn ? (R.frameIdx * 2) % 6 : R.cubeFace || 0;
+  if (cubeOn) R.cubeFace = face;
+  R.cube.cur.set(R.cube.pos);
+  if (cubeOn) for (let k = 0; k < 2; k++) { cubeSetup(face + k); setPass(5 + face + k, R.cube.vp, R.cube.cur); m4inv(R.cube.view, R.cube.vp); R.passData.set(R.cube.view, (11 + k) * 64); }
   dev.queue.writeBuffer(R.frameBuf, 0, FR.data);
   dev.queue.writeBuffer(R.passBuf, 0, R.passData, 0, 13 * 64);
   dev.queue.writeBuffer(R.objBuf, 0, R.objData, 0, R.objCount * 64);
   for (let i = 0; i < R.preFrame.length; i++) R.preFrame[i]();
   const enc = apiEncoder();
   // sombras
-  for (let i = 0; i < 3; i++) {
+  const ncasc = Math.max(1, Math.min(3, R.shadowCascades | 0));
+  for (let i = 0; i < ncasc; i++) {
     const p = apiPass(enc, D.shadow[i]);
     drawAll(p, ctxFrom(KIND.SHADOW, R.casc.vp[i], 6, c.pos, i), 1 + i, R.passBG); p.end();
   }
+  // Katman sayısı azaltıldıysa (telefonda ölçüm sonrası R.shadowCascades = 2)
+  // çizilmeyen katman eski karede kalır. Katmanlar azaltılırken katman bir kez
+  // boş geçişle temizlenir (loadOp = clear); böylece donmuş gölge bölgeleri
+  // "full"/"undefined" içerik arasında kalıp titremez.
+  if (ncasc < 3) {
+    const from = (R.shadowClearFrom === undefined) ? ncasc : R.shadowClearFrom;
+    R.shadowClearFrom = ncasc;
+    for (let i = ncasc; i < from; i++) { const p = apiPass(enc, D.shadow[i]); p.end(); }
+  }
   // faces do cubemap de ambiente
-  for (let k = 0; k < 2; k++) {
+  if (cubeOn) for (let k = 0; k < 2; k++) {
     const f = face + k; cubeSetup(f);
     const p = apiPass(enc, D.cube[f]);
     cubeSky(p, 11 + k);
@@ -4105,27 +4300,42 @@ function postInit() {
   D.blurV = mkPassDesc(1, null, false, 'blurV'); D.blurV.colorAttachments[0].view = V.half[2];
   P.light = mkPost('light', { SSR: '' }, [HDR]);
   P.lightBG = [0, 1].map(i => bgOf(P.light, 0, [R.frameBuf, V.gA, V.gB, V.gC, V.depth, V.shadow, V.shadowS, R.sCmp, V.half[2], V.env, V.sky, R.sClamp, R.sSky, V.hist[i]]));
-  P.taa = mkPost('taa', {}, [HDR, 'rg16float']);
+  P.taa = mkPost('taa', {}, R.mbOn ? [HDR, 'rg16float'] : [HDR]);
   P.taaBG = [0, 1].map(i => bgOf(P.taa, 0, [R.frameBuf, V.hdr, V.hist[i], V.gV, V.depth, R.sClamp]));
-  D.taa = [0, 1].map(i => { const d = mkPassDesc(2, null, false, 'taa'); d.colorAttachments[0].view = V.hist[i]; d.colorAttachments[1].view = V.vel; return d; });
+  D.taa = [0, 1].map(i => { const d = mkPassDesc(2, null, false, 'taa'); d.colorAttachments[0].view = V.hist[i]; if (R.mbOn) d.colorAttachments[1].view = V.vel; else { d.colorAttachments.pop(); } return d; });
   // desfoque de movimento
+  // MOBİL: hareket bulanıklığı kapalı başlar (telefonda en pahalı tek tam ekran
+  // geçişi) → çini (tile) hedefleri ve boru hatları da hiç kurulmaz.
   const tw = Math.ceil(W / MB_TILE), th = Math.ceil(H / MB_TILE);
-  T.tile = [mkTex(tw, th, 'rg16float'), mkTex(tw, th, 'rg16float')]; V.tile = T.tile.map(t => t.createView());
-  P.mbTile = mkPost('mbtile', { TILE: MB_TILE }, ['rg16float']); P.mbNeigh = mkPost('mbtile', { NEIGH: '', TILE: MB_TILE }, ['rg16float']);
-  P.mbTileBG = bgOf(P.mbTile, 0, [V.vel]); P.mbNeighBG = bgOf(P.mbNeigh, 0, [V.tile[0]]);
-  D.mbTile = mkPassDesc(1, null, false, 'mbTile'); D.mbTile.colorAttachments[0].view = V.tile[0];
-  D.mbNeigh = mkPassDesc(1, null, false, 'mbNeigh'); D.mbNeigh.colorAttachments[0].view = V.tile[1];
-  P.mb = mkPost('mblur', { TILE: MB_TILE }, [HDR]);
-  P.mbBG = [0, 1].map(i => bgOf(P.mb, 0, [R.frameBuf, V.hist[i], V.vel, V.tile[1], V.depth, R.sClamp]));
-  D.mb = mkPassDesc(1, null, false, 'mblur'); D.mb.colorAttachments[0].view = V.mb;
+  if (R.mbOn) {
+    T.tile = [mkTex(tw, th, 'rg16float'), mkTex(tw, th, 'rg16float')]; V.tile = T.tile.map(t => t.createView());
+    P.mbTile = mkPost('mbtile', { TILE: MB_TILE }, ['rg16float']); P.mbNeigh = mkPost('mbtile', { NEIGH: '', TILE: MB_TILE }, ['rg16float']);
+    P.mbTileBG = bgOf(P.mbTile, 0, [V.vel]); P.mbNeighBG = bgOf(P.mbNeigh, 0, [V.tile[0]]);
+    D.mbTile = mkPassDesc(1, null, false, 'mbTile'); D.mbTile.colorAttachments[0].view = V.tile[0];
+    D.mbNeigh = mkPassDesc(1, null, false, 'mbNeigh'); D.mbNeigh.colorAttachments[0].view = V.tile[1];
+    P.mb = mkPost('mblur', { TILE: MB_TILE }, [HDR]);
+    P.mbBG = [0, 1].map(i => bgOf(P.mb, 0, [R.frameBuf, V.hist[i], V.vel, V.tile[1], V.depth, R.sClamp]));
+    D.mb = mkPassDesc(1, null, false, 'mblur'); D.mb.colorAttachments[0].view = V.mb;
+  } else {
+    // Hareket bulanıklığı yokken: TAA çıktısı (hist) 1:1 kopya geçişine gider,
+    // bloom ve final oradan devam eder. Aradaki 24 örnekli bulanıklık geçişi
+    // ile iki çini geçişi atlanır (telefonda büyük kazanç).
+    T.pass = mkTex(W, H, HDR); V.pass = T.pass.createView();
+    P.mb = mkPost('blit', {}, [HDR]);
+    P.mbBG = [0, 1].map(i => bgOf(P.mb, 0, [V.hist[i], R.sClamp]));
+    D.mb = mkPassDesc(1, null, false, 'pass'); D.mb.colorAttachments[0].view = V.pass;
+  }
   // bloom
   T.bl = []; V.bl = []; D.blDown = []; D.blUp = []; P.blDownBG = []; P.blUpBG = [];
   for (let i = 0; i < BLOOM_N; i++) { T.bl[i] = mkTex(Math.max(2, W >> (i + 1)), Math.max(2, H >> (i + 1)), HDR); V.bl[i] = T.bl[i].createView(); }
   P.blFirst = mkPost('bloom', { FIRST: '' }, [HDR]); P.blDown = mkPost('bloom', {}, [HDR]);
   P.blUp = mkPost('bloom', { UP: '', UPW: '1.0' }, [{ format: HDR, blend: { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } } }]);
+  // ilk bloom küçültmesi bulanıklık çıktısından (V.mb) ya da kopyadan (V.pass)
+  // okur.
+  const mbSrc = R.mbOn ? V.mb : V.pass;
   for (let i = 0; i < BLOOM_N; i++) {
     const d = mkPassDesc(1, null, false, 'blDown' + i); d.colorAttachments[0].view = V.bl[i]; D.blDown.push(d);
-    P.blDownBG.push(bgOf(i ? P.blDown : P.blFirst, 0, [i ? V.bl[i - 1] : V.mb, R.sClamp]));
+    P.blDownBG.push(bgOf(i ? P.blDown : P.blFirst, 0, [i ? V.bl[i - 1] : mbSrc, R.sClamp]));
   }
   for (let i = BLOOM_N - 2; i >= 0; i--) {
     const d = mkPassDesc(1, null, false, 'blUp' + i); d.colorAttachments[0].view = V.bl[i]; d.colorAttachments[0].loadOp = 'load'; D.blUp.push(d);
@@ -4137,7 +4347,8 @@ function postInit() {
   P.expoBG = [0, 1].map(i => bgOf(P.expo, 0, [R.frameBuf, V.bl[BLOOM_N - 1], V.ex[i], R.sClamp]));
   D.expo = [0, 1].map(i => { const d = mkPassDesc(1, null, false, 'expo'); d.colorAttachments[0].view = V.ex[i]; return d; });
   P.final = mkPost('final', {}, [G.fmt]);
-  P.finalBG = [0, 1].map(i => bgOf(P.final, 0, [R.frameBuf, V.mb, V.bl[0], V.ex[i], R.sClamp, V.depth]));
+  // Hareket bulanıklığı kapalıyken final geçişi kopya çıktıyı (V.pass) okur.
+  P.finalBG = [0, 1].map(i => bgOf(P.final, 0, [R.frameBuf, R.mbOn ? V.mb : V.pass, V.bl[0], V.ex[i], R.sClamp, V.depth]));
   D.final = mkPassDesc(1, null, false, 'final');
   // cubemap: céu + pré-filtro
   P.cubeSky = mkPost('cubesky', {}, [HDR], { depthStencil: { format: 'depth32float', depthWriteEnabled: false, depthCompare: 'always' } });
@@ -4181,7 +4392,11 @@ function postFrame(enc) {
     for (let i = 0; i < R.transparents.length; i++) R.transparents[i].draw(p); p.end();
   }
   { const p = apiPass(enc, D.taa[cur]); p.setPipeline(P.taa); p.setBindGroup(0, P.taaBG[prev]); p.draw(3); p.end(); }
-  fsPass(enc, D.mbTile, P.mbTile, P.mbTileBG); fsPass(enc, D.mbNeigh, P.mbNeigh, P.mbNeighBG);
+  // Hareket bulanıklığı telefonda KAPALI başlar (R.mbOn): postInit bu durumda
+  // doğrudan 'blit' boru hattını ve D.mb'yi kurdu; burada yalnızca histogram →
+  // kopya → bloom zinciri çalışır. Açıksa iki çini geçişi + 24 örnekli
+  // bulanıklık geçişi de çalışır.
+  if (R.mbOn) { fsPass(enc, D.mbTile, P.mbTile, P.mbTileBG); fsPass(enc, D.mbNeigh, P.mbNeigh, P.mbNeighBG); }
   fsPass(enc, D.mb, P.mb, P.mbBG[cur]);
   for (let i = 0; i < BLOOM_N; i++) fsPass(enc, D.blDown[i], i ? P.blDown : P.blFirst, P.blDownBG[i]);
   for (let i = 0; i < BLOOM_N - 1; i++) fsPass(enc, D.blUp[i], P.blUp, P.blUpBG[i]);
@@ -4271,11 +4486,20 @@ function mkFwdFamily(name, def) {
   }).then(p => { fam.pipe = p; }));
   return fam;
 }
-// bind group de iluminação (grupo 3) compartilhado pelas famílias diretas
+// bind group de iluminação (grupo 3) compartilhado pelas famílias diretas.
+// DİKKAT: bu bind group, o anki hedeflerin GÖRÜNÜMLERİNE (env, shadow, depth)
+// bağlıdır. Pencere yeniden boyutlandırılıp hedefler yeniden kurulduğunda bu
+// görünümler yok edilir; eski bind group'u kullanmak sürücüde
+// "Destroyed texture ... used in a submit" hatası verir ve ekran SİYAH kalır.
+// Bu yüzden her bind group R.gen (nesil) numarasıyla birlikte saklanır.
 function fwdBindGroup(fam) {
   const V = R.view;
-  return G.dev.createBindGroup({ layout: fam.bgls[3], entries: [{ binding: 0, resource: V.env }, { binding: 1, resource: V.shadow }, { binding: 2, resource: V.shadowS }, { binding: 3, resource: R.sCmp }, { binding: 4, resource: V.depth }] });
+  const bg = G.dev.createBindGroup({ layout: fam.bgls[3], entries: [{ binding: 0, resource: V.env }, { binding: 1, resource: V.shadow }, { binding: 2, resource: V.shadowS }, { binding: 3, resource: R.sCmp }, { binding: 4, resource: V.depth }] });
+  bg.gen = R.gen || 0;
+  return bg;
 }
+// Saklanan bind group hâlâ geçerli mi? (hedefler yeniden kurulduysa hayır)
+function fwdBindGroupStale(bg) { return !bg || bg.gen !== (R.gen || 0); }
 // Conjunto de vidros: cada malha é desenhada duas vezes (multiplica, depois soma).
 class GlassSet {
   constructor() {
@@ -4286,11 +4510,13 @@ class GlassSet {
   add_(mesh, slot) { this.items.push({ vb: mesh.vb, ib: mesh.ib, count: mesh.count, slot: slot || 0 }); }
   draw(pass) {
     if (!this.mul.pipe || !this.add.pipe) return;
-    if (!this.bg) this.bg = fwdBindGroup(this.mul);
+    if (fwdBindGroupStale(this.bg)) this.bg = fwdBindGroup(this.mul);
     pass.setBindGroup(3, this.bg);
+    // Çok oyunculu: partnerin camları kendi gövde nesnesini burada bildirir.
+    const slotOverride = this.bind ? (this.bind() | 0) : -1;
     for (let k = 0; k < 2; k++) {
       pass.setPipeline(k ? this.add.pipe : this.mul.pipe);
-      for (let i = 0; i < this.items.length; i++) { const it = this.items[i]; R.dyn2[0] = it.slot * 256; pass.setBindGroup(2, R.objBG, R.dyn2, 0, 1); pass.setVertexBuffer(0, it.vb); pass.setIndexBuffer(it.ib, 'uint32'); pass.drawIndexed(it.count); }
+      for (let i = 0; i < this.items.length; i++) { const it = this.items[i]; R.dyn2[0] = (slotOverride >= 0 ? slotOverride : it.slot) * 256; pass.setBindGroup(2, R.objBG, R.dyn2, 0, 1); pass.setVertexBuffer(0, it.vb); pass.setIndexBuffer(it.ib, 'uint32'); pass.drawIndexed(it.count); }
     }
   }
 }
@@ -5017,12 +5243,27 @@ const CAR = {
     }
     if (typeof carBuildSteer === 'function') { const s = new MeshBuilder(1 << 12); carBuildSteer(s); CAR.tris += s.ni / 3; set.add(s.upload(), CAR.slotSteer, 3); }
     const tex = typeof carAtlas === 'function' ? carAtlas() : mkTex(4, 4, 'rgba8unorm-srgb');
-    // desenhável: liga o atlas (grupo 3) e não entra no mapa de sombras estático do mundo
-    R.drawables.push({ draw(pass, ctx) {
+    // desenhável: liga o atlas (grupo 3) ve não entra no mapa de sombras estático do mundo
+    const drawable = { draw(pass, ctx) {
+      // Çok oyunculu partner arabası (55_multiplayer.js) ÇOK ÖNEMLİ:
+      // partner arabası için kendi nesneleri kullanılır. Bu yüzden burada
+      // partnerin meshleri CAR.set'ten ÇIKARILIR. Eski sürüm aynı MeshSet'i
+      // iki kez tarıyordu: aynı meshler kendi arabanın matrisiyle ikinci kez
+      // (üst üste) çiziliyor, gölge geçişinde ise bind grubu kurulmadan çizim
+      // yapıldığı için "No bind group set at group index 3" hatası alınıyor ve
+      // KOMUT TAMPONU GEÇERSİZ oluyordu → ekranda eski kare donuyordu.
       if (ctx.kind === KIND.SHADOW && ctx.cascade === 3) return;
       if (!CAR.atlasBG) { if (!fam.bgl3) return; CAR.atlasBG = G.dev.createBindGroup({ layout: fam.bgl3, entries: [{ binding: 0, resource: tex.createView() }] }); }
+      glass.bind = null;                    // vidros: sempre o carro local (a cópia do parceiro define o próprio)
       pass.setBindGroup(3, CAR.atlasBG); set.draw(pass, ctx);
-    } });
+    } };
+    // Origem do mundo: o mapa de sombras ESTÁTICO (renderStaticShadow) percorre
+    // R.drawables. Mundo çizilsin, ama bu (araba) çizilmesin: o mapa estático
+    // kameranın ilk durumuna göre çizilir ve araba sonradan taşınır; arabayı
+    // oraya çizmek onu yanlış yerde donmuş gölgeyle bırakıyordu. Ayrıca atlas
+    // bağı olmadan çizim, bazı GPU'larda tüm komut tamponunu geçersiz kılıyordu.
+    drawable.worldOnly = true;
+    R.drawables.push(drawable);
     R.transparents.push(glass);
     m4ident(CAR._t); CAR.place(CAR._t, CAR._z4, CAR._z4); CAR.place(CAR._t, CAR._z4, CAR._z4);
   },
@@ -6124,7 +6365,7 @@ function propsBuild() {
     WORLD.stats.tris.fence = fenceMB.ni / 3;
     R.transparents.push({
       draw(pass) {
-        if (!ff.pipe) return; if (!fbg) fbg = fwdBindGroup(ff);
+        if (!ff.pipe) return; if (fwdBindGroupStale(fbg)) fbg = fwdBindGroup(ff);
         const ctx = R.ctx; let set = false;     // R.ctx ainda guarda o tronco de visão do passe principal
         for (let i = 0; i < fenceR.length; i++) {
           const r = fenceR[i]; if (!(SQ[0] = r.x, SQ[1] = r.y, SQ[2] = r.z, SQ[3] = r.rad, sphereQ(ctx.planes, ctx.nPlanes))) continue;
@@ -6695,8 +6936,13 @@ function vegPlace() {
 }
 
 function vegBakeImpostors(cpu) {
-  const dev = G.dev, S = 512, layers = VEG_NT * 8, V = VEG;
-  const mips = 8;
+  // İmpostor atlası: 2 × 512² × 48 katman + mip'ler ~128 MB GPU belleği.
+  // Telefonda bu, siyah ekran sınırına en çok yaklaştıran doku. Mobilde
+  // 256² ve daha az mip ile aynı görünüm korunur (ekranda her ağaç birkaç
+  // düzine piksel), bellek 1/4'e iner.
+  const MOBETA = typeof G !== 'undefined' && G.mobile;
+  const dev = G.dev, S = MOBETA ? 256 : 512, layers = VEG_NT * 8, V = VEG;
+  const mips = MOBETA ? 7 : 8;
   V.texA = dev.createTexture({ size: [S, S, layers], format: 'rgba8unorm-srgb', usage: TU.RT | TU.TB, mipLevelCount: mips });
   V.texN = dev.createTexture({ size: [S, S, layers], format: 'rgba8unorm', usage: TU.RT | TU.TB, mipLevelCount: mips });
   const msA = dev.createTexture({ size: [S, S], format: 'rgba8unorm-srgb', usage: TU.RT, sampleCount: 4 }), msN = dev.createTexture({ size: [S, S], format: 'rgba8unorm', usage: TU.RT, sampleCount: 4 });
@@ -6743,15 +6989,18 @@ const vegDrawable = {
     if (kind === KIND.GBUF) { st.meshDraws = 0; st.impDraws = 0; st.meshInst = 0; st.meshTris = 0; st.leafDraws = 0; st.leafInst = 0; st.leafTris = 0; }
     // LOD por tamanho na tela: com lente longa (câmera de TV) as distâncias de troca crescem na mesma proporção do zoom
     let zoom = Math.tan(R.cam.fovy * 0.5) * 2; zoom = zoom < 0.3 ? 0.3 : zoom > 1.25 ? 1.25 : zoom; V.zoom = zoom;
+    // MOBİL: ağaç örneklerinin çizim yarıçapı küçülür (grafiksel olarak fark
+    // edilmez, çok sayıda çizim çağrısı ve köşe gölgelendiricisi işi azalır).
+    const MR = V.mobileS ? V.mobileS : 1;
     // --- malhas (perto) ---
     const pm = V.famTree.pipe[kind];
     if (pm && V.onMesh && (kind === KIND.GBUF || (shadow && ctx.cascade < 2))) {
       pass.setPipeline(pm); pass.setBindGroup(3, V.bgTree); pass.setVertexBuffer(1, V.instBuf);
       const ccx = Math.floor((camx - V.x0) / CELL), ccz = Math.floor((camz - V.z0) / CELL);
       // nas sombras só importam os lançadores perto da cascata: alcance menor (menos vértices processados)
-      let rng = (shadow ? 96 : 114) / zoom; if (rng > 620) rng = 620; const rc = ((rng / CELL) | 0) + 1, rng2 = rng * rng;
+      let rng = (shadow ? 96 : 114) / zoom * MR; if (rng > 620) rng = 620; const rc = ((rng / CELL) | 0) + 1, rng2 = rng * rng;
       for (let a = 0; a < NA; a++) {
-        let set = false; const ur = 82 / zoom, m = V.meshes[a], ru = a >= VEG_NT ? (ur < 620 ? ur : 620) : rng, ru2 = ru * ru;
+        let set = false; const ur = 82 / zoom * MR, m = V.meshes[a], ru = a >= VEG_NT ? (ur < 620 ? ur : 620) : rng, ru2 = ru * ru;
         for (let dz = -rc; dz <= rc; dz++) for (let dx = -rc; dx <= rc; dx++) {
           const cx = ccx + dx, cz = ccz + dz; if (cx < 0 || cz < 0 || cx >= NC || cz >= NC) continue;
           const c = cz * NC + cx, cnt = V.cellCount[c * NA + a]; if (!cnt) continue;
@@ -6769,7 +7018,7 @@ const vegDrawable = {
     const pl = V.famLeaf.pipe[kind];
     if (pl && V.onMesh && V.onLeaf && kind === KIND.GBUF) {
       pass.setPipeline(pl); pass.setVertexBuffer(1, V.instBuf);
-      let rl = 62 / zoom; if (rl > 230) rl = 230; const S16 = 16, rs = ((rl / S16) | 0) + 1, scx = Math.floor((camx - V.x0) / S16), scz = Math.floor((camz - V.z0) / S16), n16 = NC * 4;
+      let rl = 62 / zoom * MR; if (rl > 230) rl = 230; const S16 = 16, rs = ((rl / S16) | 0) + 1, scx = Math.floor((camx - V.x0) / S16), scz = Math.floor((camz - V.z0) / S16), n16 = NC * 4;
       for (let a = 0; a < VEG_NT; a++) {
         const m = V.leafMeshes[a]; if (!m) continue; let set = false;
         for (let dz = -rs; dz <= rs; dz++) for (let dx = -rs; dx <= rs; dx++) {
@@ -6834,6 +7083,10 @@ queueMicrotask(() => BUILD.push(async () => {
   V.bgTree = dev.createBindGroup({ layout: V.famTree.bgl3, entries: [{ binding: 0, resource: V.leafView }, { binding: 1, resource: V.sLeaf }] });
   V.bgImp = dev.createBindGroup({ layout: V.famImp.bgl3, entries: [{ binding: 0, resource: V.viewA }, { binding: 1, resource: V.viewN }, { binding: 2, resource: V.sImp }, { binding: 3, resource: { buffer: V.dimBuf } }] });
   vegPlace();
+  // MOBİL: ağaç/çalı çizim yarıçapları %20 kısılır. Bu yalnızca GPU işini
+  // (%35 daha az örnek) azaltır; ufuktaki ağaçlar impostor olarak kalır.
+  // Tek tek yaprak çizimi mobilde kapalıdır (kendi vertex+5 doku örneği).
+  if (typeof G !== 'undefined' && G.mobile && !(typeof Q !== 'undefined' && Q.has('detay'))) { V.mobileS = 0.8; V.onLeaf = false; }
   R.drawables.push(vegDrawable); R.veg = V;
   if (typeof grassBuild === 'function') grassBuild();
 }));
@@ -6860,6 +7113,9 @@ const GRASS = {
     { cell: 0.24, bs: 40, B: 16, K: 1, q: [23, 30, 58, 74], w: 0.03, prev: 1 },
   ],
   u: new Float32Array(6 * 64), dyn: new Uint32Array(1), blades: 0, cx: new Float64Array(6), cz: new Float64Array(6),
+  // MOBİL: çim çizim menzili katsayısı (1 = tam). Yalnızca menzil kısalır;
+  // anel dizisi ve shader aynı kalır, arada boşluk oluşmaz.
+  mobileRange: (typeof G !== 'undefined' && G.mobile) ? 0.78 : 1,
 };
 function grassBuild() {
   const dev = G.dev, V = VEG;
@@ -6876,8 +7132,11 @@ function grassBuild() {
       const camx = R.cam.pos[0], camy = R.cam.pos[1], camz = R.cam.pos[2], u = GRASS.u; GRASS.blades = 0;
       // fora da área dos mapas não há grama
       if (camx < WM.x0 - 80 || camz < WM.z0 - 80 || camx > WM.x0 + WM.sx + 80 || camz > WM.z0 + WM.sz + 80) return;
-      // zoom da lente (1 = câmera de perseguição) e ponto de interesse
+      // zoom da lente (1 = câmera de perseguição) ve ponto de interesse
       let zfac = Math.tan(R.cam.fovy * 0.5) * 2; if (zfac > 1.3) zfac = 1.3;
+      // MOBİL: çim menzili %22 kısalır. Çim, ilk karelerdeki en pahalı tek
+      // sistem (blok başına yüzlerce bıçak); 60-80 m ötesi zaten tüylü doku
+      // ile örtülüyor, bu yüzden görüntüde fark edilmez.
       const f = FR.data, px = f[FO.carMat + 12], pz = f[FO.carMat + 14], ddx = px - camx, ddz = pz - camz, dcc = Math.sqrt(ddx * ddx + ddz * ddz);
       let wf = (dcc - 12) / 18; wf = wf < 0 ? 0 : wf > 1 ? 1 : wf;
       const fx = R.cam.fwd[0], fz = R.cam.fwd[2];
@@ -6899,6 +7158,8 @@ function grassBuild() {
         const g = GRASS.rings[r]; if (g.tele && zf <= 0) continue;
         const bsz = g.cell * g.bs, o = r * 64, ox = u[o + 10], oz = u[o + 11], B = g.B, per = g.bs * g.bs, nv = g.K ? 2 * g.K + 1 : 4, rad = bsz * 0.7072 + 1.2;
         const pv = g.prev, ph = pv >= 0 ? u[o + 17] * 0.8 : 0, pcx = u[o + 18], pcz = u[o + 19], qin = g.q[0], qout = g.q[3];
+        // MOBİL: menzil kısalır; TV lente aneli (r>=4) daha da dar
+        const GR = GRASS.mobileRange * (r >= 4 ? 0.5 : 1);
         GRASS.dyn[0] = r * 256; pass.setBindGroup(3, GRASS.bg, GRASS.dyn, 0, 1);
         for (let bz = 0; bz < B; bz++) {
           let run = -1;
@@ -6907,8 +7168,8 @@ function grassBuild() {
             if (bx < B) {
               const x = (ox + bx + 0.5) * bsz, z = (oz + bz + 0.5) * bsz, dx = x - camx, dz = z - camz, d = Math.sqrt(dx * dx + dz * dz);
               // bloco além do alcance (em distância efetiva), ou todo dentro da cobertura do anel anterior: não desenha
-              let ok = (d - rad) * zfac < qout;
-              if (ok && pv >= 0 && (d + rad) * zfac < qin) { const ex = x - pcx, ez = z - pcz, ax = ex < 0 ? -ex : ex, az = ez < 0 ? -ez : ez; if ((ax > az ? ax : az) + bsz * 0.5 < ph) ok = false; }
+              let ok = (d - rad) * zfac < qout * GR;
+              if (ok && pv >= 0 && (d + rad) * zfac < qin * GR) { const ex = x - pcx, ez = z - pcz, ax = ex < 0 ? -ex : ex, az = ez < 0 ? -ez : ez; if ((ax > az ? ax : az) + bsz * 0.5 < ph) ok = false; }
               // blocos fora da área dos mapas do mundo não têm grama (e hfAtQ cairia no cálculo lento do terreno)
               if (ok && x > HF.x0 + 2 && z > HF.z0 + 2 && x < HF.x0 + HF.w - 3 && z < HF.z0 + HF.h - 3) vis = (SQ[0] = x, SQ[1] = (_gq[0] = x, _gq[1] = z, hfAtQ(_gq), _gq[6]) + 0.3, SQ[2] = z, SQ[3] = rad, sphereQ(ctx.planes, ctx.nPlanes));
             }
@@ -7230,7 +7491,7 @@ function fxInit() {
     buffers: [{ arrayStride: 48, stepMode: 'instance', attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x4' }, { shaderLocation: 1, offset: 16, format: 'float32x4' }, { shaderLocation: 2, offset: 32, format: 'float32x4' }] }],
     blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'zero', dstFactor: 'one' } },
   });
-  R.transparents.push({ draw(pass) { if (!FX.pFam.pipe || !FX.pAlive) return; if (!FX.pBG) FX.pBG = fwdBindGroup(FX.pFam); pass.setPipeline(FX.pFam.pipe); pass.setBindGroup(3, FX.pBG); pass.setVertexBuffer(0, FX.pBuf); pass.draw(6, FX.pAlive); } });
+  R.transparents.push({ draw(pass) { if (!FX.pFam.pipe || !FX.pAlive) return; if (fwdBindGroupStale(FX.pBG)) FX.pBG = fwdBindGroup(FX.pFam); pass.setPipeline(FX.pFam.pipe); pass.setBindGroup(3, FX.pBG); pass.setVertexBuffer(0, FX.pBuf); pass.draw(6, FX.pAlive); } });
 }
 function fxReset() { FX.sk.fill(0); FX.skLo = 0; FX.skHi = SK_N * 30; FX.skHead = 0; FX.active.fill(0); FX.p.fill(0); FX.pAlive = 0; FX.pNext = 0; FX.seed[0] = 7; }
 // inteiro pseudoaleatório 0..65535 (inteiros pequenos não vão para a heap)
@@ -7585,13 +7846,14 @@ function perfInit() {
   PERF.raf = new Float32Array(PERF.cap); PERF.cpu = new Float32Array(PERF.cap); PERF.gpu = new Float32Array(PERF.cap); PERF.span = new Float32Array(PERF.cap);   // o tempo de quadro é gravado mesmo sem tempo de GPU
   if (!G.hasTS) return;
   const dev = G.dev, D = R.pd, list = [];
-  const add = (name, descs) => { const i = list.length; list.push(name); for (const d of descs) d.timestampWrites = { querySet: null, beginningOfPassWriteIndex: i * 2, endOfPassWriteIndex: i * 2 + 1 }; PERF._d.push(...descs); };
+  // Hareket bulanıklığı kapalıyken (mobilde varsayılan) o geçişlerin tanımları yoktur: yalnızca VAR OLAN geçişler ölçülür.
+  const add = (name, descs) => { const ds = (descs || []).filter(Boolean); if (!ds.length) return; const i = list.length; list.push(name); for (const d of ds) d.timestampWrites = { querySet: null, beginningOfPassWriteIndex: i * 2, endOfPassWriteIndex: i * 2 + 1 }; PERF._d.push(...ds); };
   PERF._d = [];
   add('shadow0', [D.shadow[0]]); add('shadow1', [D.shadow[1]]); add('shadow2', [D.shadow[2]]); add('cube', D.cube);
-  for (let m = 1; m <= ENV_MIPS; m++) add('envMip' + m, D.envMip.map(f => f[m]));
+  for (let m = 1; m <= ENV_MIPS; m++) add('envMip' + m, (D.envMip || []).map(f => f[m]));
   add('gbuf', [D.gbuf]); add('decal', [D.decal]); add('half', [D.half]); add('blurH', [D.blurH]); add('blurV', [D.blurV]); add('light', [D.light]); add('trans', [D.trans]);
   add('taa', D.taa); add('mbTile', [D.mbTile]); add('mbNeigh', [D.mbNeigh]); add('mblur', [D.mb]);
-  D.blDown.forEach((d, i) => add('blDown' + i, [d])); D.blUp.forEach((d, i) => add('blUp' + i, [d])); add('expo', D.expo); add('final', [D.final]);
+  D.blDown.forEach((d, i) => add('blDown' + i, [d])); D.blUp.forEach((d, i) => add('blUp' + i, [d])); add('expo', [D.expo]); add('final', [D.final]);
   PERF.names = list; PERF.n = list.length;
   PERF.qs = dev.createQuerySet({ type: 'timestamp', count: PERF.n * 2 });
   for (const d of PERF._d) d.timestampWrites.querySet = PERF.qs;
@@ -7998,12 +8260,17 @@ function hudStrip(cv, labels, widths, units, At, px, o) {
   return f;
 }
 function hudLayout() {
-  const H = HUD, L = H.L, dpr = devicePixelRatio || 1;
+  const H = HUD, L = H.L;
+  // hudLayout yön değişiminde ve sahne kurulurken de çağrılıyor; gösterge
+  // tuvali henüz hazır değilse (hudInit'ten önce) sessizce çıkılır: eskiden
+  // "Cannot set properties of null" hatası veriyordu.
+  if (!H.cg || !H.ct || !H.cs) return;
+  const dpr = devicePixelRatio || 1;
   // Dokunmatik/yatay telefonda gösterge paneli KÜÇÜLTÜLÜR: aksi halde (kısa
   // yükseklik × 2.26) ekranı kaplıyor ve alttaki sürüş düğmelerinin üstüne
   // biniyordu.
   const touch = (typeof MOB !== 'undefined' && MOB.touch) || (navigator.maxTouchPoints || 0) > 0;
-  const k = touch ? (innerHeight > innerWidth ? 0.085 : 0.062) : 0;
+  const k = touch ? (innerHeight > innerWidth ? 0.085 : 0.075) : 0;
   const r = Math.round(Math.min(Math.max(innerHeight * (touch ? k : 0.105), touch ? 34 : 54), touch ? 78 : 124) * dpr), W = Math.round(r * 4.5), Hh = Math.round(r * 2.26);
   const A = H.A = hudAtlas(Math.round(r * 0.33)), B = H.B = hudAtlas(Math.round(r * 0.23)), C = H.C = hudAtlas(Math.round(r * 0.17));
   const c = H.cg; c.width = W; c.height = Hh; c.style.width = W / dpr + 'px'; c.style.height = Hh / dpr + 'px';
@@ -8084,21 +8351,35 @@ function hudStatsFrame() {
   a[0] = 0; a[1] = 0;
   s.clearRect(0, 0, L[27], L[28]); s.drawImage(H.bgS, 0, 0); hudInt(s, C, fps > 999 ? 999 : fps, 3, L[20], y, 1); hudDec(s, C, ms, L[21], y); hudDec(s, C, gpu, L[22], y);
 }
-function hudShow(on) { HUD.vis = on; HUD.cg.style.display = HUD.ct.style.display = on ? 'block' : 'none'; HUD.K.fill(-9); }
-function hudStats(on) { HUD.stats = on; HUD.cs.style.display = on ? 'block' : 'none'; HUD.acc[0] = 0; HUD.acc[1] = 0; if (on) { const L = HUD.L; HUD.s.clearRect(0, 0, L[27], L[28]); HUD.s.drawImage(HUD.bgS, 0, 0); } }
+function hudShow(on) { HUD.vis = on; if (HUD.cg) HUD.cg.style.display = HUD.ct.style.display = on ? 'block' : 'none'; HUD.K.fill(-9); }
+function hudStats(on) { HUD.stats = on; if (HUD.cs) HUD.cs.style.display = on ? 'block' : 'none'; HUD.acc[0] = 0; HUD.acc[1] = 0; if (on && HUD.s) { const L = HUD.L; HUD.s.clearRect(0, 0, L[27], L[28]); HUD.s.drawImage(HUD.bgS, 0, 0); } }
 
 // ---- 52_ui.js
 // Interface do jogo aberto por uma pessoa (GAME.ui): tela de início, pausa, benchmark, volta roteirizada para assistir,
 // poses, teclas de ferramenta e leitura do controle. Nas ferramentas de trabalho/ (captura, poses, teste, medição) nada
 // disto é ligado: sem menu, sem painel, sem som.
 const ST = { INICIO: 0, JOGO: 1, PAUSA: 2, BENCH: 3, FITA: 4, RESULT: 5, POSE: 6 };
-const UI = { st: ST.INICIO, back: ST.JOGO, el: null, tag: null, res: null, b0: null, b1: null, bench: null, benchN: 0, padPrev: 0, padN: 0, pose: -1, stats: false, warm: false };
+const UI = { st: ST.INICIO, back: ST.JOGO, el: null, tag: null, res: null, b0: null, b1: null, bench: null, benchN: 0, padPrev: 0, padN: 0, pose: -1, stats: false, warm: false, countdown: false, countdownTimer: null };
 const $ = id => document.getElementById(id);
 function uiInit() {
   UI.el = $('ui'); UI.tag = $('tag'); UI.res = $('res'); UI.b0 = $('b0'); UI.b1 = $('b1');
   hudInit(); uiWarmup();
   try { const b = +localStorage.getItem('uno-melhor'); if (b > 20 && b < 600) LAP[2] = b; } catch (e) { /* sem armazenamento local: a melhor volta vale só nesta sessão */ }
-  UI.b0.onclick = () => { if (UI.st === ST.INICIO) { sndStart(); uiSet(ST.JOGO); } else uiResume(); };
+  UI.b0.onclick = () => {
+    if (UI.st === ST.INICIO) {
+      sndStart();
+      // Çift oynanıyorsa: ikinizin de aynı anda kalkması için ortak başlangıç
+      // saati duyurulur (3-2-1 geri sayım). Ağ yoksa hemen başlar.
+      if (typeof mpAnnounceStart === 'function' && typeof NET !== 'undefined' && NET.live) {
+        let armed = false;
+        try { armed = mpAnnounceStart() !== false; } catch (e) { console.warn('[ui] geri sayım:', e); }
+        if (armed) { uiCountdown(); return; }
+        uiSet(ST.JOGO);
+        return;
+      }
+      uiSet(ST.JOGO);
+    } else uiResume();
+  };
   UI.b1.onclick = () => benchStart();
   addEventListener('keydown', uiKey);
   document.addEventListener('visibilitychange', () => { if (document.hidden && (UI.st === ST.JOGO || UI.st === ST.FITA || UI.st === ST.BENCH)) uiPause(); });
@@ -8122,7 +8403,32 @@ function uiSet(st) {
   if (menu) UI.b0.focus(); else UI.b0.blur();
   _lastT = 0;
 }
-function uiPause() { if (UI.st === ST.BENCH) benchStop(); UI.back = UI.st === ST.FITA ? ST.FITA : ST.JOGO; uiSet(ST.PAUSA); }
+// ---- çift oynanıyor: ortak başlangıç geri sayımı (3-2-1) ----
+// İki telefonda da aynı anda çalışır; süre bitince uiDrive() ile ikisi birlikte
+// start çizgisinden kalkar (bkz. 55_multiplayer.js mpArmStart).
+// Geri sayım çubukları amaçlanan saniyelerde geçsin diye son adım uygun süreyle
+// planlanır (her karede requestAnimationFrame ile yoklanmaz).
+function uiCountdown() {
+  UI.countdown = true; UI.back = ST.JOGO;
+  uiSet(ST.PAUSA);
+  UI.b0.textContent = 'Hazır ol…';
+  UI.b0.disabled = true;
+  const tick = () => {
+    if (!UI.countdown || UI.countdownTimer) return;
+    const n = typeof MPSTART !== 'undefined' ? MPSTART.at : 0;
+    const kalan = n ? (n - (performance.timeOrigin + performance.now())) / 1000 : 0;
+    if (kalan <= 0.05) {
+      UI.b0.disabled = false; UI.countdown = false; UI.countdownTimer = null;
+      UI.b0.textContent = 'Hazır ol…';
+      return;
+    }
+    UI.b0.textContent = kalan > 2 ? '3…' : kalan > 1 ? '2…' : '1…';
+    const sonrakiBayrak = kalan > 2 ? 2 : kalan > 1 ? 1 : 0.05;
+    UI.countdownTimer = setTimeout(() => { UI.countdownTimer = null; tick(); }, Math.max(16, (kalan - sonrakiBayrak) * 1000 + 8));
+  };
+  tick();
+}
+function uiPause() { UI.countdown = false; if (UI.countdownTimer) { clearTimeout(UI.countdownTimer); UI.countdownTimer = null; } if (UI.st === ST.BENCH) benchStop(); UI.b0.disabled = false; UI.back = UI.st === ST.FITA ? ST.FITA : ST.JOGO; uiSet(ST.PAUSA); }
 function uiResume() {
   if (UI.st === ST.RESULT || UI.st === ST.POSE) uiDrive(); else if (UI.st === ST.PAUSA) uiSet(UI.back);
 }
@@ -8232,43 +8538,164 @@ function uiAfter() {
 
 // ---- 55_multiplayer.js
 // ============================================================================
-// ÇOK OYUNCULU — Murat & Selin aynı pistte (Fable 5.2 sürümüne eklendi)
+// ÇOK OYUNCULU — Murat & Selin aynı pistte
 // ----------------------------------------------------------------------------
-// Oyun tek kişilikti; bu dosya oyuna ağ katmanını ve ikinci arabayı ekler.
 //   1) SOKET  : Ahududu'nun /ws/<kullanıcı> soketine bağlanır.
-//   2) ARABA  : Partnerin Unosu pistte canlı çizilir (farklı renk, aynı model).
+//   2) ARABA  : Partnerin Unosu pistte CANLI çizilir (kendi arabamızın ayrı
+//               kopyası: kendi objeleri, kendi slotları, partnerin rengi).
 //   3) SES    : Partnerin motor sesi kameraya göre sağdan/soldan gelir.
-//   4) KAMERA : Partnerin canlı görüntüsü sağ altta; kendi görüntün ayna olarak.
-//   5) MİK    : "Basılı tut: konuş" düğmesi (16 kHz PCM).
-// Ağ yoksa her şey sessizce kapanır; oyun eskisi gibi tek kişilik oynanır.
+//   4) YARIŞ  : Herkes aynı anda "Başla"ya basınca geri sayım başlar; iki araba
+//               da aynı anda start çizgisinden kalkar ve tur süreleri adil olur.
 //
-// Önemli tasarım notu (renderer): sahnede yalnızca 64 "obje slotu" var ve
-// hepsini bizim arabamız kullanıyor. Bu yüzden ikinci araba YENİ SLOT AÇMAZ;
-// partneri, kendi arabamızın slotlarına yazdığımız matrislerle çizer. Slot
-// matrisleri mpBeginFrame'de ayrılan alanda tutulur, mpPartnerDraw bitince
-// geri yazılır (kendi arabamız bu yüzden yerinden kaymaz).
-// Direksiyon slotu (CAR.slotSteer) ödünç ALINMAZ: aynı karede yazılırsa
-// dümenin ekran kartı kaynağı iki kez bağlanır (createBindGroup çakışır).
+// KAMERA YOKTUR: video akışı (getUserMedia/WebRTC/JPEG yayını) bu sürümde
+// tamamen kaldırıldı. Bu, telefonda her saniye işlemci ve soket yükü
+// yaratıyordu (mobil FPS'in düşmesinin başlıca sebeplerinden biri). Mikrofon
+// ("basılı tut: konuş") yalnızca partner ekrana girdiğinde açılan küçük bir
+// düğme olarak duruyor; hiçbir şey otomatik açılmaz.
+//
+// ARABA ÇİZİMİ (önemli): Bu oyunda objelerin sırası CAR.build() içinde
+// belirlenir: gövde = slotBody, 4 tekerlek = slotWheel[], direksiyon =
+// slotSteer. Partner için CAR'ın gövde/tekerlek meshleri KENDİ objelerimize
+// ekleniyor; yani partnerin arabası ayrı objeler ve ayrı slotlarla çizilir —
+// kendi arabamızın matrisleri hiç ödünç alınmaz (eski sürüm slotları takas
+// ediyordu; bu hem titremeye hem de partnerin bazen görünmemesine yol açıyordu).
+// Eski kodun CAR.fam.bgl3 / carAtlas() üzerinden yaptığı bind group'a da gerek
+// kalmadı: MeshSet.draw() zaten R.drawables sırasında doğru atlası bağlar.
 // ----------------------------------------------------------------------------
 
 const GAME_ID = 'uno-com-escada';
 const GAME_NAMES = { murat: 'Murat', selin: 'Selin' };
+// Bu dosya her zaman ana sayfanın içinde çalışır (oyun iframe'i kendi
+// penceresidir). Eski kodda kalan `IS_TOP` referansı bir ReferenceError
+// yüzünden çok oyunculuyu baştan düşürüyordu; artık burada tanımlıdır.
+const IS_TOP = (() => { try { return window.top === window.self; } catch (e) { return false; } })();
+const MP_PAINT = [0.70, 0.13, 0.34];      // partnerin arabasının rengi: pembe-böğürtlen
+const MP_MINE = [0.13, 0.33, 0.68];       // benim arabamın rengi (açılışta bir kez yazılır)
+const MP_TICK_HZ = 20;                    // saniyede gönderilen durum paketi
+const MP_COUNTDOWN = 3.2;                 // "Başla"dan sonra geri sayım (sn)
 
 // ---------------------------- 1) SOKET -------------------------------------
+// Ana sayfa (Ahududu kabuğu) zaten aynı kullanıcı için bir soket açmış olabilir.
+// İki ayrı soket açmak sunucuda iki bağlantı demek; kampüs/otel Wi-Fi'sinde
+// birleşimi kaldırmayan yönlendiricilerde bağlantı düşmesine yol açıyordu.
+// Bu yüzden oyunun paketleri mümkünse kabuğun soketinden geçer.
+//
+// ÖNEMLİ: Oyun AYRI bir iframe penceresinde çalışır. Eski kod yalnızca
+// `window.__ahududuGameBus` arıyordu; o nesne ise kabuğun kendi penceresine
+// yazılıyordu ve oyundan hiçbir zaman görülemiyordu. Ayrıca bir `on(...)`
+// dinleyicisi de yoktu: kabuktan gelen partner paketleri hiç işlenmiyor,
+// "Başla"nın gönderdiği geri sayım karşı tarafta yarışı başlatmıyordu.
+// Artık köprü iki yolla kurulur:
+//   • aynı köken: kabuk `__ahududuGameBus` nesnesini BU pencereye yazar,
+//   • her durumda: `postMessage({__ahududu:1, kind:'send'|'ping'|...})`.
+const BRIDGE_TAG = '__ahududu';
+const MPSHARE = (() => {
+  try {
+    const direct = window.__ahududuGameBus;
+    const handlers = new Set();          // gelen partner paketleri
+    const watchers = new Set();          // bağlantı durumu değişimleri
+    const pending = {};                  // durum yoklaması yanıtları: id -> fn
+    let seq = 0;
+
+    const emit = open => { share.ready = !!open; watchers.forEach(fn => { try { fn(!!open); } catch (e) { /* yok say */ } }); };
+    const post = m => {
+      try { if (window.parent && window.parent !== window) window.parent.postMessage(Object.assign({ [BRIDGE_TAG]: 1 }, m), '*'); } catch (e) { /* yok say */ }
+    };
+
+    const share = {
+      ready: false,
+      /** Köprü kuruldu mu (kabuk oyun iframe'ini tanıdı mı)? */
+      present() { return !!(direct || this.ready); },
+      open() { if (direct) { try { return !!direct.open(); } catch (e) { /* yok say */ } } return !!this.ready; },
+      send(o) {
+        if (direct) { try { return !!direct.send(o); } catch (e) { /* yok say */ } }
+        post({ kind: 'send', payload: o });
+        return !!this.ready;
+      },
+      on(fn) { if (typeof fn === 'function') handlers.add(fn); },
+      onState(fn) { if (typeof fn === 'function') watchers.add(fn); },
+      fullscreen() {
+        if (direct && typeof direct.requestFullscreen === 'function') { try { direct.requestFullscreen(); return; } catch (e) { /* yok say */ } }
+        post({ kind: 'fullscreen' });
+      },
+      /** Kabuk gerçekten cevap veriyor mu? Kabuk yoksa kendi soketimizi açarız. */
+      probe() {
+        return new Promise(resolve => {
+          if (direct) { resolve(true); return; }
+          const id = ++seq;
+          pending[id] = () => resolve(true);
+          post({ kind: 'ping' });
+          post({ kind: 'state?', id });
+          setTimeout(() => { if (pending[id]) { delete pending[id]; resolve(false); } }, 1500);
+        });
+      }
+    };
+
+    addEventListener('message', ev => {
+      const d = ev.data;
+      if (!d || d[BRIDGE_TAG] !== 1) return;
+      if (d.kind === 'recv' && d.payload) {
+        handlers.forEach(fn => { try { fn(d.payload); } catch (e) { /* yok say */ } });
+      } else if (d.kind === 'state') {
+        if (d.id >= 0 && pending[d.id]) { const fn = pending[d.id]; delete pending[d.id]; fn(!!d.open); }
+        else if (d.id === -1) emit(d.open);
+      } else if (d.kind === 'ready') {
+        emit(true);
+      }
+    });
+
+    post({ kind: 'hello' });             // kabuk bizi tanısın
+    return share;
+  } catch (e) { return null; }
+})();
+
 const NET = {
   ws: null, opened: false, closedByUser: false, offlineTries: 0,
-  json(o) { try { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); } catch (e) { /* yok say */ } },
+  get live() { return this.opened || (MPSHARE ? MPSHARE.open() : false); },
+  json(o) {
+    if (MPSHARE && MPSHARE.open()) {
+      if (MPSHARE.send(o) !== false) return;
+    }
+    try { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); } catch (e) { /* yok say */ }
+  },
+  // Oyun kendi soketini açar; kabuğun soketi ayaktaysa ve bu pencere bir
+  // iframe değilse kabuğun soketi tercih edilir.
   connect() {
-    if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return;
+    if (typeof location === 'undefined') return;
+    const httpMode = /^https?:$/.test(location.protocol);
+    if (!httpMode) return;                                   // file:// (deneme) → yalnızca çevrimdışı
+    if (MPSHARE && MPSHARE.open()) { this.opened = false; MP.retryAt = 0; mpUiRefresh(); return; }
+    if (MPSHARE && !this._probed) { this._probed = true; MPSHARE.probe().then(ok => { if (ok) { MP.retryAt = 0; NET.opened = false; mpUiRefresh(); } else NET._openOwn(); }); return; }
+    this._openOwn();
+  },
+  _openOwn() {
     this.close();
     this.closedByUser = false;
-    const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/' + MP.userId;
+    // Doğru sunucu: uygulama localhost'tan (Capacitor) açıldığında soket canlı
+    // sunucuya gitmelidir (websocket.ts ile aynı kural).
+    let host = location.host, proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    // Test/teşhis: ?wsserver=host:port veya ?wsport=N ile soket adresi
+    // değiştirilebilir (yerel röle sunucusuyla çift oyunculu deneme).
+    try {
+      const wsOverride = new URLSearchParams(location.search).get('wsserver');
+      const wsPort = new URLSearchParams(location.search).get('wsport');
+      if (wsOverride) { host = wsOverride; proto = /^https/.test(location.protocol) ? 'wss://' : 'ws://'; }
+      else if (wsPort) { host = location.hostname + ':' + wsPort; proto = 'ws://'; }
+    } catch (e) { /* yok say */ }
+    if (!host) { MP.retryAt = performance.now() + 5000; return; }
+    if (location.hostname === 'localhost' && location.port !== '33470' && location.port !== '5173') {
+      let server = 'https://ahududu.fakeyol.com';
+      try { server = localStorage.getItem('ahududu_server_url') || server; } catch (e) { /* yok say */ }
+      host = server.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+      proto = server.indexOf('https') === 0 ? 'wss://' : 'ws://';
+    }
+    const url = proto + host + '/ws/' + MP.userId;
     let ws;
-    try { ws = new WebSocket(url); } catch (e) { return; }
+    try { ws = new WebSocket(url); } catch (e) { MP.retryAt = performance.now() + 5000; return; }
     this.ws = ws;
     ws.onopen = () => {
       NET.opened = true; NET.offlineTries = 0; MP.retryAt = 0;
-      NET.json({ type: 'game_hello', game: GAME_ID, cam: CAM.ready ? 1 : 0 });
+      NET.json({ type: 'game_hello', game: GAME_ID });
       mpUiRefresh();
     };
     ws.onmessage = ev => { let d; try { d = JSON.parse(ev.data); } catch (e) { return; } mpOnPacket(d); };
@@ -8276,8 +8703,7 @@ const NET = {
       const was = NET.ws === ws;
       NET.opened = false;
       if (was) NET.ws = null;
-      MP.partnerOn = false;
-      mpHideRemoteUi();
+      MP.partnerOn = false; MP.hasT = false;
       mpUiRefresh();
       if (NET.closedByUser) return;
       NET.offlineTries++;
@@ -8295,14 +8721,13 @@ const NET = {
 // ---------------------------- 2) OYUNCU ------------------------------------
 const MP = {
   userId: 'murat', partnerId: 'selin', myName: 'Murat', partnerName: 'Selin',
-  partnerOn: false, retryAt: 0, sentAt: -1e9, lastRxCarAt: 0,
+  partnerOn: false, retryAt: 0, sentAt: -1e9, lastRxCarAt: 0, bootAt: 0,
   // partnerin arabası: T = ağdan gelen hedef, S = ekranda yumuşatılan kopya
-  T: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0 },
+  T: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0, s: 0, d: 0 },
   S: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0 },
   hasT: false, carReady: false,
-  // slot tasarrufu (kendi arabanın slotlarına yazar)
-  reserve: null, bodySlot: -1, wheelSlot: [0, 0, 0, 0],
-  paint: [0.70, 0.13, 0.34]     // partnerin arabasının rengi: pembe-böğürtlen
+  set: null, bodyObj: 0, wheelObj: [0, 0, 0, 0],
+  paint: MP_PAINT
 };
 
 function mpResolveUser() {
@@ -8322,127 +8747,106 @@ function mpSetUser(id) {
   MP.partnerName = GAME_NAMES[MP.partnerId];
 }
 
-// ------------------- 3) PARTNER ARABASI (slot takası) ----------------------
-// Kendi arabamızın slot matrislerinin canlı kopyası; mpBeginFrame'de saklanır.
-const MPSAVE = { body: m4(), wheel: [m4(), m4(), m4(), m4()], bodyP: new Float32Array(4), wheelP: [new Float32Array(4), new Float32Array(4), new Float32Array(4), new Float32Array(4)] };
-const MPM = { g: m4(), t: m4(), rz: m4(), m: m4() };
-
+// ------------------- 3) PARTNER ARABASI (ayrı objeler) ---------------------
+// CAR'ın meshlerini kendi objelerimize ekler: gövde + 4 tekerlek. Direksiyon
+// gibi ek parçalar da (varsa) partnerin gövdesine bağlanır ki iç kısım boş
+// görünmesin.
 function mpBuildPartnerCar() {
   if (MP.carReady) return true;
   try {
-    if (typeof R === 'undefined' || typeof CAR === 'undefined' || !CAR.set || !CAR.hubs) return false;
-    MP.bodySlot = CAR.slotBody;
-    // Tekerlek slotları: CARP'ınki varsa onlar (görünmez yedek araba), yoksa kendi tekerleklerimiz.
-    // Asla CAR.slotSteer kullanılmaz.
-    const carpAlive = typeof CARP !== 'undefined' && CARP.slotBody > 0 && CARP !== CAR;
-    const free = carpAlive ? CARP.slotWheel : null;
-    for (let i = 0; i < 4; i++) MP.wheelSlot[i] = free && free[i] > 0 ? free[i] : CAR.slotWheel[i];
-    MP.reserve = MPSAVE;
-    // Kendi araba setinde hangi slotların gövde/tekerlek olduğunu bilmiyoruz;
-    // partner çizimi kendi vb/ib listesiyle carBuild fonksiyonlarına dayanmaz,
-    // doğrudan CAR.set.items'taki (vb, ib, count) üçlüsünü yeniden kullanır.
-    MP.items = CAR.set.items.map(it => ({ vb: it.vb, ib: it.ib, count: it.count, slot: it.slot, flags: it.flags, r: it.r, cx: it.cx, cy: it.cy, cz: it.cz }));
-    MP.fam = CAR.fam;
-    MP.carReady = true;
-    // Atlas dokusu: araba kendi kartını oluştururken alır; burada aynı dokuyu
-    // paylaşmak için bir kez oluşturup bind group'u kuruyoruz (slot işgali yok).
-    try {
-      const tex = (typeof carAtlas === 'function') ? carAtlas() : null;
-      if (tex && MP.fam.bgl3) MP.atlasBG = G.dev.createBindGroup({ layout: MP.fam.bgl3, entries: [{ binding: 0, resource: tex.createView() }] });
-    } catch (e) { MP.atlasBG = null; }
-    // Partneri çizen çizilebilir nesne: kendi arabamızdan SONRA çizilir.
-    if (MP.fam && MP.fam.bgl3 && typeof R.drawables !== 'undefined') {
-      R.drawables.push({
-        __mp: 1,
-        draw(pass, ctx) {
-          if (!MP.canDraw || !MP.hasT || !MP.atlasBG) return;
-          if (ctx.kind === KIND.SHADOW && ctx.cascade === 3) return;
-          pass.setBindGroup(3, MP.atlasBG);
-          mpBodyDraw(pass, ctx);
-        }
-      });
+    if (typeof R === 'undefined' || typeof CAR === 'undefined' || !CAR.set) return false;
+    const fam = CAR.fam, src = CAR.set;
+    if (!fam || !src.items || !src.items.length) return false;
+    const set = MP.set = new MeshSet(fam);
+    MP.bodyObj = objSlot();
+    for (let i = 0; i < 4; i++) MP.wheelObj[i] = objSlot();
+    for (let i = 0; i < src.items.length; i++) {
+      const it = src.items[i];
+      const slot = it.slot === CAR.slotBody ? MP.bodyObj
+        : it.slot === CAR.slotWheel[0] ? MP.wheelObj[0]
+          : it.slot === CAR.slotWheel[1] ? MP.wheelObj[1]
+            : it.slot === CAR.slotWheel[2] ? MP.wheelObj[2]
+              : it.slot === CAR.slotWheel[3] ? MP.wheelObj[3]
+                : MP.bodyObj;                     // direksiyon vb. → gövdeyle birlikte hareket eder
+      set.add({ vb: it.vb, ib: it.ib, count: it.count, bounds: { c: [it.cx, it.cy, it.cz], r: it.r } }, slot, it.flags, it.maxDist);
     }
+    // Partnerin meshleri artık KENDİ listesinde. CAR.set'ten çıkarılır:
+    // aksi hâlde aynı meshler kendi arabanın matrisiyle ikinci kez çizilir
+    // (partner arabası üst üste biner, gölge geçişi bind grubu olmadan çizim
+    // yapıp komut tamponunu geçersiz kılar → ekran donar).
+    src.items.length = 0;
+    // Partner çizilebilirler listesinde kendi arabamızdan SONRA gelir; böylece
+    // camları (transparent) da doğru sırada bağlanır.
+    R.drawables.push(set);
+    // Camlar: kendi arabamızla aynı meshler, partnerin gövde nesnesine bağlı.
+    // (GlassSet.bind = çizimden hemen önce hangi gövde nesnesinin kullanılacağı)
+    if (typeof CAR.glass !== 'undefined' && CAR.glass && CAR.glass.items) {
+      const gl = new GlassSet();
+      for (const g of CAR.glass.items) gl.add_({ vb: g.vb, ib: g.ib, count: g.count }, MP.bodyObj);
+      gl.bind = () => MP.bodyObj;
+      R.transparents.push(gl);
+      CAR.glass.items.length = 0;                // camlar da partnerde çizilir (kopya)
+    }
+    MP.carReady = true;
     return true;
   } catch (e) { console.warn('[uno-mp] partner arabası kurulamadı:', e); return false; }
 }
-// Bir karede partneri çiz: gövde ve tekerlek slotlarına partner matrisini yaz
-function mpBodyDraw(pass, ctx) {
-  const pipe = MP.fam.pipe[ctx.kind]; if (!pipe) return;
-  const bit = 1 << ctx.kind, items = MP.items, obj = R.objData;
-  let set = false;
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i]; if (!(it.flags & bit)) continue;
-    const slot = it.slot === MP.bodySlot ? MP.bodySlot : (MP.wheelSlot.includes(it.slot) ? it.slot : -1);
-    if (slot < 0) continue;                                        // direksiyon vb. çizilmez
-    const o = slot * 64;
-    const x = obj[o] * it.cx + obj[o + 4] * it.cy + obj[o + 8] * it.cz + obj[o + 12];
-    const y = obj[o + 1] * it.cx + obj[o + 5] * it.cy + obj[o + 9] * it.cz + obj[o + 13];
-    const z = obj[o + 2] * it.cx + obj[o + 6] * it.cy + obj[o + 10] * it.cz + obj[o + 14];
-    const dx = x - ctx.cx, dy = y - ctx.cy, dz = z - ctx.cz, md = it.maxDist + it.r;
-    if (dx * dx + dy * dy + dz * dz > md * md) continue;
-    const pl = ctx.planes, np = ctx.nPlanes; let vis = true;
-    for (let k = 0; k < np; k++) if (pl[k * 4] * x + pl[k * 4 + 1] * y + pl[k * 4 + 2] * z + pl[k * 4 + 3] < -it.r) { vis = false; break; }
-    if (!vis) continue;
-    if (!set) { pass.setPipeline(pipe); set = true; }
-    R.dyn2[0] = slot * 256;
-    pass.setBindGroup(2, R.objBG, R.dyn2, 0, 1);
-    pass.setVertexBuffer(0, it.vb); pass.setIndexBuffer(it.ib, 'uint32'); pass.drawIndexed(it.count);
-  }
+// Kendi arabamızın rengini bir kez yazar (partnerin arabası farklı renkte olsun).
+function mpPaintMine() {
+  try {
+    const P = objParams(CAR.slotBody);
+    if (!P[1] && !P[2] && !P[3]) { P[1] = MP_MINE[0]; P[2] = MP_MINE[1]; P[3] = MP_MINE[2]; }
+  } catch (e) { /* yok say */ }
 }
-
-// Kare başında kendi arabamızın slot matrisleri önbelleğe alınır; sonunda geri konur.
+// --- kare önbellekleri (her karede nesne oluşturmamak için) ---
+const MPF = {
+  g: m4(), t: m4(), w: m4()    // gövde zemini, ek dönme, tekerlek matrisi
+};
+// Kare başında: partnerin matrisleri yumuşatılıp dünyaya yazılır.
 function mpBeginFrame() {
   if (!MP.carReady) return;
-  const obj = R.objData, b = MP.bodySlot;
-  MPSAVE.body.set(obj.subarray(b * 64, b * 64 + 16));
-  MPSAVE.bodyP.set(obj.subarray(b * 64 + 32, b * 64 + 36));
-  for (let i = 0; i < 4; i++) {
-    const s = MP.wheelSlot[i];
-    MPSAVE.wheel[i].set(obj.subarray(s * 64, s * 64 + 16));
-    MPSAVE.wheelP[i].set(obj.subarray(s * 64 + 32, s * 64 + 36));
-  }
-  MP.canDraw = false;
-  if (!MP.hasT) return;
-  // yumuşatma
-  const S = MP.S, T = MP.T, k = 0.25, ky = 0.3;
+  if (!MP.hasT) { MP.set.on = false; return; }
+  const S = MP.S, T = MP.T, g = MPF.g;
+  // Son paketten bu yana geçen süre 50 ms'den (20 Hz) uzunsa aynı hızla
+  // ilerlet; ekran 60 Hz olduğu için yoksa araba zıplayarak gider.
+  const now = performance.now(), gap = Math.min((now - MP.lastRxCarAt) / 1000, 0.2);
+  if (gap > 0.06 && T.spd) { S.x += Math.cos(T.yaw) * T.spd * gap * 0.5; S.z += Math.sin(T.yaw) * T.spd * gap * 0.5; }
+  const k = 0.34, ky = 0.4;
   S.x += (T.x - S.x) * k; S.y += (T.y - S.y) * k; S.z += (T.z - S.z) * k;
   let dy = T.yaw - S.yaw; if (dy > PI) dy -= TAU; else if (dy < -PI) dy += TAU;
   S.yaw += dy * ky; S.spd += (T.spd - S.spd) * k; S.gear = T.gear; S.acc = T.acc;
-  // gövde matrisi
-  const G = MPM.g, B = MPSAVE.body, c = Math.cos(S.yaw), s = Math.sin(S.yaw), ox = -(VP.L / 2 - VP.a);
-  G[0] = c; G[1] = 0; G[2] = s; G[3] = 0;
-  G[4] = 0; G[5] = 1; G[6] = 0; G[7] = 0;
-  G[8] = -s; G[9] = 0; G[10] = c; G[11] = 0;
-  G[12] = S.x + c * ox; G[13] = S.y; G[14] = S.z + s * ox; G[15] = 1;
-  m4ident(MPM.t); MPM.t[13] = 0.18; m4mul(B, G, MPM.t);
-  // malzeme parametreleri: fren lambası (p0.x), renk (p1.rgb = partner rengi)
-  const P = MPSAVE.bodyP;
+  // gövde matrisi (kendi arabamızdaki kurulumla aynı: gövde zemin tabanlı)
+  const c = Math.cos(S.yaw), s = Math.sin(S.yaw), ox = -(VP.L / 2 - VP.a);
+  g[0] = c; g[1] = 0; g[2] = s; g[3] = 0;
+  g[4] = 0; g[5] = 1; g[6] = 0; g[7] = 0;
+  g[8] = -s; g[9] = 0; g[10] = c; g[11] = 0;
+  g[12] = S.x + c * ox; g[13] = S.y; g[14] = S.z + s * ox; g[15] = 1;
+  // gövde: zeminde 0.18 m yukarı (malzemenin gövde tabanı)
+  m4ident(MPF.t); MPF.t[13] = 0.18;
+  const BG = objModel(MP.bodyObj), BP = objPrev(MP.bodyObj);
+  for (let i = 0; i < 16; i++) BP[i] = BG[i];        // önceki kare = mblur kaynağı
+  m4mul(BG, g, MPF.t);
+  // malzeme parametreleri: fren lambası, geri vites, farlar + partnerin rengi
+  const P = objParams(MP.bodyObj);
   P[0] = S.acc < -0.05 ? 1 : 0; P[1] = S.gear === 0 ? 1 : 0; P[2] = 1;
-  const b64 = MP.bodySlot * 64;
-  for (let i = 0; i < 4; i++) R.objData[b64 + 32 + i] = P[i];
-  R.objData[b64 + 36] = MP.paint[0]; R.objData[b64 + 37] = MP.paint[1]; R.objData[b64 + 38] = MP.paint[2]; R.objData[b64 + 39] = 0;
-  // tekerlekler: aynı yerleşim (hub), dönme hızı hızdan
-  const spin = S.spd / VP.R;
+  P[4] = MP.paint[0]; P[5] = MP.paint[1]; P[6] = MP.paint[2]; P[7] = 0;
+  // tekerlekler: kendi arabamızla aynı yerleşim (CAR.hubs), dönme hızı hızdan
+  const spin = S.spd / VP.R, blur = Math.abs(spin), w = MPF.w;
   for (let i = 0; i < 4; i++) {
-    const s2 = MP.wheelSlot[i], h = CAR.hubs[i], left = (i & 1) === 1;
+    const h = CAR.hubs[i], left = (i & 1) === 0;
     const a = left ? PI : 0, ca = Math.cos(a), sa = Math.sin(a);
-    const g = left ? spin : -spin, cg = Math.cos(g), sg = Math.sin(g);
-    const RZ = MPM.rz;
-    RZ[0] = ca * cg; RZ[1] = sg; RZ[2] = -sa * cg; RZ[3] = 0;
-    RZ[4] = -ca * sg; RZ[5] = cg; RZ[6] = sa * sg; RZ[7] = 0;
-    RZ[8] = sa; RZ[9] = 0; RZ[10] = ca; RZ[11] = 0;
-    RZ[12] = h[0]; RZ[13] = h[1]; RZ[14] = h[2]; RZ[15] = 1;
-    m4mul(MPSAVE.wheel[i], B, RZ);
-    const o = s2 * 64 + 32;
-    R.objData[o] = Math.abs(spin);                         // yuvarlanma bulanıklığı
+    const gi = left ? spin : -spin, cg = Math.cos(gi), sg = Math.sin(gi);
+    w[0] = ca * cg; w[1] = sg; w[2] = -sa * cg; w[3] = 0;
+    w[4] = -ca * sg; w[5] = cg; w[6] = sa * sg; w[7] = 0;
+    w[8] = sa; w[9] = 0; w[10] = ca; w[11] = 0;
+    w[12] = h[0]; w[13] = h[1]; w[14] = h[2]; w[15] = 1;
+    const WM = objModel(MP.wheelObj[i]), WP = objPrev(MP.wheelObj[i]);
+    for (let j = 0; j < 16; j++) WP[j] = WM[j];
+    m4mul(WM, g, w);
+    objParams(MP.wheelObj[i])[0] = blur;            // yuvarlanma bulanıklığı
   }
-  MP.canDraw = true;
+  MP.set.on = true;
 }
-// Partner çizildikten sonra kendi arabamızın matrisleri geri yazılır.
-// (Not: gövde/tekerlek matrisleri GPU komutları hazırlanırken okunur, geri
-// yazmak yalnızca bir sonraki kareyi bozmamak için gerekli değildir; yine de
-// her karede yeniden yazılır. ARABA ve PARTNER aynı karede doğru görünür.)
-function mpPartnerDraw() { /* çizim draw() içinde */ }
 
 // ---------------------------- 4) SES ---------------------------------------
 const MPSND = { ready: false, ctx: null, gain: null, panner: null, osc: null, osc2: null, filter: null };
@@ -8456,8 +8860,8 @@ function mpSoundInit() {
     let head = gain, panner = null;
     if (ctx.createPanner) {
       panner = ctx.createPanner();
-      panner.panningModel = 'HRTF'; panner.distanceModel = 'linear';
-      panner.refDistance = 6; panner.maxDistance = 80; panner.rolloffFactor = 1;
+      panner.panningModel = 'equalpower'; panner.distanceModel = 'linear';
+      panner.refDistance = 6; panner.maxDistance = 60; panner.rolloffFactor = 0.6;
       gain.connect(panner); head = panner;
     } else if (ctx.createStereoPanner) {
       panner = ctx.createStereoPanner(); gain.connect(panner); head = panner;
@@ -8473,179 +8877,45 @@ function mpSoundInit() {
     MPSND.ready = true;
   } catch (e) { /* ses yoksa oyun sessiz sürer */ }
 }
+let _mpSndAt = 0;
 function mpSoundFrame() {
   const C = MPSND.ctx;
   if (!C) return;
+  // Ekolayzer güncellemeleri 60 Hz yerine 10 Hz: her karede setTargetAtTime
+  // çağırmak ses iş parçacığını gereksiz yere meşgul ediyordu.
+  const t0 = performance.now();
+  if (t0 - _mpSndAt < 100) return;
+  _mpSndAt = t0;
   if (C.state === 'suspended') C.resume().catch(() => {});
-  if (!MP.hasT || !MP.partnerOn) { try { MPSND.gain.gain.value = 0; } catch (e) {} return; }
+  if (!MP.hasT || !MP.partnerOn || typeof GS === 'undefined') { try { MPSND.gain.gain.value = 0; } catch (e) { } return; }
   const D = MP.S, dx = D.x - GS.cx, dz = D.z - GS.cz, dy = D.y - GS.cy;
   const dist = Math.sqrt(dx * dx + dz * dz + dy * dy);
   const muted = (typeof SND !== 'undefined' && SND.mute) ? 0 : 1;
-  const vol = dist > 80 ? 0 : (1 - dist / 80) * (1 - dist / 80) * 0.55 * muted;
+  const vol = dist > 60 ? 0 : (1 - dist / 60) * (1 - dist / 60) * 0.5 * muted;
   const t = C.currentTime, sp = Math.abs(D.spd);
   try {
-    MPSND.gain.gain.setTargetAtTime(vol, t, 0.08);
+    MPSND.gain.gain.setTargetAtTime(vol, t, 0.12);
     const rpm = 850 + Math.min(sp, 45) * 175;
-    MPSND.osc.frequency.setTargetAtTime(rpm / 30, t, 0.06);
-    MPSND.osc2.frequency.setTargetAtTime(rpm / 60, t, 0.06);
-    MPSND.filter.frequency.setTargetAtTime(420 + Math.min(sp, 45) * 70, t, 0.1);
+    MPSND.osc.frequency.setTargetAtTime(rpm / 30, t, 0.08);
+    MPSND.osc2.frequency.setTargetAtTime(rpm / 60, t, 0.08);
+    MPSND.filter.frequency.setTargetAtTime(420 + Math.min(sp, 45) * 70, t, 0.12);
     const c = Math.cos(GS.yaw), s = Math.sin(GS.yaw);
     const rx = dz * c - dx * s, fw = dx * c + dz * s;     // kameraya göre sağ/ön
     const p = MPSND.panner;
+    if (!p) return;
     if (p.positionX) { p.positionX.value = rx; p.positionY.value = dy; p.positionZ.value = fw + 2; }
     else if (p.setPosition) p.setPosition(rx, dy, fw + 2);
     else if (p.pan) p.pan.value = Math.max(-1, Math.min(1, rx / 20));
   } catch (e) { /* yok say */ }
 }
 
-// ---------------------------- 5) KAMERA ------------------------------------
-const CAM = { ready: false, want: false, remoteReady: false, stream: null, video: null, cv: null, g: null, timer: null, sending: false, lastSend: 0, lastReq: 0, frames: 0, remoteFrames: 0 };
-function camSupported() { return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
-
-function camInit() {
-  const on = document.getElementById('camOn'), off = document.getElementById('camOff');
-  if (on) on.onclick = () => { if (CAM.ready) camStop(); else camAsk(); };
-  if (off) off.onclick = () => camStop();
-  const q = document.getElementById('quit');
-  if (q) q.onclick = () => { try { if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'ahududu:game-quit' }, '*'); else history.back(); } catch (e) { history.back(); } };
-  try { if (/[?&]return=/i.test(location.search || '') && q) q.style.display = 'inline-block'; } catch (e) {}
-  mpUiRefresh();
-}
-// Tarayıcıda getUserMedia izin istemini kendisi gösterir; Capacitor kabuğunda
-// önce köprüden izin istenir (aynı izni iki kez sormamak için).
-function camAsk() {
-  if (!camSupported()) { camStatus('bu tarayıcıda kamera yok'); return; }
-  const CAP = window.Capacitor;
-  if (CAP && CAP.Plugins && CAP.Plugins.Camera) {
-    try { CAP.Plugins.Camera.requestPermissions({ permissions: ['camera'] }).then(camStart).catch(camStart); return; } catch (e) { /* devam */ }
-  }
-  camStart();
-}
-function camStart() {
-  if (!camSupported()) { camStatus('bu tarayıcıda kamera yok'); return; }
-  if (CAM.ready) { CAM.want = true; return; }
-  camStatus('kamera açılıyor…');
-  let req;
-  try {
-    req = navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 640 }, frameRate: { ideal: 24, max: 30 } },
-      audio: false
-    });
-  } catch (e) { camStatus('açılamadı'); return; }
-  req.then(stream => {
-    CAM.stream = stream; CAM.ready = true; CAM.want = true;
-    const v = document.createElement('video');
-    v.autoplay = true; v.muted = true; v.playsInline = true; v.setAttribute('playsinline', '');
-    v.srcObject = stream;
-    const p = v.play(); if (p && p.catch) p.catch(() => {});
-    CAM.video = v;
-    CAM.cv = document.createElement('canvas'); CAM.cv.width = 320; CAM.cv.height = 427;
-    CAM.g = CAM.cv.getContext('2d');
-    mpSelfUi();
-    if (!CAM.timer) CAM.timer = setInterval(camTick, 100);
-    camStatus('açık');
-    NET.json({ type: 'game_cam_status', on: true });
-    mpUiRefresh();
-  }).catch(err => {
-    CAM.ready = false; CAM.want = false;
-    const n = err && err.name;
-    camStatus(n === 'NotAllowedError' ? 'tarayıcı izni yok' : n === 'NotFoundError' ? 'kamera bulunamadı' : 'açılamadı');
-    mpUiRefresh();
-  });
-}
-function camStop() {
-  CAM.want = false; CAM.ready = false;
-  if (CAM.timer) { clearInterval(CAM.timer); CAM.timer = null; }
-  if (CAM.stream) { CAM.stream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} }); CAM.stream = null; }
-  if (CAM.video) CAM.video.srcObject = null;
-  micStop();
-  const box = document.getElementById('me'); if (box) box.style.display = 'none';
-  NET.json({ type: 'game_cam_status', on: false });
-  camStatus('kapalı');
-  mpUiRefresh();
-}
-function camStatus(t) { const el = document.getElementById('camStat'); if (el) el.textContent = t; }
-// Kendi görüntün: sağ altta küçük ayna (dokununca küçülür)
-function mpSelfUi() {
-  let box = document.getElementById('me');
-  if (!box) {
-    box = document.createElement('div'); box.id = 'me';
-    const v = document.createElement('video');
-    v.autoplay = true; v.muted = true; v.playsInline = true; v.setAttribute('playsinline', '');
-    const lb = document.createElement('div'); lb.className = 'lb';
-    const mk = document.createElement('button'); mk.className = 'mk'; mk.type = 'button'; mk.textContent = '✕'; mk.title = 'Kamerayı kapat';
-    mk.onclick = ev => { ev.stopPropagation(); camStop(); };
-    box.appendChild(v); box.appendChild(lb); box.appendChild(mk);
-    document.body.appendChild(box);
-    v.addEventListener('pointerdown', () => { box.style.width = box.style.width === '52px' ? '' : '52px'; });
-  }
-  const v = box.querySelector('video');
-  if (v && CAM.stream) v.srcObject = CAM.stream;
-  const lb = box.querySelector('.lb');
-  if (lb) lb.innerHTML = '<span>' + MP.myName + '</span>';
-  box.style.display = 'block';
-}
-// Partnerin görüntüsü: sağ altta; her kare geldiğinde <img> yenilenir
-function mpRemoteUi() {
-  let box = document.getElementById('camN');
-  if (!box) {
-    box = document.createElement('div'); box.id = 'camN';
-    const im = document.createElement('img');
-    im.style.cssText = 'display:block;width:100%;aspect-ratio:3/4;object-fit:cover;transform:scaleX(-1);background:#000';
-    im.alt = '';
-    const lb = document.createElement('div'); lb.className = 'lb';
-    const say = document.createElement('button'); say.className = 'say'; say.type = 'button'; say.textContent = '🎤 Basılı tut: konuş';
-    say.addEventListener('pointerdown', ev => { ev.preventDefault(); micTalk(true); });
-    say.addEventListener('pointerup', ev => { ev.preventDefault(); micTalk(false); });
-    say.addEventListener('pointerleave', () => micTalk(false));
-    say.addEventListener('pointercancel', () => micTalk(false));
-    box.appendChild(im); box.appendChild(lb); box.appendChild(say);
-    document.body.appendChild(box);
-  }
-  const lb = box.querySelector('.lb');
-  if (lb) lb.innerHTML = '<b>' + MP.partnerName + '</b><br><span style="opacity:.7">canlı</span>';
-  box.style.display = 'block';
-  return box;
-}
-function mpHideRemoteUi() {
-  const box = document.getElementById('camN');
-  if (box) box.style.display = 'none';
-  CAM.remoteReady = false;
-}
-// Kendi karelerimizi JPEG olarak yolla (≈10 fps, 320×427)
-function camTick() {
-  if (!CAM.ready || !CAM.g || CAM.sending) return;
-  if (performance.now() - CAM.lastSend < 100) return;
-  const v = CAM.video;
-  if (!v || v.readyState < 2 || !v.videoWidth) return;
-  try {
-    const cw = CAM.cv.width, ch = CAM.cv.height, vw = v.videoWidth, vh = v.videoHeight;
-    const scale = Math.max(cw / vw, ch / vh), sw = cw / scale, sh = ch / scale;
-    CAM.g.drawImage(v, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, cw, ch);
-    CAM.sending = true;
-    CAM.cv.toBlob(blob => {
-      CAM.sending = false;
-      if (!blob || blob.size > 140000) return;    // dev kare soketi tıkamasın
-      const rd = new FileReader();
-      rd.onload = () => { CAM.lastSend = performance.now(); CAM.frames++; NET.json({ type: 'game_cam_frame', data: String(rd.result || '') }); };
-      rd.onerror = () => { CAM.sending = false; };
-      rd.readAsDataURL(blob);
-    }, 'image/jpeg', 0.6);
-  } catch (e) { CAM.sending = false; }
-}
-function camMaybeRequest() {
-  if (CAM.ready || !NET.opened) return;
-  const now = performance.now();
-  if (now - CAM.lastReq < 20000) return;
-  CAM.lastReq = now;
-  NET.json({ type: 'game_cam_req' });
-}
-
-// ---------------------------- 6) MİKROFON ----------------------------------
-// Bas-konuş: 16 kHz, 16-bit PCM parçaları (≈200 ms)
+// ---------------------------- 5) MİKROFON ----------------------------------
+// Bas-konuş: 16 kHz, 16-bit PCM parçaları (≈200 ms). Yalnızca partner varken
+// görünen küçük düğmeyle açılır; kamera/mikrofon hiçbir zaman kendiliğinden
+// başlamaz.
 const MIC = { ctx: null, node: null, stream: null, timer: null, buf: [] };
 function micTalk(on) {
-  const say = document.querySelector('#camN .say');
+  const say = document.querySelector('#mpSay .say');
   if (!on) { micStop(); return; }
   if (MIC.ctx) return;
   if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return;
@@ -8677,11 +8947,11 @@ function micTalk(on) {
 }
 function micStop() {
   if (MIC.timer) { clearInterval(MIC.timer); MIC.timer = null; }
-  if (MIC.node) { try { MIC.node.disconnect(); } catch (e) {} MIC.node = null; }
-  if (MIC.stream) { MIC.stream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} }); MIC.stream = null; }
-  if (MIC.ctx) { try { MIC.ctx.close(); } catch (e) {} MIC.ctx = null; }
+  if (MIC.node) { try { MIC.node.disconnect(); } catch (e) { } MIC.node = null; }
+  if (MIC.stream) { MIC.stream.getTracks().forEach(t => { try { t.stop(); } catch (e) { } }); MIC.stream = null; }
+  if (MIC.ctx) { try { MIC.ctx.close(); } catch (e) { } MIC.ctx = null; }
   MIC.buf = [];
-  const say = document.querySelector('#camN .say');
+  const say = document.querySelector('#mpSay .say');
   if (say) say.textContent = '🎤 Basılı tut: konuş';
 }
 const MICPLAY = { ctx: null };
@@ -8689,7 +8959,7 @@ function mpPlayMic(b64) {
   try {
     if (!MICPLAY.ctx) { const AC = window.AudioContext || window.webkitAudioContext; MICPLAY.ctx = new AC(); }
     const ctx = MICPLAY.ctx;
-    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    if (ctx.state === 'suspended') ctx.resume().catch(() => { });
     const bin = atob(b64), n = bin.length >> 1;
     if (!n) return;
     const buf = ctx.createBuffer(1, n, 16000), ch = buf.getChannelData(0);
@@ -8702,19 +8972,20 @@ function mpPlayMic(b64) {
   } catch (e) { /* yok say */ }
 }
 
-// ---------------------------- 7) PAKETLER ----------------------------------
+// ---------------------------- 6) PAKETLER ----------------------------------
+// d = [x, y, z, yaw, hız, vites, gaz/fren, s, d]
 function mpSelfState() {
   const V = VEH;
   return [Math.round(V.x * 100) / 100, Math.round(V.y * 100) / 100, Math.round(V.z * 100) / 100,
     Math.round(V.yaw * 1000) / 1000, Math.round(Math.sqrt(V.vx * V.vx + V.vy * V.vy) * 100) / 100,
-    V.gear | 0, (V.throttle - V.brake) >= 0 ? 1 : -1];
+    V.gear | 0, (V.throttle - V.brake) >= 0 ? 1 : -1,
+    Math.round(V.s * 10) / 10, Math.round(V.d * 10) / 10];
 }
+let _frameNo = 0;
 function mpSendCar() {
-  if (!NET.opened) return;
-  const now = performance.now();
-  if (now - MP.sentAt < 50) return;                  // 20 Hz
-  if (UI.st !== ST.JOGO && UI.st !== ST.PAUSA && UI.st !== ST.RESULT && UI.st !== ST.FITA && UI.st !== ST.INICIO) return;
-  MP.sentAt = now;
+  if (!NET.live) return;
+  if ((++_frameNo % Math.max(1, Math.round(60 / MP_TICK_HZ))) !== 0) return;   // 20 Hz
+  if (typeof UI !== 'undefined' && UI.st !== ST.JOGO && UI.st !== ST.FITA) return;
   NET.json({ type: 'game_car', d: mpSelfState() });
 }
 function mpOnCar(d) {
@@ -8722,7 +8993,7 @@ function mpOnCar(d) {
   const T = MP.T;
   const jump = !MP.hasT || Math.abs(T.x - d[0]) + Math.abs(T.z - d[2]) > 30;
   T.x = +d[0] || 0; T.y = +d[1] || 0; T.z = +d[2] || 0; T.yaw = +d[3] || 0;
-  T.spd = +d[4] || 0; T.gear = +d[5] || 0; T.acc = +d[6] || 0;
+  T.spd = +d[4] || 0; T.gear = +d[5] || 0; T.acc = +d[6] || 0; T.s = +d[7] || 0; T.d = +d[8] || 0;
   if (jump) { MP.S.x = T.x; MP.S.y = T.y; MP.S.z = T.z; MP.S.yaw = T.yaw; MP.S.spd = T.spd; MP.hasT = true; }
   if (!MP.partnerOn) { MP.partnerOn = true; mpUiRefresh(); }
   MP.lastRxCarAt = performance.now();
@@ -8731,78 +9002,138 @@ function mpOnPacket(d) {
   if (!d || typeof d !== 'object') return;
   switch (d.type) {
     case 'game_hello':
-      // Kimlik URL'deki u= ile belirlenir ve DEĞİŞTİRİLMEZ: gelen paketin
-      // "from" alanı karşı tarafın kimliğidir, kendi kimliğimiz değil.
-      if (d.from === MP.userId) break;          // kendi yankımız (olmamalı) — yok say
+      if (d.from === MP.userId) break;          // kendi yankımız — yok say
       MP.partnerOn = true;
+      if (!MP.sentAt || MP.sentAt < 0) MP.sentAt = 0;
       mpUiRefresh();
       break;
     case 'game_car': mpOnCar(d.d); break;
     case 'game_bye': MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); break;
-    case 'game_cam_status':
-      if (d.on) { CAM.remoteReady = true; mpRemoteUi(); } else mpHideRemoteUi();
-      break;
-    case 'game_cam_frame':
-      if (typeof d.data === 'string' && d.data.indexOf('data:image/') === 0) {
-        const box = mpRemoteUi(), im = box.querySelector('img');
-        if (im) im.src = d.data;
-        CAM.remoteReady = true; CAM.remoteFrames++;
-        camMaybeRequest();
-      }
-      break;
-    case 'game_cam_req':
-      if (!CAM.ready && !CAM.want && camSupported()) camStart();
-      break;
+    case 'game_countdown': mpOnCountdown(d); break;
+    case 'game_start': mpOnStart(d); break;
     case 'game_mic':
       if (typeof d.data === 'string') mpPlayMic(d.data);
       break;
   }
 }
 function mpUiRefresh() {
-  const st = document.getElementById('camStat');
-  if (st) {
-    st.textContent = 'kameran: ' + (CAM.ready ? 'açık' : 'kapalı') + ' · ' +
-      (MP.partnerOn ? MP.partnerName + (CAM.remoteReady ? ' canlı' : ' oyunda') : 'bekleniyor…');
-  }
-  const on = document.getElementById('camOn'), off = document.getElementById('camOff');
-  if (on) on.classList.toggle('on', CAM.ready);
-  if (off) off.classList.toggle('on', !CAM.ready);
+  const st = document.getElementById('mpStat');
+  if (st) st.textContent = MP.partnerOn ? MP.partnerName + ' oyunda · arabası pistte' : 'bekleniyor… (sevgilin de oyunu açmalı)';
+  const say = document.getElementById('mpSay');
+  if (say) say.style.display = MP.partnerOn ? 'block' : 'none';
+}
+
+// ---------------------------- 7) EŞZAMANLI BAŞLANGIÇ -----------------------
+// İki telefonda da "Başla"ya basılınca oyun YEREL olarak beklemeden başlarsa
+// start çizgisinden birkaç saniye farkla kalkılır ve tur süreleri
+// karşılaştırılamaz. Bu bölüm ortak bir başlangıç saati kurar:
+//   • "Başla"ya basan, diğerine game_countdown gönderir (3 saniyelik geri sayım),
+//   • geri sayım bitince yerel saatte T0 = now + 3 sn (her iki tarafta eşit),
+//   • game_start T0'ı taşır; iki uç da aynı mutlak saate göre devam eder.
+const MPSTART = { at: 0, pending: false, timer: null, cdEnd: 0, cdStart: 0 };
+function mpUptime() { return performance.timeOrigin + performance.now(); }
+function mpServerOffset(at) {
+  // gönderen tarafın saati ile bizimki arasındaki farkı ağ gecikmesi kadar
+  // ("tek yön" ~= (güncel görünen gidiş dönüş / 2)) eşitle
+  const now = mpUptime(), skew = (at - now) - (MP.clock.midLag || 0);
+  if (MP.clock.offset === 0 || Math.abs(skew) > 2000) MP.clock.offset = skew;
+  return skew;
+}
+MP.clock = { offset: 0, midLag: 0 };
+function mpLocalFromServer(at) { return at - MP.clock.offset; }
+function mpArmStart() {
+  // yerel geri sayım çizildi mi ve bitti mi?
+  if (!MPSTART.pending) return;
+  if (mpUptime() < MPSTART.at) return;
+  MPSTART.pending = false;
+  try { uiDrive(); } catch (e) { console.warn('[uno-mp] yarış başlatılamadı', e); }
+}
+function mpOnCountdown(d) {
+  const at = +d.at || 0;
+  if (!at) return;
+  mpServerOffset(at);
+  const local = mpLocalFromServer(at);
+  if (local <= mpUptime()) { mpOnStart(d); return; }
+  MPSTART.at = local; MPSTART.pending = true;
+  mpUiRefresh();
+}
+function mpOnStart(d) {
+  const at = +d.at || 0;
+  if (at) mpServerOffset(at);
+  if (at) MPSTART.at = mpLocalFromServer(at);
+  mpArmStart();
+}
+// "Başla" düğmesi oyunda basıldığında 52_ui.js tarafından çağrılır.
+// Dönüş: true = geri sayım kuruldu (oyun beklemeli), false = kurulamadı.
+function mpAnnounceStart() {
+  if (!NET.live) { MPSTART.pending = false; return false; }
+  const at = mpUptime() + MP_COUNTDOWN * 1000 + 400;    // paketin gidişi için pay
+  NET.json({ type: 'game_countdown', game: GAME_ID, at: Math.round(at), from: MP.userId });
+  MPSTART.at = mpLocalFromServer(at);
+  MPSTART.pending = true;
+  return true;
 }
 
 // ---------------------------- 8) DÖNGÜ KANCALARI ---------------------------
-// Oyunun kendi fonksiyonlarına doğrudan kanca atılır (45_game.js ve 52_ui.js
-// içinde `MP_...` çağrıları vardır). Hooks kayıp/yoksa da oyun çalışır.
-function mpInstallHooks() {
-  MP.hooked = true;
+// Partner arabasını, ağdan ilk konum gelmeden de start çizgisinde göster
+// (ikiniz de aynı anda giriyorsanız birbirinizi hemen görürsünüz).
+function mpSeedPartnerAtGrid() {
+  if (MP.hasT || !MP.carReady || typeof VEH === 'undefined') return;
+  try {
+    const V = VEH, T = MP.T;
+    T.x = MP.S.x = V.x; T.y = MP.S.y = V.y; T.z = MP.S.z = V.z; T.yaw = MP.S.yaw = V.yaw;
+    T.spd = MP.S.spd = 0; MP.hasT = true;
+    mpBeginFrame();
+  } catch (e) { /* yok say */ }
 }
 function mpNetHousekeeping() {
   const now = performance.now();
+  if (MP.partnerOn && !MP.hasT && now - MP.bootAt > 1500) mpSeedPartnerAtGrid();
   if (!NET.opened && MP.retryAt && now >= MP.retryAt) { MP.retryAt = 0; NET.connect(); }
-  // partner uzun süre paket göndermediyse kaybolsun (60 sn)
-  if (MP.hasT && MP.partnerOn && now - MP.lastRxCarAt > 60000) { MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); }
-  camMaybeRequest();
+  // partner uzun süre paket göndermediyse kaybolsun (30 sn)
+  if (MP.hasT && MP.partnerOn && now - MP.lastRxCarAt > 30000) { MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); }
+  if (MPSTART.pending) mpArmStart();
 }
 
 function mpBoot() {
   mpResolveUser();
+  MP.bootAt = performance.now();
   mpSoundInit();
-  camInit();
-  mpInstallHooks();
+  mpBuildPartnerCar();
+  mpPaintMine();
+  // Kabuktan gelen partner paketleri (önceden hiç bağlanmamıştı: partnerin
+  // arabası ve geri sayım hiç ulaşmıyordu).
+  try { if (MPSHARE && MPSHARE.on) MPSHARE.on((d) => mpOnPacket(d)); } catch (e) { /* yok say */ }
+  // Bağlantı durumu: kabuk soketi açılırsa oyunun kendi soketi kapatılır (tek
+  // bağlantı); kabuk düşerse kendi yedeğimiz açılır.
+  try {
+    if (MPSHARE && typeof MPSHARE.onState === 'function') MPSHARE.onState((open) => {
+      if (open) {
+        if (NET.ws) { NET.close(); }
+        NET.opened = false;
+        MP.retryAt = 0;
+        NET.json({ type: 'game_hello', game: GAME_ID });   // yeni bağlantıda kendimizi tanıt
+      } else if (!NET.ws) {
+        NET.closedByUser = false; MP.retryAt = 0;
+        NET._probed = true;                                 // artık köprü yanıt vermiyor
+        NET._openOwn();
+      }
+      mpUiRefresh();
+    });
+  } catch (e) { /* yok say */ }
   NET.connect();
-  try { if (/[?&]cam=1/i.test(location.search || '') && camSupported()) setTimeout(camStart, 1500); } catch (e) {}
 }
-BUILD.push(async () => { try { mpBuildPartnerCar(); } catch (e) {} try { mpBoot(); } catch (e) { console.warn('[uno-mp] başlatılamadı', e); } });
+BUILD.push(async () => { try { mpBuildPartnerCar(); } catch (e) { } try { mpBoot(); } catch (e) { console.warn('[uno-mp] başlatılamadı', e); } });
 // Teşhis: konsoldan window.__mp ile çok oyunculu durumu inceleyebilirsin
 try {
   window.__mp = {
-    net: NET, mp: MP, cam: CAM, snd: MPSND,
+    net: NET, mp: MP, snd: MPSND,
     state() {
       return {
         userId: MP.userId, partnerName: MP.partnerName,
-        wsOpen: NET.opened, wsState: NET.ws ? NET.ws.readyState : -1,
+        wsOpen: NET.opened || (MPSHARE ? MPSHARE.open() : false), wsState: NET.ws ? NET.ws.readyState : -1,
+        viaShell: !!(MPSHARE && MPSHARE.open()),
         partnerOn: MP.partnerOn, partnerCar: MP.carReady, hasPartnerPos: MP.hasT,
-        camMine: CAM.ready, camPartner: CAM.remoteReady,
-        framesSent: CAM.frames, framesGot: CAM.remoteFrames,
         partner: { x: +(MP.S.x || 0).toFixed(1), z: +(MP.S.z || 0).toFixed(1) },
         me: { x: +(VEH.x || 0).toFixed(1), z: +(VEH.z || 0).toFixed(1) }
       };
@@ -8868,13 +9199,13 @@ function mobSync() {
 
 // ---------------------------- 2) BOYUT -------------------------------------
 // Yön değişince çizim hedeflerini yeniden kur. Sahne henüz kurulmadıysa istek
-// saklanır ve main() bittiğinde uygulanır.
+// saklanır ve main() bittiğinde uygulanır. Boyut screenSize() ile hesaplanır:
+// mobilitte uzun kenar sınırlıdır (bkz. 01_gpu.js) — eskiden burada DPR 2 ile
+// tam ekran çözünürlüğü isteniyordu ve GPU belleği yetmiyordu.
 function mobResize() {
   if (typeof G === 'undefined' || !G.dev) return;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  let W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
-  W = Math.min(Math.max(W & ~1, 320), 5120);
-  H = Math.min(Math.max(H & ~1, 180), 2880);
+  if (typeof screenSize !== 'function') return;
+  const s = screenSize(), W = s[0], H = s[1];
   if (W === MOB.lastW && H === MOB.lastH) return;
   MOB.lastW = W; MOB.lastH = H;
   if (!MOB.ready || typeof rendererResize !== 'function') { MOB.pending = true; return; }
@@ -8961,6 +9292,14 @@ function mobHookKeyboard() {
   } catch (e) { /* yok say */ }
 }
 
+// Arkadaşının motorunu duyabilmek için ses bağlamını ilk dokunuşta aç
+// (tarayıcı/WebView kuralları: kullanıcı hareketi olmadan ses başlamaz).
+function mobUnlockAudio() {
+  try { if (typeof mpSoundInit === 'function') mpSoundInit(); } catch (e) { /* yok say */ }
+  const C = window.__mp && window.__mp.snd && window.__mp.snd.ctx;
+  if (C && C.state === 'suspended') C.resume().catch(() => { });
+}
+
 function mobBoot() {
   MOB.touch = mobIsTouch();
   if (MOB.touch) {
@@ -8972,6 +9311,34 @@ function mobBoot() {
   }
   addEventListener('resize', () => mobSync());
   addEventListener('orientationchange', () => setTimeout(mobSync, 250));
+  // Tam ekran: iframe içinde tek dokunuşla tam ekrana geçilemez; üstteki
+  // Ahududu kabuğu (GamePlayer) oyun açılırken bunu kendisi yapıyor. Yine de
+  // kullanıcı bir yere dokunduğunda tarayıcı tam ekranına izin veriliyorsa
+  // denenir (hata sessizce yutulur).
+  if (MOB.touch) {
+    const once = () => { mobUnlockAudio(); mobTryFullscreen(); removeEventListener('pointerdown', once); };
+    addEventListener('pointerdown', once, { passive: true });
+  }
+}
+// Telefonda tarayıcı çubuklarını da gizlemek için tam ekran dene (yalnızca
+// kullanıcı hareketiyle; iOS Safari desteklemiyor, sorun değil — iframe zaten
+// tam ekran boyutunda). Ahududu kabuğunun içindeyken tam ekranı kabuk yapar:
+// oyun iframe'inin kendisi tam ekran isteyemez, bu yüzden köprüye sorulur.
+function mobTryFullscreen() {
+  try {
+    if (typeof MPSHARE !== 'undefined' && MPSHARE && MPSHARE.present && MPSHARE.present()) {
+      if (MPSHARE.fullscreen) MPSHARE.fullscreen();
+      return;
+    }
+    if (document.fullscreenElement) return;
+    const el = document.documentElement;
+    const r = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!r) return;
+    const p = r.call(el, { navigationUI: 'hide' });
+    if (p && p.catch) p.catch(() => { });
+    // tam ekranda yatay kilidi tekrar dene
+    setTimeout(mobLockLandscape, 300);
+  } catch (e) { /* yok say */ }
 }
 
 // Sahne kurulduktan sonra ölçümü uygula ve yön ekranını tazele
@@ -8997,6 +9364,145 @@ try {
     lights() { const s = []; for (const [k, b] of [['K_W', K_W], ['K_S', K_S], ['K_A', K_A], ['K_D', K_D], ['K_SPACE', K_SPACE]]) if (GS.held & b) s.push(k); return s; },
     cam() { return { pos: Array.from(R.cam.pos), fov: +R.cam.fovy.toFixed(3) }; }
   };
+} catch (e) { /* yok say */ }
+
+// ---- 58_perf_auto.js
+// ============================================================================
+// UYARLANABİLİR PERFORMANS — telefonda düşük FPS'e karşı otomatik önlemler
+// ----------------------------------------------------------------------------
+// Sorun: oyun telefonda uzun kenarı 1600 piksele kadar çiziyor, 3 katman gölge
+// + 2 küp harita yüzü + TAA + hareket bulanıklığı + tam kalite çim ve ağaç
+// çalıştırıyor. Güçlü bir masaüstünde sorun değil; orta seviye bir telefonda
+// kare başına 30-50 ms demek (20-30 FPS).
+//
+// Çözüm üç katmanlı:
+//   1) KARE TEMPOSU: ekran 90/120 Hz olsa da oyun 60 FPS'ye kilitlenir
+//      (GAME.minFrameMs). GPU'yu boşuna iki kat doldurmak telefonda ısı ve
+//      pil demekti; kare bütçesi de ikiye katlanır → FPS düşmez.
+//   2) OTURUM İÇİ ÖLÇEK: son 90 karenin medyan süresine bakılır. 21 ms'in
+//      üstündeyse çizim çözünürlüğü bir kademe (×0.82) düşürülür, 15 ms'in
+//      altına inip uzun süre orada kalırsa bir kademe geri alınır. Hedeflenen
+//      aralık 16-21 ms (≈48-60 FPS). Ölçek localStorage'da saklanır: bir
+//      sonraki açılış düşük çözünürlükle başlar (ısınma/açılış düşüşü olmaz).
+//   3) YAPISAL HAFİFLETME: çözünürlük en dibe indiyse ve kare hâlâ yavaşsa
+//      pahalı sistemler tek tek kapanır: yansıma haritası seyreltilir →
+//      gölge katman sayısı 3'ten 2'ye → bitki örtüsü menzili kısalır.
+//      (Hareket bulanıklığı telefonda BAŞTAN kapalıdır: bkz. 20_renderer.js.)
+//
+// Hiçbir şey zorla "grafikler çirkin" olmaya başlamaz: kararlar ölçüme dayanır
+// ve masaüstünde (?detay=1 ya da dokunmatik olmayan) hiç uygulanmaz.
+// ?sabit=1 ile otomatik ayar kapatılabilir (teşhis/ölçüm için).
+// ============================================================================
+const AUTOP = {
+  on: false, step: 0,            // 0..SMAX çözünürlük kademesi
+  hist: new Float32Array(90), hn: 0, hIdx: 0, last: 0, cooldown: 0,
+  base: 1,                       // başlangıç ölçeği (kaydedilmiş)
+  structural: 0,                 // 0 yok, 1 mb kapat, 2 küp seyrelt, 3 gölge azalt
+  reasons: [], fps: 0, median: 0
+};
+const AUTOP_SMAX = 3;            // en alt kademe: 0.56 kat
+const AUTOP_LEVELS = [1, 0.82, 0.68, 0.56];
+
+function autopInit() {
+  // Dokunmatik cihazlar (telefon/tablet) ve mobil algılanan cihazlar: canlı
+  // oyun (menü/capture/ölçüm değil), otomatik ayar açık.
+  if (typeof G === 'undefined') return;
+  const touch = (() => { try { return (navigator.maxTouchPoints || 0) > 0; } catch (e) { return false; } })();
+  if (!G.mobile && !touch) return;
+  if (typeof Q !== 'undefined' && (Q.has('sabit') || Q.has('res') || Q.has('cap') || Q.has('scene'))) return;
+  AUTOP.on = true;
+  // 1) kare temposu: 60 FPS'ye kilitle (ekran 120 Hz olsa da)
+  if (typeof GAME !== 'undefined' && !(GAME.minFrameMs > 0)) GAME.minFrameMs = 14.6;
+  applyAutopScale(G.resScale || 1, true);
+}
+
+// Kaydedilmiş/yeni ölçeği uygula. İlk kurulumda hedefler henüz yoktur:
+// sadece değer saklanır, ilk rendererInit doğru boyutta kurulur.
+function applyAutopScale(s, initial) {
+  G.resScale = s;
+  if (initial) return;
+  resScaleSet(s);
+  const sz = screenSize();
+  try { if (typeof rendererResize === 'function') rendererResize(sz[0], sz[1]); } catch (e) { console.warn('[autop] yeniden boyut:', e); }
+}
+
+function autopFrame(t) {
+  if (!AUTOP.on) return;
+  const now = t;
+  if (!AUTOP.last) { AUTOP.last = now; return; }
+  const dt = now - AUTOP.last;
+  AUTOP.last = now;
+  if (dt > 300 || dt <= 0) return;             // sekme arka planda / kare atlandı
+  AUTOP.hist[AUTOP.hIdx] = dt;
+  AUTOP.hIdx = (AUTOP.hIdx + 1) % AUTOP.hist.length;
+  if (AUTOP.hn < AUTOP.hist.length) AUTOP.hn++;
+  if (AUTOP.hn < AUTOP.hist.length) return;
+  // medyan: tempo sapmalarına karşı ortalama değil medyan kullanılır
+  const a = Array.prototype.slice.call(AUTOP.hist);
+  a.sort((p, q) => p - q);
+  const med = a[a.length >> 1];
+  AUTOP.median = med; AUTOP.fps = 1000 / med;
+  if (now < AUTOP.cooldown) return;
+  // 21 ms üstü: kare bütçesi aşılıyor → hafiflet
+  if (med > 21) {
+    if (AUTOP.step < AUTOP_SMAX) {
+      AUTOP.step++;
+      applyAutopScale(AUTOP_LEVELS[AUTOP.step], false);
+      AUTOP.reasons.push('ölçek ' + AUTOP_LEVELS[AUTOP.step].toFixed(2) + ' (' + Math.round(med) + ' ms)');
+      AUTOP.hn = 0; AUTOP.hIdx = 0;
+      AUTOP.cooldown = now + 4000;
+      return;
+    }
+    if (AUTOP.structural < 3) { autopLoosen(); AUTOP.cooldown = now + 2500; return; }
+  }
+  // uzun süre 15 ms altı: kaliteyi bir kademe geri ver
+  if (med < 15 && AUTOP.step > 0) {
+    if (AUTOP.structural > 0) { autopTighten(); AUTOP.cooldown = now + 6000; return; }
+    AUTOP.step--;
+    applyAutopScale(AUTOP_LEVELS[AUTOP.step], false);
+    AUTOP.reasons.push('ölçek geri ' + AUTOP_LEVELS[AUTOP.step].toFixed(2));
+    AUTOP.hn = 0; AUTOP.hIdx = 0;
+    AUTOP.cooldown = now + 15000;               // osilasyon olmasın
+  }
+}
+
+// yapısal hafifletme: pahalı sistemleri sırayla kapat
+function autopLoosen() {
+  AUTOP.structural++;
+  try {
+    if (AUTOP.structural === 1) {
+      // Yansıma haritası (küp) her 3 karede bir güncellensin: kare başına
+      // 2 yüz → ~0.7 yüz. İlk en ucuz kazanç.
+      R.cubeEveryN = 3;
+      AUTOP.reasons.push('yansıma seyrek');
+    } else if (AUTOP.structural === 2) {
+      // Gölge: 3 katman yerine 2 katman çizilir (en uzak katman donar).
+      R.shadowCascades = 2;
+      AUTOP.reasons.push('gölge 2 katman');
+    } else if (AUTOP.structural === 3) {
+      // Ağaç malzeme menzili ve çim menzili daha da kısalır.
+      if (typeof VEG !== 'undefined' && VEG.mobileS) VEG.mobileS = 0.62;
+      if (typeof GRASS !== 'undefined' && GRASS.mobileRange) GRASS.mobileRange = 0.6;
+      AUTOP.reasons.push('bitki örtüsü menzili kısa');
+    }
+  } catch (e) { /* yok say */ }
+}
+function autopTighten() {
+  AUTOP.structural--;
+  try {
+    if (AUTOP.structural === 2) { if (typeof GRASS !== 'undefined' && GRASS.mobileRange) GRASS.mobileRange = 0.78; if (typeof VEG !== 'undefined' && VEG.mobileS) VEG.mobileS = 0.8; AUTOP.reasons.push('bitki menzili normal'); }
+    else if (AUTOP.structural === 1) { R.shadowCascades = 3; AUTOP.reasons.push('gölge 3 katman'); }
+    else if (AUTOP.structural === 0) { R.cubeEveryN = 1; AUTOP.reasons.push('yansıma sık'); }
+  } catch (e) { /* yok say */ }
+}
+
+// Teşhis: konsoldan window.__perf() ile bakılabilir
+try {
+  window.__perf = () => ({
+    auto: AUTOP.on, fps: Math.round(AUTOP.fps), ms: Math.round(AUTOP.median),
+    scale: +((G.resScale || 1).toFixed(2)), step: AUTOP.step, structural: AUTOP.structural,
+    W: G.W, H: G.H, minFrameMs: GAME.minFrameMs, reasons: AUTOP.reasons.slice(-8)
+  });
 } catch (e) { /* yok say */ }
 
 // ---- 90_main.js
@@ -9067,6 +9573,9 @@ async function main() {
     }
     for (let i = 0; i < 8; i++) renderFrame();
     R.cam.first = true;
+    // Mobilde çizim çözünürlüğü ilk ölçümden sonra kare süresine göre
+    // ayarlanır (58_perf_auto.js). Masaüstünde hiçbir şey değişmez.
+    if (typeof autopInit === 'function') { try { autopInit(); } catch (e) { console.warn('[autop]', e); } }
     setMsg(''); const hint = document.getElementById('hint'); if (hint) setTimeout(() => { hint.style.opacity = 0; }, 9000);
     if (GAME.ui) uiInit();
     GAME.ready = true;
@@ -9075,6 +9584,12 @@ async function main() {
 }
 let _lastT = 0;
 function rafLoop(t) {
+  // Uyarlanabilir çözünürlük: gerçek kare süresini izle (menüde/hatalı karede
+  // sayılmaz). Ölçüm menü kararından ÖNCE yapılır.
+  if (typeof autopFrame === 'function' && !R.resizing && R.tex) { try { autopFrame(t); } catch (e) { /* yok say */ } }
+  // Yeniden boyutlandırma sürüyor: eski dokular silinmeden önce GPU kuyruğu
+  // boşalana kadar çizme (yoksa "destroyed texture used in submit" → siyah ekran).
+  if (R.resizing || !R.tex) { _lastT = 0; requestAnimationFrame(rafLoop); return; }
   if (GAME.minFrameMs > 0 && _lastT && t - _lastT < GAME.minFrameMs) { requestAnimationFrame(rafLoop); return; }   // cadência de 60 Hz em monitor mais rápido
   if (GAME.ui && uiFrame()) { _lastT = 0; requestAnimationFrame(rafLoop); return; }   // menu aberto: o jogo e o som ficam parados e nada é renderizado
   let dt = _lastT ? (t - _lastT) / 1000 : 1 / 60; RT[3] = dt * 1000; if (dt > 0.05) dt = 0.05; _lastT = t;

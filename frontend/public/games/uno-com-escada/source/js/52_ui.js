@@ -2,13 +2,27 @@
 // poses, teclas de ferramenta e leitura do controle. Nas ferramentas de trabalho/ (captura, poses, teste, medição) nada
 // disto é ligado: sem menu, sem painel, sem som.
 const ST = { INICIO: 0, JOGO: 1, PAUSA: 2, BENCH: 3, FITA: 4, RESULT: 5, POSE: 6 };
-const UI = { st: ST.INICIO, back: ST.JOGO, el: null, tag: null, res: null, b0: null, b1: null, bench: null, benchN: 0, padPrev: 0, padN: 0, pose: -1, stats: false, warm: false };
+const UI = { st: ST.INICIO, back: ST.JOGO, el: null, tag: null, res: null, b0: null, b1: null, bench: null, benchN: 0, padPrev: 0, padN: 0, pose: -1, stats: false, warm: false, countdown: false, countdownTimer: null };
 const $ = id => document.getElementById(id);
 function uiInit() {
   UI.el = $('ui'); UI.tag = $('tag'); UI.res = $('res'); UI.b0 = $('b0'); UI.b1 = $('b1');
   hudInit(); uiWarmup();
   try { const b = +localStorage.getItem('uno-melhor'); if (b > 20 && b < 600) LAP[2] = b; } catch (e) { /* sem armazenamento local: a melhor volta vale só nesta sessão */ }
-  UI.b0.onclick = () => { if (UI.st === ST.INICIO) { sndStart(); uiSet(ST.JOGO); } else uiResume(); };
+  UI.b0.onclick = () => {
+    if (UI.st === ST.INICIO) {
+      sndStart();
+      // Çift oynanıyorsa: ikinizin de aynı anda kalkması için ortak başlangıç
+      // saati duyurulur (3-2-1 geri sayım). Ağ yoksa hemen başlar.
+      if (typeof mpAnnounceStart === 'function' && typeof NET !== 'undefined' && NET.live) {
+        let armed = false;
+        try { armed = mpAnnounceStart() !== false; } catch (e) { console.warn('[ui] geri sayım:', e); }
+        if (armed) { uiCountdown(); return; }
+        uiSet(ST.JOGO);
+        return;
+      }
+      uiSet(ST.JOGO);
+    } else uiResume();
+  };
   UI.b1.onclick = () => benchStart();
   addEventListener('keydown', uiKey);
   document.addEventListener('visibilitychange', () => { if (document.hidden && (UI.st === ST.JOGO || UI.st === ST.FITA || UI.st === ST.BENCH)) uiPause(); });
@@ -32,7 +46,32 @@ function uiSet(st) {
   if (menu) UI.b0.focus(); else UI.b0.blur();
   _lastT = 0;
 }
-function uiPause() { if (UI.st === ST.BENCH) benchStop(); UI.back = UI.st === ST.FITA ? ST.FITA : ST.JOGO; uiSet(ST.PAUSA); }
+// ---- çift oynanıyor: ortak başlangıç geri sayımı (3-2-1) ----
+// İki telefonda da aynı anda çalışır; süre bitince uiDrive() ile ikisi birlikte
+// start çizgisinden kalkar (bkz. 55_multiplayer.js mpArmStart).
+// Geri sayım çubukları amaçlanan saniyelerde geçsin diye son adım uygun süreyle
+// planlanır (her karede requestAnimationFrame ile yoklanmaz).
+function uiCountdown() {
+  UI.countdown = true; UI.back = ST.JOGO;
+  uiSet(ST.PAUSA);
+  UI.b0.textContent = 'Hazır ol…';
+  UI.b0.disabled = true;
+  const tick = () => {
+    if (!UI.countdown || UI.countdownTimer) return;
+    const n = typeof MPSTART !== 'undefined' ? MPSTART.at : 0;
+    const kalan = n ? (n - (performance.timeOrigin + performance.now())) / 1000 : 0;
+    if (kalan <= 0.05) {
+      UI.b0.disabled = false; UI.countdown = false; UI.countdownTimer = null;
+      UI.b0.textContent = 'Hazır ol…';
+      return;
+    }
+    UI.b0.textContent = kalan > 2 ? '3…' : kalan > 1 ? '2…' : '1…';
+    const sonrakiBayrak = kalan > 2 ? 2 : kalan > 1 ? 1 : 0.05;
+    UI.countdownTimer = setTimeout(() => { UI.countdownTimer = null; tick(); }, Math.max(16, (kalan - sonrakiBayrak) * 1000 + 8));
+  };
+  tick();
+}
+function uiPause() { UI.countdown = false; if (UI.countdownTimer) { clearTimeout(UI.countdownTimer); UI.countdownTimer = null; } if (UI.st === ST.BENCH) benchStop(); UI.b0.disabled = false; UI.back = UI.st === ST.FITA ? ST.FITA : ST.JOGO; uiSet(ST.PAUSA); }
 function uiResume() {
   if (UI.st === ST.RESULT || UI.st === ST.POSE) uiDrive(); else if (UI.st === ST.PAUSA) uiSet(UI.back);
 }

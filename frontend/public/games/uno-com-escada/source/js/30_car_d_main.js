@@ -20,12 +20,27 @@ const CAR = {
     }
     if (typeof carBuildSteer === 'function') { const s = new MeshBuilder(1 << 12); carBuildSteer(s); CAR.tris += s.ni / 3; set.add(s.upload(), CAR.slotSteer, 3); }
     const tex = typeof carAtlas === 'function' ? carAtlas() : mkTex(4, 4, 'rgba8unorm-srgb');
-    // desenhável: liga o atlas (grupo 3) e não entra no mapa de sombras estático do mundo
-    R.drawables.push({ draw(pass, ctx) {
+    // desenhável: liga o atlas (grupo 3) ve não entra no mapa de sombras estático do mundo
+    const drawable = { draw(pass, ctx) {
+      // Çok oyunculu partner arabası (55_multiplayer.js) ÇOK ÖNEMLİ:
+      // partner arabası için kendi nesneleri kullanılır. Bu yüzden burada
+      // partnerin meshleri CAR.set'ten ÇIKARILIR. Eski sürüm aynı MeshSet'i
+      // iki kez tarıyordu: aynı meshler kendi arabanın matrisiyle ikinci kez
+      // (üst üste) çiziliyor, gölge geçişinde ise bind grubu kurulmadan çizim
+      // yapıldığı için "No bind group set at group index 3" hatası alınıyor ve
+      // KOMUT TAMPONU GEÇERSİZ oluyordu → ekranda eski kare donuyordu.
       if (ctx.kind === KIND.SHADOW && ctx.cascade === 3) return;
       if (!CAR.atlasBG) { if (!fam.bgl3) return; CAR.atlasBG = G.dev.createBindGroup({ layout: fam.bgl3, entries: [{ binding: 0, resource: tex.createView() }] }); }
+      glass.bind = null;                    // vidros: sempre o carro local (a cópia do parceiro define o próprio)
       pass.setBindGroup(3, CAR.atlasBG); set.draw(pass, ctx);
-    } });
+    } };
+    // Origem do mundo: o mapa de sombras ESTÁTICO (renderStaticShadow) percorre
+    // R.drawables. Mundo çizilsin, ama bu (araba) çizilmesin: o mapa estático
+    // kameranın ilk durumuna göre çizilir ve araba sonradan taşınır; arabayı
+    // oraya çizmek onu yanlış yerde donmuş gölgeyle bırakıyordu. Ayrıca atlas
+    // bağı olmadan çizim, bazı GPU'larda tüm komut tamponunu geçersiz kılıyordu.
+    drawable.worldOnly = true;
+    R.drawables.push(drawable);
     R.transparents.push(glass);
     m4ident(CAR._t); CAR.place(CAR._t, CAR._z4, CAR._z4); CAR.place(CAR._t, CAR._z4, CAR._z4);
   },

@@ -12,13 +12,14 @@ function perfInit() {
   PERF.raf = new Float32Array(PERF.cap); PERF.cpu = new Float32Array(PERF.cap); PERF.gpu = new Float32Array(PERF.cap); PERF.span = new Float32Array(PERF.cap);   // o tempo de quadro é gravado mesmo sem tempo de GPU
   if (!G.hasTS) return;
   const dev = G.dev, D = R.pd, list = [];
-  const add = (name, descs) => { const i = list.length; list.push(name); for (const d of descs) d.timestampWrites = { querySet: null, beginningOfPassWriteIndex: i * 2, endOfPassWriteIndex: i * 2 + 1 }; PERF._d.push(...descs); };
+  // Hareket bulanıklığı kapalıyken (mobilde varsayılan) o geçişlerin tanımları yoktur: yalnızca VAR OLAN geçişler ölçülür.
+  const add = (name, descs) => { const ds = (descs || []).filter(Boolean); if (!ds.length) return; const i = list.length; list.push(name); for (const d of ds) d.timestampWrites = { querySet: null, beginningOfPassWriteIndex: i * 2, endOfPassWriteIndex: i * 2 + 1 }; PERF._d.push(...ds); };
   PERF._d = [];
   add('shadow0', [D.shadow[0]]); add('shadow1', [D.shadow[1]]); add('shadow2', [D.shadow[2]]); add('cube', D.cube);
-  for (let m = 1; m <= ENV_MIPS; m++) add('envMip' + m, D.envMip.map(f => f[m]));
+  for (let m = 1; m <= ENV_MIPS; m++) add('envMip' + m, (D.envMip || []).map(f => f[m]));
   add('gbuf', [D.gbuf]); add('decal', [D.decal]); add('half', [D.half]); add('blurH', [D.blurH]); add('blurV', [D.blurV]); add('light', [D.light]); add('trans', [D.trans]);
   add('taa', D.taa); add('mbTile', [D.mbTile]); add('mbNeigh', [D.mbNeigh]); add('mblur', [D.mb]);
-  D.blDown.forEach((d, i) => add('blDown' + i, [d])); D.blUp.forEach((d, i) => add('blUp' + i, [d])); add('expo', D.expo); add('final', [D.final]);
+  D.blDown.forEach((d, i) => add('blDown' + i, [d])); D.blUp.forEach((d, i) => add('blUp' + i, [d])); add('expo', [D.expo]); add('final', [D.final]);
   PERF.names = list; PERF.n = list.length;
   PERF.qs = dev.createQuerySet({ type: 'timestamp', count: PERF.n * 2 });
   for (const d of PERF._d) d.timestampWrites.querySet = PERF.qs;

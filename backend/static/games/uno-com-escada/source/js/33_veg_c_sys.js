@@ -132,8 +132,13 @@ function vegPlace() {
 }
 
 function vegBakeImpostors(cpu) {
-  const dev = G.dev, S = 512, layers = VEG_NT * 8, V = VEG;
-  const mips = 8;
+  // İmpostor atlası: 2 × 512² × 48 katman + mip'ler ~128 MB GPU belleği.
+  // Telefonda bu, siyah ekran sınırına en çok yaklaştıran doku. Mobilde
+  // 256² ve daha az mip ile aynı görünüm korunur (ekranda her ağaç birkaç
+  // düzine piksel), bellek 1/4'e iner.
+  const MOBETA = typeof G !== 'undefined' && G.mobile;
+  const dev = G.dev, S = MOBETA ? 256 : 512, layers = VEG_NT * 8, V = VEG;
+  const mips = MOBETA ? 7 : 8;
   V.texA = dev.createTexture({ size: [S, S, layers], format: 'rgba8unorm-srgb', usage: TU.RT | TU.TB, mipLevelCount: mips });
   V.texN = dev.createTexture({ size: [S, S, layers], format: 'rgba8unorm', usage: TU.RT | TU.TB, mipLevelCount: mips });
   const msA = dev.createTexture({ size: [S, S], format: 'rgba8unorm-srgb', usage: TU.RT, sampleCount: 4 }), msN = dev.createTexture({ size: [S, S], format: 'rgba8unorm', usage: TU.RT, sampleCount: 4 });
@@ -180,15 +185,18 @@ const vegDrawable = {
     if (kind === KIND.GBUF) { st.meshDraws = 0; st.impDraws = 0; st.meshInst = 0; st.meshTris = 0; st.leafDraws = 0; st.leafInst = 0; st.leafTris = 0; }
     // LOD por tamanho na tela: com lente longa (câmera de TV) as distâncias de troca crescem na mesma proporção do zoom
     let zoom = Math.tan(R.cam.fovy * 0.5) * 2; zoom = zoom < 0.3 ? 0.3 : zoom > 1.25 ? 1.25 : zoom; V.zoom = zoom;
+    // MOBİL: ağaç örneklerinin çizim yarıçapı küçülür (grafiksel olarak fark
+    // edilmez, çok sayıda çizim çağrısı ve köşe gölgelendiricisi işi azalır).
+    const MR = V.mobileS ? V.mobileS : 1;
     // --- malhas (perto) ---
     const pm = V.famTree.pipe[kind];
     if (pm && V.onMesh && (kind === KIND.GBUF || (shadow && ctx.cascade < 2))) {
       pass.setPipeline(pm); pass.setBindGroup(3, V.bgTree); pass.setVertexBuffer(1, V.instBuf);
       const ccx = Math.floor((camx - V.x0) / CELL), ccz = Math.floor((camz - V.z0) / CELL);
       // nas sombras só importam os lançadores perto da cascata: alcance menor (menos vértices processados)
-      let rng = (shadow ? 96 : 114) / zoom; if (rng > 620) rng = 620; const rc = ((rng / CELL) | 0) + 1, rng2 = rng * rng;
+      let rng = (shadow ? 96 : 114) / zoom * MR; if (rng > 620) rng = 620; const rc = ((rng / CELL) | 0) + 1, rng2 = rng * rng;
       for (let a = 0; a < NA; a++) {
-        let set = false; const ur = 82 / zoom, m = V.meshes[a], ru = a >= VEG_NT ? (ur < 620 ? ur : 620) : rng, ru2 = ru * ru;
+        let set = false; const ur = 82 / zoom * MR, m = V.meshes[a], ru = a >= VEG_NT ? (ur < 620 ? ur : 620) : rng, ru2 = ru * ru;
         for (let dz = -rc; dz <= rc; dz++) for (let dx = -rc; dx <= rc; dx++) {
           const cx = ccx + dx, cz = ccz + dz; if (cx < 0 || cz < 0 || cx >= NC || cz >= NC) continue;
           const c = cz * NC + cx, cnt = V.cellCount[c * NA + a]; if (!cnt) continue;
@@ -206,7 +214,7 @@ const vegDrawable = {
     const pl = V.famLeaf.pipe[kind];
     if (pl && V.onMesh && V.onLeaf && kind === KIND.GBUF) {
       pass.setPipeline(pl); pass.setVertexBuffer(1, V.instBuf);
-      let rl = 62 / zoom; if (rl > 230) rl = 230; const S16 = 16, rs = ((rl / S16) | 0) + 1, scx = Math.floor((camx - V.x0) / S16), scz = Math.floor((camz - V.z0) / S16), n16 = NC * 4;
+      let rl = 62 / zoom * MR; if (rl > 230) rl = 230; const S16 = 16, rs = ((rl / S16) | 0) + 1, scx = Math.floor((camx - V.x0) / S16), scz = Math.floor((camz - V.z0) / S16), n16 = NC * 4;
       for (let a = 0; a < VEG_NT; a++) {
         const m = V.leafMeshes[a]; if (!m) continue; let set = false;
         for (let dz = -rs; dz <= rs; dz++) for (let dx = -rs; dx <= rs; dx++) {
@@ -271,6 +279,10 @@ queueMicrotask(() => BUILD.push(async () => {
   V.bgTree = dev.createBindGroup({ layout: V.famTree.bgl3, entries: [{ binding: 0, resource: V.leafView }, { binding: 1, resource: V.sLeaf }] });
   V.bgImp = dev.createBindGroup({ layout: V.famImp.bgl3, entries: [{ binding: 0, resource: V.viewA }, { binding: 1, resource: V.viewN }, { binding: 2, resource: V.sImp }, { binding: 3, resource: { buffer: V.dimBuf } }] });
   vegPlace();
+  // MOBİL: ağaç/çalı çizim yarıçapları %20 kısılır. Bu yalnızca GPU işini
+  // (%35 daha az örnek) azaltır; ufuktaki ağaçlar impostor olarak kalır.
+  // Tek tek yaprak çizimi mobilde kapalıdır (kendi vertex+5 doku örneği).
+  if (typeof G !== 'undefined' && G.mobile && !(typeof Q !== 'undefined' && Q.has('detay'))) { V.mobileS = 0.8; V.onLeaf = false; }
   R.drawables.push(vegDrawable); R.veg = V;
   if (typeof grassBuild === 'function') grassBuild();
 }));

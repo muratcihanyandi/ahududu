@@ -498,6 +498,16 @@ export const App: React.FC = () => {
    * navigasyon barına yapışır. Diğer sekmeler kaydırılabilir sayfa olarak kalır.
    */
   const isChatTab = activeTab === 'chat';
+  /** Oyun açıkken arka plan kaydırılamasın (tam ekran deneyimi). */
+  const isGameOpen = Boolean(activeGame);
+  React.useEffect(() => {
+    if (!isGameOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [isGameOpen]);
 
   return (
     <div
@@ -507,7 +517,9 @@ export const App: React.FC = () => {
       style={
         isChatTab
           ? undefined
-          : { paddingBottom: 'calc(6rem + var(--safe-bottom, 0px))' }
+          : isGameOpen
+            ? { paddingBottom: 0 }
+            : { paddingBottom: 'calc(6rem + var(--safe-bottom, 0px))' }
       }
     >
       {/* Live Zero-Reinstall OTA Update Banner */}

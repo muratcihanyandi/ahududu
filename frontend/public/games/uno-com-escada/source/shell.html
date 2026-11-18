@@ -9,6 +9,9 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font:14px/1.4 -ap
 #c{position:absolute;inset:0;margin:auto;width:100vw;height:100vh;display:block;object-fit:contain;touch-action:none}
 #msg{position:absolute;left:0;right:0;top:45%;text-align:center;letter-spacing:.08em;white-space:pre-wrap;padding:0 6vw}
 #hint{position:absolute;left:14px;bottom:calc(10px + env(safe-area-inset-bottom,0px));opacity:.75;text-shadow:0 1px 2px #000;transition:opacity 1.5s;pointer-events:none;font-size:12px;right:14px}
+/* Telefonda klavye ipucu yok: düğmelerin üstüne biniyordu. Dokunmatik
+   cihazda ekranın altında düğmeler zaten kumandayı gösteriyor. */
+body.has-touch #hint{display:none}
 #hg,#ht,#hs,#tag,#ui{display:none;position:absolute;pointer-events:none}
 #hg{right:1.6vh;bottom:1.6vh}
 /* Dokunmatikte gaz/fren sağ altta: gösterge paneli sol kümelerin üstüne,
@@ -34,61 +37,68 @@ body.has-touch #ht{display:none !important}
 #ui button{font:inherit;font-size:1.15em;font-weight:600;color:#fff;background:#d8351c;border:0;border-radius:.5em;padding:.6em 2em;margin:.35em .4em;cursor:pointer}
 #ui button+button{background:rgba(255,255,255,.16)}
 #ui button:focus-visible{outline:2px solid #fff;outline-offset:2px}
-/* ---- çok oyunculu + kamera arayüzü (Türkçe ek) ---- */
+/* ---- çok oyunculu arayüz (Türkçe ek) — kamera arayüzü tamamen kaldırıldı ---- */
 #ol{margin-top:1.2em;font-size:.9em;line-height:1.6;color:#cfd6dd;max-width:34em;margin-left:auto;margin-right:auto}
 #ol b{color:#fff}
 #ol kbd{display:inline-block;min-width:1.5em;padding:.05em .4em;border-radius:.3em;background:rgba(255,255,255,.16);color:#fff;font:inherit;font-weight:600;font-size:.92em}
-#camK{display:flex;align-items:center;justify-content:center;gap:.6em;margin:1.1em auto 0;font-size:.95em;color:#cfd6dd}
-#camK button{font-size:.9em;padding:.45em 1em;margin:0;background:rgba(255,255,255,.16)}
-#camK button.on{background:#1f9d55}
-#me{
-  position:absolute;pointer-events:auto;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));
-  width:clamp(84px,14vh,132px);border-radius:12px;overflow:hidden;background:rgba(9,11,14,.7);
-  box-shadow:0 6px 18px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.22);z-index:20;
+#mpStat{margin-top:.7em;font-size:.92em;color:#ffb4c8;font-weight:600}
+#mpSay{
+  display:none;position:absolute;pointer-events:auto;left:50%;transform:translateX(-50%);
+  bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:20;
 }
-#me video{display:block;width:100%;aspect-ratio:3/4;object-fit:cover;background:#000;transform:scaleX(-1)}
-#me .lb{position:absolute;left:0;right:0;bottom:0;padding:3px 6px;font-size:11px;font-weight:600;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.75));display:flex;justify-content:space-between}
-#me .mk{position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:999px;border:0;background:rgba(255,255,255,.9);color:#111;font-size:11px;cursor:pointer;padding:0;line-height:22px}
-#camN{
-  position:absolute;pointer-events:auto;right:12px;bottom:calc(12px + clamp(112px,19vh,176px) + env(safe-area-inset-bottom,0px));
-  width:clamp(84px,14vh,132px);border-radius:12px;overflow:hidden;background:rgba(9,11,14,.7);
-  border:1px solid rgba(255,255,255,.22);z-index:20;font-size:12px;color:#dde3ea;
+#mpSay .say{
+  display:block;border:0;border-radius:999px;background:#c2185b;color:#fff;font-size:12px;font-weight:800;
+  padding:9px 16px;cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.4);touch-action:none;
 }
-#camN .lb{padding:8px;line-height:1.35;text-align:center}
-#camN .say{display:block;width:100%;border:0;background:#c2185b;color:#fff;font:inherit;font-weight:700;padding:6px;cursor:pointer}
+body.has-touch #mpSay{bottom:calc(30vmin + env(safe-area-inset-bottom,0px));left:auto;right:2.6vmin;transform:none}
+body.has-touch #mpSay .say{padding:7px 12px;font-size:11px}
 @media (max-width:640px){
   #ui>div{padding:1em 1.2em}
   #ui .cols{gap:1.4em}
   #ui h1{font-size:2.2em}
 }
 /* ---- dokunmatik kumanda ---- */
-#touchui{display:block;position:fixed;inset:0;pointer-events:none;z-index:15;
+#touchui{display:block;position:fixed;inset:0;pointer-events:none;z-index:15;overflow:hidden;
   padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
 /* dokunmatik olmayan cihazda düğmeler görünmesin */
 body:not(.has-touch) #touchui{display:none}
+/* Büyük dokunma hedefleri: parmak ucuyla ıskalamadan basılsın diye düğmeler
+   ve yazıları büyütüldü. Konumlar aynı köşelerden hizalıdır, böylece sağ/sol
+   kümeler birbirine ve gösterge paneline değmez. */
 .tbtn{
   position:absolute;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
-  border-radius:999px;border:2px solid rgba(255,255,255,.35);color:#fff;font:inherit;font-weight:800;
-  background:rgba(12,16,22,.42);backdrop-filter:blur(3px);box-shadow:0 4px 14px rgba(0,0,0,.35);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;
+  border-radius:999px;border:2.5px solid rgba(255,255,255,.42);color:#fff;font:inherit;font-weight:800;
+  background:rgba(12,16,22,.5);backdrop-filter:blur(3px);box-shadow:0 6px 18px rgba(0,0,0,.42);
   transition:transform .06s, background .06s;cursor:pointer;
 }
-.tbtn .ic{line-height:1;font-size:1em}
-.tbtn .lb{font-size:.52em;letter-spacing:.04em;opacity:.85}
-.tbtn.on{background:rgba(216,53,28,.78);border-color:#fff;transform:scale(.94)}
+.tbtn .ic{line-height:1.05;font-size:1.08em;text-shadow:0 1px 3px rgba(0,0,0,.5)}
+.tbtn .lb{font-size:.34em;letter-spacing:.03em;opacity:.95;white-space:nowrap;line-height:1.15;margin-top:.15em}
+.tbtn.on{background:rgba(216,53,28,.82);border-color:#fff;transform:scale(.94)}
 /* Dokunmatikte sürüş düğmeleri başparmağın doğal yerinde: sol alt = direksiyon,
    sağ alt = gaz/fren. Gösterge paneli küçültüldüğü için artık çakışmıyor. */
-.t-left{left:3vmin}
-.t-left.t-mid{width:17vmin;height:17vmin;bottom:3vmin;font-size:3.2vmin}
-.t-right2{left:calc(17vmin + 5vmin) !important;bottom:3vmin}
-.t-right{right:3vmin}
-.t-gas{right:3vmin;bottom:3vmin;width:19vmin;height:19vmin;font-size:3.4vmin}
-.t-brake{right:calc(19vmin + 4.5vmin);bottom:3vmin;width:14vmin;height:14vmin;font-size:2.6vmin}
+.t-left{left:2.6vmin}
+.t-left.t-mid{width:22vmin;height:22vmin;bottom:2.6vmin;font-size:4.6vmin}
+.t-right2{left:calc(22vmin + 5.2vmin) !important;bottom:2.6vmin}
+.t-right{right:2.6vmin}
+.t-gas{right:2.6vmin;bottom:2.6vmin;width:24vmin;height:24vmin;font-size:5vmin}
+.t-brake{right:calc(24vmin + 4.4vmin);bottom:2.6vmin;width:18vmin;height:18vmin;font-size:3.8vmin}
 /* küçük yardımcı düğmeler: sol köşenin üstünde yatay sıra */
-.t-small{width:10.5vmin;height:10.5vmin;font-size:2vmin;bottom:calc(17vmin + 4.5vmin)}
-.t-hand{left:3vmin}
-.t-cam{left:calc(10.5vmin + 4vmin)}
-.t-reset{left:calc(2 * 10.5vmin + 5vmin)}
+.t-small{width:14vmin;height:14vmin;font-size:3.1vmin;bottom:calc(22vmin + 3.4vmin)}
+.t-hand{left:2.6vmin}
+.t-cam{left:calc(14vmin + 3.4vmin)}
+.t-reset{left:calc(2 * 14vmin + 4.2vmin)}
+/* çok kısa yatay ekranda (tarayıcı çubuğu açıkken) düğmeler bir tık küçülür,
+   yoksa üstteki küçük sıra gösterge paneline değer */
+@media (max-height:400px),(max-width:700px){
+  .t-left.t-mid{width:19vmin;height:19vmin;font-size:4vmin}
+  .t-right2{left:calc(19vmin + 4.6vmin) !important}
+  .t-gas{width:21vmin;height:21vmin;font-size:4.4vmin}
+  .t-brake{right:calc(21vmin + 4vmin);width:16vmin;height:16vmin;font-size:3.4vmin}
+  .t-small{width:12vmin;height:12vmin;font-size:2.7vmin;bottom:calc(19vmin + 3vmin)}
+  .t-cam{left:calc(12vmin + 3vmin)}
+  .t-reset{left:calc(2 * 12vmin + 3.6vmin)}
+}
 /* dikey ekranda "telefonu yan çevir" ekranı (CSS ile 90° çevirme yok: HUD ve
    düğmeleri bozuyordu) */
 #mobrotate{
@@ -145,19 +155,15 @@ body:not(.has-touch) #touchui{display:none}
 </table></div>
 </div>
 <div id="ol">
-<b>Beraber oynayın:</b> iki telefon da Ahududu'nun içinden oyunu açsın, ikiniz de aynı yarışta olursunuz.
-Sevgilinin arabası pistte canlı görünür, sesi kulaklıkta yönlü duyulur, canlı kamerası sağ alt köşede açılır —
-senin görüntün de onun ekranında senin gözünde olur. Kamera için bir kez izin vermen yeter.
-</div>
-<div id="camK">
-<span>Kameram</span>
-<button id="camOn" type="button">Aç</button><button id="camOff" type="button">Kapat</button>
-<span id="camStat" style="min-width:6em;text-align:left">kapalı</span>
+<b>Beraber oynayın:</b> iki telefon da Ahududu'nun içinden oyunu açsın, ikiniz de aynı pistte olursunuz.
+Sevgilinin arabası pistte canlı görünür (pembe), motor sesi kameraya göre sağdan/soldan gelir.
+İkiniz de <b>Başla</b>'ya bastığınızda 3-2-1 geri sayım aynı anda başlar; iki araba start çizgisinden birlikte kalkar.
+<div id="mpStat">bekleniyor…</div>
 </div>
 <div class="bt"><button id="b0">Başla</button><button id="b1">Ölçüm</button></div>
 <button id="quit" type="button" style="display:none;background:rgba(255,255,255,.16)">Oyundan çık</button>
 </div></div>
-<div id="camN" style="display:none"><div class="lb">Sevgilinin kamerası<br><span style="opacity:.7">bağlanıyor…</span></div></div>
+<div id="mpSay"><button class="say" type="button">🎤 Basılı tut: konuş</button></div>
 <script>
 /*__CODE__*/
 </script>

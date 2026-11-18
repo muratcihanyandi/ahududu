@@ -23,7 +23,7 @@ function fxInit() {
     buffers: [{ arrayStride: 48, stepMode: 'instance', attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x4' }, { shaderLocation: 1, offset: 16, format: 'float32x4' }, { shaderLocation: 2, offset: 32, format: 'float32x4' }] }],
     blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'zero', dstFactor: 'one' } },
   });
-  R.transparents.push({ draw(pass) { if (!FX.pFam.pipe || !FX.pAlive) return; if (!FX.pBG) FX.pBG = fwdBindGroup(FX.pFam); pass.setPipeline(FX.pFam.pipe); pass.setBindGroup(3, FX.pBG); pass.setVertexBuffer(0, FX.pBuf); pass.draw(6, FX.pAlive); } });
+  R.transparents.push({ draw(pass) { if (!FX.pFam.pipe || !FX.pAlive) return; if (fwdBindGroupStale(FX.pBG)) FX.pBG = fwdBindGroup(FX.pFam); pass.setPipeline(FX.pFam.pipe); pass.setBindGroup(3, FX.pBG); pass.setVertexBuffer(0, FX.pBuf); pass.draw(6, FX.pAlive); } });
 }
 function fxReset() { FX.sk.fill(0); FX.skLo = 0; FX.skHi = SK_N * 30; FX.skHead = 0; FX.active.fill(0); FX.p.fill(0); FX.pAlive = 0; FX.pNext = 0; FX.seed[0] = 7; }
 // inteiro pseudoaleatório 0..65535 (inteiros pequenos não vão para a heap)

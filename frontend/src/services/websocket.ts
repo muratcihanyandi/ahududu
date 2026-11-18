@@ -9,6 +9,17 @@ class WebSocketClient {
   private handlers: Map<string, Set<MessageHandler>> = new Map();
   private reconnectTimer: any = null;
   private isExplicitlyClosed = false;
+  private openListeners: Set<(open: boolean) => void> = new Set();
+
+  private notifyOpen(open: boolean) {
+    this.openListeners.forEach((fn) => {
+      try {
+        fn(open);
+      } catch (e) {
+        console.error('[Ahududu WS] open listener hatası:', e);
+      }
+    });
+  }
 
   connect(userId: UserId) {
     if (this.ws && this.currentUserId === userId && this.ws.readyState === WebSocket.OPEN) {
@@ -38,6 +49,7 @@ class WebSocketClient {
       this.ws.onopen = () => {
         console.log(`[Ahududu WS] Connected as ${userId}`);
         this.emit('connection_status', { connected: true });
+        this.notifyOpen(true);
         if (this.reconnectTimer) {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
@@ -56,6 +68,7 @@ class WebSocketClient {
       this.ws.onclose = () => {
         console.warn(`[Ahududu WS] Closed for ${userId}`);
         this.emit('connection_status', { connected: false });
+        this.notifyOpen(false);
         if (!this.isExplicitlyClosed) {
           this.scheduleReconnect();
         }
@@ -106,9 +119,26 @@ class WebSocketClient {
   send(data: any) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
-    } else {
-      console.warn('[Ahududu WS] Cannot send, socket not open');
+      return true;
     }
+    console.warn('[Ahududu WS] Cannot send, socket not open');
+    return false;
+  }
+
+  /**
+   * Soket şu an açık mı?
+   * Oyunlar paketlerini kendi soketleri yerine bu soketten geçirir.
+   */
+  isOpen(): boolean {
+    return Boolean(this.ws && this.ws.readyState === WebSocket.OPEN);
+  }
+
+  /** Bağlantı açılıp kapandığında haber verir (oyun köprüsünün yedek soketi için). */
+  addOpenListener(listener: (open: boolean) => void): () => void {
+    this.openListeners.add(listener);
+    return () => {
+      this.openListeners.delete(listener);
+    };
   }
 
   on(event: string, handler: MessageHandler) {

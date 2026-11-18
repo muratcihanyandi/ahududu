@@ -14,7 +14,6 @@
  */
 
 type BackHandler = () => boolean;
-
 const handlers: BackHandler[] = [];
 
 /** Bir pencere/sayfa açıldığında geri tuşu için handler kaydeder. */
@@ -41,6 +40,39 @@ export function runBackHandlers(): boolean {
 export function hasBackHandlers(): boolean {
   return handlers.length > 0;
 }
+
+/**
+ * Sunucunun kök adresi (protokol + host, sonunda "/" yok).
+ *
+ * Native kabukta sayfa `localhost` üzerinden açılır ama asıl sunucu canlı
+ * adrestir; oyun iframe'i ve WebSocket'ler bu adresi kullanmalıdır. Ayar
+ * yoksa sayfanın kendi adresi döner.
+ */
+export function getActiveServerUrl(): string {
+  try {
+    const isNative = Boolean(
+      (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.()
+    );
+    const isLocalHost =
+      window.location.hostname === 'localhost' &&
+      window.location.port !== '33470' &&
+      window.location.port !== '5173';
+    if (isNative || isLocalHost) {
+      const saved = localStorage.getItem('ahududu_server_url');
+      const base = saved || 'https://ahududu.fakeyol.com';
+      return base.replace(/\/+$/, '');
+    }
+    if (window.location.protocol.startsWith('http')) return window.location.origin;
+    return 'https://ahududu.fakeyol.com';
+  } catch {
+    return window.location.origin;
+  }
+}
+
+// NOT: Oyun köprüsü burada DEĞİL, `gameBridge.ts` içinde kurulur. Eski
+// `installGameBridge` çalışma penceresinin (kabuk) `window` nesnesine yazıyordu
+// ama oyun ayrı bir iframe penceresinde çalıştığı için bu nesneyi hiçbir zaman
+// göremiyordu; oyun da kendi soketini açıyordu.
 
 /**
  * Uygulama seviyesindeki geri davranışını kurar.

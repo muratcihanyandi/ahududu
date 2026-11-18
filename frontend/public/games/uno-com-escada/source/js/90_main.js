@@ -65,6 +65,9 @@ async function main() {
     }
     for (let i = 0; i < 8; i++) renderFrame();
     R.cam.first = true;
+    // Mobilde çizim çözünürlüğü ilk ölçümden sonra kare süresine göre
+    // ayarlanır (58_perf_auto.js). Masaüstünde hiçbir şey değişmez.
+    if (typeof autopInit === 'function') { try { autopInit(); } catch (e) { console.warn('[autop]', e); } }
     setMsg(''); const hint = document.getElementById('hint'); if (hint) setTimeout(() => { hint.style.opacity = 0; }, 9000);
     if (GAME.ui) uiInit();
     GAME.ready = true;
@@ -73,6 +76,12 @@ async function main() {
 }
 let _lastT = 0;
 function rafLoop(t) {
+  // Uyarlanabilir çözünürlük: gerçek kare süresini izle (menüde/hatalı karede
+  // sayılmaz). Ölçüm menü kararından ÖNCE yapılır.
+  if (typeof autopFrame === 'function' && !R.resizing && R.tex) { try { autopFrame(t); } catch (e) { /* yok say */ } }
+  // Yeniden boyutlandırma sürüyor: eski dokular silinmeden önce GPU kuyruğu
+  // boşalana kadar çizme (yoksa "destroyed texture used in submit" → siyah ekran).
+  if (R.resizing || !R.tex) { _lastT = 0; requestAnimationFrame(rafLoop); return; }
   if (GAME.minFrameMs > 0 && _lastT && t - _lastT < GAME.minFrameMs) { requestAnimationFrame(rafLoop); return; }   // cadência de 60 Hz em monitor mais rápido
   if (GAME.ui && uiFrame()) { _lastT = 0; requestAnimationFrame(rafLoop); return; }   // menu aberto: o jogo e o som ficam parados e nada é renderizado
   let dt = _lastT ? (t - _lastT) / 1000 : 1 / 60; RT[3] = dt * 1000; if (dt > 0.05) dt = 0.05; _lastT = t;

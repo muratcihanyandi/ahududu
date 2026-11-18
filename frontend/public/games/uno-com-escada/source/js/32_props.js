@@ -833,7 +833,7 @@ function propsBuild() {
     WORLD.stats.tris.fence = fenceMB.ni / 3;
     R.transparents.push({
       draw(pass) {
-        if (!ff.pipe) return; if (!fbg) fbg = fwdBindGroup(ff);
+        if (!ff.pipe) return; if (fwdBindGroupStale(fbg)) fbg = fwdBindGroup(ff);
         const ctx = R.ctx; let set = false;     // R.ctx ainda guarda o tronco de visão do passe principal
         for (let i = 0; i < fenceR.length; i++) {
           const r = fenceR[i]; if (!(SQ[0] = r.x, SQ[1] = r.y, SQ[2] = r.z, SQ[3] = r.rad, sphereQ(ctx.planes, ctx.nPlanes))) continue;

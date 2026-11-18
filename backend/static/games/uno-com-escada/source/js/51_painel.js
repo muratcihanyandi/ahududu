@@ -36,12 +36,17 @@ function hudStrip(cv, labels, widths, units, At, px, o) {
   return f;
 }
 function hudLayout() {
-  const H = HUD, L = H.L, dpr = devicePixelRatio || 1;
+  const H = HUD, L = H.L;
+  // hudLayout yön değişiminde ve sahne kurulurken de çağrılıyor; gösterge
+  // tuvali henüz hazır değilse (hudInit'ten önce) sessizce çıkılır: eskiden
+  // "Cannot set properties of null" hatası veriyordu.
+  if (!H.cg || !H.ct || !H.cs) return;
+  const dpr = devicePixelRatio || 1;
   // Dokunmatik/yatay telefonda gösterge paneli KÜÇÜLTÜLÜR: aksi halde (kısa
   // yükseklik × 2.26) ekranı kaplıyor ve alttaki sürüş düğmelerinin üstüne
   // biniyordu.
   const touch = (typeof MOB !== 'undefined' && MOB.touch) || (navigator.maxTouchPoints || 0) > 0;
-  const k = touch ? (innerHeight > innerWidth ? 0.085 : 0.062) : 0;
+  const k = touch ? (innerHeight > innerWidth ? 0.085 : 0.075) : 0;
   const r = Math.round(Math.min(Math.max(innerHeight * (touch ? k : 0.105), touch ? 34 : 54), touch ? 78 : 124) * dpr), W = Math.round(r * 4.5), Hh = Math.round(r * 2.26);
   const A = H.A = hudAtlas(Math.round(r * 0.33)), B = H.B = hudAtlas(Math.round(r * 0.23)), C = H.C = hudAtlas(Math.round(r * 0.17));
   const c = H.cg; c.width = W; c.height = Hh; c.style.width = W / dpr + 'px'; c.style.height = Hh / dpr + 'px';
@@ -122,5 +127,5 @@ function hudStatsFrame() {
   a[0] = 0; a[1] = 0;
   s.clearRect(0, 0, L[27], L[28]); s.drawImage(H.bgS, 0, 0); hudInt(s, C, fps > 999 ? 999 : fps, 3, L[20], y, 1); hudDec(s, C, ms, L[21], y); hudDec(s, C, gpu, L[22], y);
 }
-function hudShow(on) { HUD.vis = on; HUD.cg.style.display = HUD.ct.style.display = on ? 'block' : 'none'; HUD.K.fill(-9); }
-function hudStats(on) { HUD.stats = on; HUD.cs.style.display = on ? 'block' : 'none'; HUD.acc[0] = 0; HUD.acc[1] = 0; if (on) { const L = HUD.L; HUD.s.clearRect(0, 0, L[27], L[28]); HUD.s.drawImage(HUD.bgS, 0, 0); } }
+function hudShow(on) { HUD.vis = on; if (HUD.cg) HUD.cg.style.display = HUD.ct.style.display = on ? 'block' : 'none'; HUD.K.fill(-9); }
+function hudStats(on) { HUD.stats = on; if (HUD.cs) HUD.cs.style.display = on ? 'block' : 'none'; HUD.acc[0] = 0; HUD.acc[1] = 0; if (on && HUD.s) { const L = HUD.L; HUD.s.clearRect(0, 0, L[27], L[28]); HUD.s.drawImage(HUD.bgS, 0, 0); } }

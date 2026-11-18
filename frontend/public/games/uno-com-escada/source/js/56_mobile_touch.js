@@ -55,13 +55,13 @@ function mobSync() {
 
 // ---------------------------- 2) BOYUT -------------------------------------
 // Yön değişince çizim hedeflerini yeniden kur. Sahne henüz kurulmadıysa istek
-// saklanır ve main() bittiğinde uygulanır.
+// saklanır ve main() bittiğinde uygulanır. Boyut screenSize() ile hesaplanır:
+// mobilitte uzun kenar sınırlıdır (bkz. 01_gpu.js) — eskiden burada DPR 2 ile
+// tam ekran çözünürlüğü isteniyordu ve GPU belleği yetmiyordu.
 function mobResize() {
   if (typeof G === 'undefined' || !G.dev) return;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  let W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
-  W = Math.min(Math.max(W & ~1, 320), 5120);
-  H = Math.min(Math.max(H & ~1, 180), 2880);
+  if (typeof screenSize !== 'function') return;
+  const s = screenSize(), W = s[0], H = s[1];
   if (W === MOB.lastW && H === MOB.lastH) return;
   MOB.lastW = W; MOB.lastH = H;
   if (!MOB.ready || typeof rendererResize !== 'function') { MOB.pending = true; return; }
@@ -148,6 +148,14 @@ function mobHookKeyboard() {
   } catch (e) { /* yok say */ }
 }
 
+// Arkadaşının motorunu duyabilmek için ses bağlamını ilk dokunuşta aç
+// (tarayıcı/WebView kuralları: kullanıcı hareketi olmadan ses başlamaz).
+function mobUnlockAudio() {
+  try { if (typeof mpSoundInit === 'function') mpSoundInit(); } catch (e) { /* yok say */ }
+  const C = window.__mp && window.__mp.snd && window.__mp.snd.ctx;
+  if (C && C.state === 'suspended') C.resume().catch(() => { });
+}
+
 function mobBoot() {
   MOB.touch = mobIsTouch();
   if (MOB.touch) {
@@ -159,6 +167,34 @@ function mobBoot() {
   }
   addEventListener('resize', () => mobSync());
   addEventListener('orientationchange', () => setTimeout(mobSync, 250));
+  // Tam ekran: iframe içinde tek dokunuşla tam ekrana geçilemez; üstteki
+  // Ahududu kabuğu (GamePlayer) oyun açılırken bunu kendisi yapıyor. Yine de
+  // kullanıcı bir yere dokunduğunda tarayıcı tam ekranına izin veriliyorsa
+  // denenir (hata sessizce yutulur).
+  if (MOB.touch) {
+    const once = () => { mobUnlockAudio(); mobTryFullscreen(); removeEventListener('pointerdown', once); };
+    addEventListener('pointerdown', once, { passive: true });
+  }
+}
+// Telefonda tarayıcı çubuklarını da gizlemek için tam ekran dene (yalnızca
+// kullanıcı hareketiyle; iOS Safari desteklemiyor, sorun değil — iframe zaten
+// tam ekran boyutunda). Ahududu kabuğunun içindeyken tam ekranı kabuk yapar:
+// oyun iframe'inin kendisi tam ekran isteyemez, bu yüzden köprüye sorulur.
+function mobTryFullscreen() {
+  try {
+    if (typeof MPSHARE !== 'undefined' && MPSHARE && MPSHARE.present && MPSHARE.present()) {
+      if (MPSHARE.fullscreen) MPSHARE.fullscreen();
+      return;
+    }
+    if (document.fullscreenElement) return;
+    const el = document.documentElement;
+    const r = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!r) return;
+    const p = r.call(el, { navigationUI: 'hide' });
+    if (p && p.catch) p.catch(() => { });
+    // tam ekranda yatay kilidi tekrar dene
+    setTimeout(mobLockLandscape, 300);
+  } catch (e) { /* yok say */ }
 }
 
 // Sahne kurulduktan sonra ölçümü uygula ve yön ekranını tazele

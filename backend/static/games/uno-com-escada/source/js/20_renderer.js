@@ -1,5 +1,8 @@
 // Núcleo do renderizador diferido: recursos, uniformes de quadro, famílias de material e o grafo de passes.
-const SHADOW_RES = 2048, SHADOW_S_RES = 4096, ENV_RES = 512, ENV_MIPS = 7, SKY_W = 4096, SKY_H = 1024, VOL_DIST = 220;
+// Gölge/gökyüzü/ortam hedefleri. Mobilde küçültülür: eskiden gölge 4096² +
+// 3 × 2048², gökyüzü 4096×1024 ve ortam 512²×6 idi.
+const MOBF = (typeof G !== 'undefined' && G.mobile) ? 0.5 : 1;
+const SHADOW_RES = Math.round(2048 * MOBF), SHADOW_S_RES = Math.round(4096 * MOBF), ENV_RES = Math.round(512 * MOBF), ENV_MIPS = MOBF < 1 ? 6 : 7, SKY_W = Math.round(4096 * MOBF), SKY_H = Math.round(1024 * MOBF), VOL_DIST = 220;
 const SKY_EL0 = -0.14, SKY_ELR = PI / 2 + 0.14;
 const SH_DEFS = { SHADOW_RES: SHADOW_RES + '.0', ENV_MIPS: ENV_MIPS + '.0', ENV_MIP_K: (ENV_RES * 2 / (PI * 1.5)).toFixed(2), VOL_DIST: VOL_DIST + '.0', SKY_EL0: SKY_EL0.toFixed(5), SKY_ELR: SKY_ELR.toFixed(5) };
 // A altura do terreno usa rgba16float (filtrável em qualquer GPU), então não há
@@ -65,6 +68,10 @@ function mkPost(name, defs, targets, extra) {
 const bgOf = (pipe, g, res) => G.dev.createBindGroup({ layout: pipe.bgls[g], entries: res.map((r, i) => ({ binding: i, resource: r instanceof GPUBuffer ? { buffer: r } : r })) });
 
 const R = {
+  // gen: hedeflerin nesli. Pencerede yeniden boyutlandırmada dokular yeniden
+  // kurulur; bunlara bağlı SAKLANAN bind group'lar bu sayaçla geçersiz olur
+  // (bkz. fwdBindGroupStale). Yoksa yok edilmiş dokular kullanılıp ekran siyah kalıyordu.
+  gen: 0,
   drawables: [], transparents: [], families: {}, frameIdx: 0, ready: false,
   objData: new Float32Array(64 * 64), objCount: 1, passData: new Float32Array(16 * 64),
   ctx: { kind: 0, planes: new Float32Array(24), nPlanes: 4, cx: 0, cy: 0, cz: 0, cascade: 0, lod: 1 },
@@ -76,6 +83,10 @@ const R = {
   wind: new Float32Array([0.8, 0.6, 1.0]),   // direção (x,z) e força do vento; F.wind.w = tempo, F.misc.x = dt
   fog: new Float32Array([0.0008, 1 / 55, 0, 0.05]), fogCol: new Float32Array([0, 0, 0, 1.0]),
   exposure: 1, debug: 0, noJitter: false, timing: null, pending: [],
+  // uyarlanabilir performans kolları (58_perf_auto.js)
+  noMotionBlur: false,   // hareket bulanıklığı geçişini atla (en pahalı tam ekran işi)
+  cubeEveryN: 1,         // küp haritanın kaç karede bir güncelleneceği
+  shadowCascades: 3      // çizilen gölge katmanı sayısı (3 → 2)
 };
 
 // Slots de uniforme de objeto (256 bytes cada: model, prevModel, 4 vec4 de parâmetros). Slot 0 = identidade.
@@ -158,6 +169,10 @@ function rendererInit() {
   R.frameBuf = mkBuf(FR.size, BU.U); R.objBuf = mkBuf(64 * 256, BU.U); R.passBuf = mkBuf(16 * 256, BU.U);
   // alvos
   const T = R.tex = {};
+  // Hareket bulanıklığı telefonlarda baştan kapalı: kullanılmayan hedefler
+  // (T.vel, T.mb, T.tile ≈ 3 × tam ekran RGBA16F = ~30 MB) hiç kurulmaz.
+  // Kare döngüsü R.mbOn'a bakar (21_post.js).
+  R.mbOn = G.mobile ? false : true;
   T.gA = mkTex(W, H, 'rgba8unorm-srgb'); T.gB = mkTex(W, H, 'rgba16float'); T.gC = mkTex(W, H, 'rgba8unorm'); T.gV = mkTex(W, H, 'rg16float'); T.depth = mkTex(W, H, 'depth32float');
   T.hdr = mkTex(W, H, 'rgba16float'); T.hist = [mkTex(W, H, 'rgba16float'), mkTex(W, H, 'rgba16float')]; T.vel = mkTex(W, H, 'rg16float');
   T.mb = mkTex(W, H, 'rgba16float');
@@ -170,7 +185,8 @@ function rendererInit() {
   T.noise = mkTex(512, 512, 'rgba8unorm', TU.RT | TU.TB, { mipLevelCount: 10 });
   T.noise3 = dev.createTexture({ size: [64, 64, 64], dimension: '3d', format: 'rgba8unorm', usage: TU.RT | TU.TB });
   const V = R.view = {};
-  for (const k of ['gA', 'gB', 'gC', 'gV', 'depth', 'hdr', 'vel', 'mb', 'shadowS', 'sky', 'noise', 'envDepth']) V[k] = T[k].createView();
+  for (const k of ['gA', 'gB', 'gC', 'gV', 'depth', 'hdr', 'shadowS', 'sky', 'noise', 'envDepth']) V[k] = T[k].createView();
+  if (R.mbOn) { V.vel = T.vel.createView(); V.mb = T.mb.createView(); }
   V.hist = T.hist.map(t => t.createView()); V.half = T.half.map(t => t.createView());
   V.shadow = T.shadow.createView({ dimension: '2d-array' }); V.shadowL = [0, 1, 2].map(i => T.shadow.createView({ dimension: '2d', baseArrayLayer: i, arrayLayerCount: 1 }));
   V.env = T.env.createView({ dimension: 'cube' }); V.noise3 = T.noise3.createView({ dimension: '3d' });
@@ -201,15 +217,59 @@ WGSL.__probe = '#include common\n#include gbuf\n#include mesh_vert\n#ifdef PASS_
 // Yön (yatay/dikey) değişince çizim hedeflerini yeni boyuta göre yeniden kur.
 // Hedef dokular çözünürlüğü baştan alır; G.W/G.H de güncellenmelidir (kamera
 // en-boy oranı ve tam ekran üçgeni bunları okur), yoksa görüntü gerilir.
+// MOBİL: hedefler eskiden ekran çözünürlüğündeydi (4680×2160 → ~1 GB GPU
+// belleği) ve telefon hiç açılmıyordu. Artık boyut screenSize() +
+// gpuMemCheck() ile sınırlanır; gölge/gökyüzü/ortam dokuları da MOBF ile küçük.
+//
+// ÖNEMLİ: dokular SİLİNMEDEN önce GPU'nun kuyruğu boşaltılır. Yoksa o an
+// gönderilmiş bir kare hâlâ eski dokulara yazmaya çalışıyor ve sürücü
+// "Destroyed texture ... used in a submit" hatası veriyor; kare hiç
+// çizilmiyor ve ekran SİYAH kalıyordu (dikey/yatay dönüşte olan buydu).
+// onSubmittedWorkDone() bir sonraki microtask'ta çözülür: bu yüzden yeniden
+// kurma geri çağrısıyla yapılır, kare döngüsü de bu arada bekler.
 function rendererResize(W, H) {
+  if (!G.dev) return false;
+  if (!(W > 0 && H > 0)) { W = G.W; H = G.H; }
+  if (!W || !H) { const s = screenSize(); W = s[0]; H = s[1]; }
   W = W & ~1; H = H & ~1;
-  if (!G.dev || W === G.W && H === G.H && R.tex) return false;
+  if (W === G.W && H === G.H && R.tex) return false;
+  // Aynı anda iki yeniden kurulum olmasın: yön değişimi art arda iki kez
+  // tetiklenebiliyor (resize + orientationchange). İkinci çağrı birinciyi
+  // beklerse eski/yeni dokular birbirine karışmaz.
+  if (R.resizing) { R.pendingResize = [W, H]; return false; }
   G.W = W; G.H = H;
+  gpuMemCheck();                              // bütçe aşılırsa G.W/G.H'yü düşürür
+  W = G.W; H = G.H;
+  R.resizing = true;                          // kare döngüsü bu sırada çizmesin
   if (G.canvas) { G.canvas.width = W; G.canvas.height = H; }
-  // Eski hedefleri bırak (GB kazanımı), sonra yeniden kur
-  try { for (const k in R.tex) { const t = R.tex[k]; if (Array.isArray(t)) t.forEach(x => x && x.destroy && x.destroy()); else if (t && t.destroy) t.destroy(); } } catch (e) { /* yok say */ }
-  rendererInit();
-  R.cam.first = true;
+  // Eski dokuları SAKLA ve R.tex'i HEMEN bırak: kare döngüsü "R.tex var mı"
+  // diye bakıp çizmemezlik etsin. Yoksa silinmiş dokularla her kare gönderiliyor
+  // ve sürücü "Destroyed texture ... used in a submit" hatasını tekrar tekrar
+  // veriyordu (ekran siyah kalıyordu).
+  const old = R.tex;
+  R.tex = null;
+  const done = G.dev.queue.onSubmittedWorkDone ? G.dev.queue.onSubmittedWorkDone() : Promise.resolve();
+  const rebuild = () => {
+    try {
+      // Canvas boyutu değiştiği için WebGPU bağlamını YENİDEN YAPILANDIR.
+      // Bu, uçuşta kare yokken yapılmalı: eski yüzey (ör. 738×1600) ile yeni
+      // canvas (1600×738) uyuşmazsa kareler görünmez ve ekran SİYAH kalır —
+      // dikey→yatay dönüşte kullanıcının gördüğü buydu.
+      if (G.ctx) { try { G.ctx.configure({ device: G.dev, format: G.fmt, alphaMode: 'opaque' }); } catch (e) { console.warn('[resize] bağlam:', e); } }
+      // Eski hedefleri bırak (GB kazanımı), sonra yeniden kur
+      try { for (const k in old) { const t = old[k]; if (Array.isArray(t)) t.forEach(x => x && x.destroy && x.destroy()); else if (t && t.destroy) t.destroy(); } } catch (e) { /* yok say */ }
+      rendererInit();                 // R.tex'i yeniden doldurur
+      R.gen = (R.gen || 0) + 1;       // saklanan bind group'ları geçersiz kıl
+      R.cam.first = true;
+    } catch (e) { console.warn('[resize] yeniden kurma:', e); }
+    finally {
+      R.resizing = false;
+      // Bekleyen bir boyut isteği varsa şimdi uygula (serileştirme).
+      const p = R.pendingResize; R.pendingResize = null;
+      if (p) { try { rendererResize(p[0], p[1]); } catch (e) { /* yok say */ } }
+    }
+  };
+  done.then(rebuild, rebuild);                // hata olsa da yeniden kur
   return true;
 }
 
@@ -307,7 +367,13 @@ function staticShadowSetup() {
 }
 function setPass(slot, vp, pos) { const p = R.passData, o = slot * 64; p.set(vp, o); p[o + 16] = pos[0]; p[o + 17] = pos[1]; p[o + 18] = pos[2]; p[o + 19] = slot; }
 function ctxFrom(kind, vp, nPlanes, pos, cascade) { const c = R.ctx; c.kind = kind; frustumPlanes(c.planes, vp, nPlanes); c.nPlanes = nPlanes; c.cx = pos[0]; c.cy = pos[1]; c.cz = pos[2]; c.cascade = cascade; return c; }
-function drawAll(pass, ctx, slot, bg1) { drawRange(pass, ctx, slot, bg1, 0, R.drawables.length); }
+function drawAll(pass, ctx, slot, bg1) {
+  // Statik dünya gölgesinde (ctx.cascade === 3) yalnızca worldOnly nesneler
+  // çizilir: araba/parçacık gibi oynayan nesneler oraya girmez.
+  const d = R.drawables;
+  if (ctx.kind === KIND.SHADOW && ctx.cascade === 3) { for (let i = 0; i < d.length; i++) if (d[i].worldOnly) d[i].draw(pass, ctx); }
+  else drawRange(pass, ctx, slot, bg1, 0, d.length);
+}
 function drawRange(pass, ctx, slot, bg1, i0, i1) {
   pass.setBindGroup(0, R.globBG); R.dyn1[0] = slot * 256; pass.setBindGroup(1, bg1, R.dyn1, 0, 1); R.dyn2[0] = 0; pass.setBindGroup(2, R.objBG, R.dyn2, 0, 1);
   const d = R.drawables; for (let i = i0; i < i1; i++) d[i].draw(pass, ctx);
@@ -338,20 +404,35 @@ function renderFrame() {
   for (let i = 0; i < 3; i++) setPass(1 + i, R.casc.vp[i], c.pos);
   // uma face do cubemap de ambiente por quadro (ciclo completo a cada 6 quadros)
   // duas faces do cubemap de ambiente por quadro, cada uma na posição atual do carro (ciclo completo a cada 3 quadros)
-  const face = (R.frameIdx * 2) % 6; R.cube.cur.set(R.cube.pos);
-  for (let k = 0; k < 2; k++) { cubeSetup(face + k); setPass(5 + face + k, R.cube.vp, R.cube.cur); m4inv(R.cube.view, R.cube.vp); R.passData.set(R.cube.view, (11 + k) * 64); }
+  // UYARLANABİLİR: telefonda çok yavaşsa yansıma haritası her N karede bir güncellenir
+  // (R.cubeEveryN); o aralıkta eski yansıma kullanılır, ekran kararmaz.
+  const cubeOn = (R.cubeEveryN <= 1) || (R.frameIdx % R.cubeEveryN === 0);
+  const face = cubeOn ? (R.frameIdx * 2) % 6 : R.cubeFace || 0;
+  if (cubeOn) R.cubeFace = face;
+  R.cube.cur.set(R.cube.pos);
+  if (cubeOn) for (let k = 0; k < 2; k++) { cubeSetup(face + k); setPass(5 + face + k, R.cube.vp, R.cube.cur); m4inv(R.cube.view, R.cube.vp); R.passData.set(R.cube.view, (11 + k) * 64); }
   dev.queue.writeBuffer(R.frameBuf, 0, FR.data);
   dev.queue.writeBuffer(R.passBuf, 0, R.passData, 0, 13 * 64);
   dev.queue.writeBuffer(R.objBuf, 0, R.objData, 0, R.objCount * 64);
   for (let i = 0; i < R.preFrame.length; i++) R.preFrame[i]();
   const enc = apiEncoder();
   // sombras
-  for (let i = 0; i < 3; i++) {
+  const ncasc = Math.max(1, Math.min(3, R.shadowCascades | 0));
+  for (let i = 0; i < ncasc; i++) {
     const p = apiPass(enc, D.shadow[i]);
     drawAll(p, ctxFrom(KIND.SHADOW, R.casc.vp[i], 6, c.pos, i), 1 + i, R.passBG); p.end();
   }
+  // Katman sayısı azaltıldıysa (telefonda ölçüm sonrası R.shadowCascades = 2)
+  // çizilmeyen katman eski karede kalır. Katmanlar azaltılırken katman bir kez
+  // boş geçişle temizlenir (loadOp = clear); böylece donmuş gölge bölgeleri
+  // "full"/"undefined" içerik arasında kalıp titremez.
+  if (ncasc < 3) {
+    const from = (R.shadowClearFrom === undefined) ? ncasc : R.shadowClearFrom;
+    R.shadowClearFrom = ncasc;
+    for (let i = ncasc; i < from; i++) { const p = apiPass(enc, D.shadow[i]); p.end(); }
+  }
   // faces do cubemap de ambiente
-  for (let k = 0; k < 2; k++) {
+  if (cubeOn) for (let k = 0; k < 2; k++) {
     const f = face + k; cubeSetup(f);
     const p = apiPass(enc, D.cube[f]);
     cubeSky(p, 11 + k);
