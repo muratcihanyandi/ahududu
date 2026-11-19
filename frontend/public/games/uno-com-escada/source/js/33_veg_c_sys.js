@@ -162,7 +162,7 @@ function vegBakeImpostors(cpu) {
   }
   const ubuf = mkBuf(ub.byteLength, BU.U, ub);
   const bg = dev.createBindGroup({ layout: bgls[0], entries: [{ binding: 0, resource: { buffer: ubuf, size: 64 } }, { binding: 1, resource: V.leafView }, { binding: 2, resource: V.sLeaf }, { binding: 3, resource: R.view.noise }] });
-  const enc = dev.createCommandEncoder();
+  const enc = apiEncoder();
   for (let a = 0; a < VEG_NT; a++) for (let k = 0; k < 8; k++) {
     const L = a * 8 + k, lv = t => t.createView({ dimension: '2d', baseArrayLayer: L, arrayLayerCount: 1, baseMipLevel: 0, mipLevelCount: 1 });
     const p = enc.beginRenderPass({

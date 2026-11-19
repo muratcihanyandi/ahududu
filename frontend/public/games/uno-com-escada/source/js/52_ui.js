@@ -2,7 +2,7 @@
 // poses, teclas de ferramenta e leitura do controle. Nas ferramentas de trabalho/ (captura, poses, teste, medição) nada
 // disto é ligado: sem menu, sem painel, sem som.
 const ST = { INICIO: 0, JOGO: 1, PAUSA: 2, BENCH: 3, FITA: 4, RESULT: 5, POSE: 6 };
-const UI = { st: ST.INICIO, back: ST.JOGO, el: null, tag: null, res: null, b0: null, b1: null, bench: null, benchN: 0, padPrev: 0, padN: 0, pose: -1, stats: false, warm: false, countdown: false, countdownTimer: null };
+const UI = { st: ST.INICIO, back: ST.JOGO, el: null, tag: null, res: null, b0: null, b1: null, bench: null, benchN: 0, padPrev: 0, padN: 0, pose: -1, stats: false, warm: false, countdown: false, countdownTimer: null, menuOn: false };
 const $ = id => document.getElementById(id);
 function uiInit() {
   UI.el = $('ui'); UI.tag = $('tag'); UI.res = $('res'); UI.b0 = $('b0'); UI.b1 = $('b1');
@@ -10,20 +10,24 @@ function uiInit() {
   try { const b = +localStorage.getItem('uno-melhor'); if (b > 20 && b < 600) LAP[2] = b; } catch (e) { /* sem armazenamento local: a melhor volta vale só nesta sessão */ }
   UI.b0.onclick = () => {
     if (UI.st === ST.INICIO) {
+      // Telefonda ses ancak bir dokunuşla açılabilir: "Başla" o dokunuş.
+      try { if (typeof mobUnlockAudio === 'function') mobUnlockAudio(); } catch (e) { /* yok say */ }
       sndStart();
-      // Çift oynanıyorsa: ikinizin de aynı anda kalkması için ortak başlangıç
-      // saati duyurulur (3-2-1 geri sayım). Ağ yoksa hemen başlar.
-      if (typeof mpAnnounceStart === 'function' && typeof NET !== 'undefined' && NET.live) {
+      // Yalnız oynanabilir: sevgili oyunda yoksa geri sayım beklemeden başla.
+      // İkiniz de oyundaysanız (bağlantı AÇIK ve partner pistte) iki araba da
+      // aynı anda kalksın diye 3-2-1 geri sayımı kurulur.
+      const partnerReady = typeof NET !== 'undefined' && NET.live && typeof MP !== 'undefined' && MP.partnerOn;
+      if (partnerReady && typeof mpAnnounceStart === 'function') {
         let armed = false;
         try { armed = mpAnnounceStart() !== false; } catch (e) { console.warn('[ui] geri sayım:', e); }
         if (armed) { uiCountdown(); return; }
-        uiSet(ST.JOGO);
-        return;
       }
-      uiSet(ST.JOGO);
+      uiSet(ST.JOGO);                              // tek oyuncu: hemen başla
+      try { if (typeof NET !== 'undefined' && NET.live && typeof mpAnnounceStart === 'function') mpAnnounceStart(); } catch (e) { /* yok say */ }
+      return;
     } else uiResume();
   };
-  UI.b1.onclick = () => benchStart();
+  UI.b1 = $('b1');                                // (ölçüm düğmesi kullanıcı arayüzünden kaldırıldı)
   addEventListener('keydown', uiKey);
   document.addEventListener('visibilitychange', () => { if (document.hidden && (UI.st === ST.JOGO || UI.st === ST.FITA || UI.st === ST.BENCH)) uiPause(); });
   addEventListener('gamepadconnected', padCount); addEventListener('gamepaddisconnected', padCount);
@@ -34,12 +38,21 @@ function uiInit() {
 function uiSet(st) {
   const menu = st === ST.INICIO || st === ST.PAUSA || st === ST.RESULT;
   UI.st = st; UI.el.style.display = menu ? 'flex' : 'none'; UI.el.className = st === ST.INICIO ? 'ini' : '';
+  // menü açıkken dokunmatik kumanda gizlenir (düğmeler ekran dışına taşmasın
+  // ve "Başla"yı örtmesin)
+  UI.menuOn = menu;
+  try {
+    // Sınıf YERİNE yazılır: mobBoot ekler, uiSet tek doğru kaynak kalır
+    // (eskiden tight: başka bir ekran sınıfı silince menü işareti kayboluyordu).
+    document.body.classList.toggle('menu-open', menu);
+    document.body.classList.toggle('has-touch', !!(typeof MOB !== 'undefined' && MOB.touch));
+  } catch (e) { /* yok say */ }
   UI.b0.textContent = st === ST.INICIO ? 'Başla' : st === ST.RESULT ? 'Sürmeye dön' : 'Devam et';
-  UI.b1.style.display = st === ST.INICIO ? 'none' : ''; UI.b1.textContent = st === ST.RESULT ? 'Ölçümü yinele' : 'Ölçüm';
+  if (UI.b1) { UI.b1.style.display = 'none'; UI.b1.textContent = 'Ölçüm'; }   // ölçüm düğmesi sade arayüzde yok
   UI.res.style.display = st === ST.RESULT ? 'block' : 'none';
   // menü açılınca kamera durumu tazelenir
   if (typeof mpUiRefresh === 'function') { try { mpUiRefresh(); } catch (e) { /* yok say */ } }
-  UI.tag.textContent = st === ST.BENCH ? 'Ölçüm: 60 sn rotalı tur · Esc iptal' : st === ST.FITA ? 'Rotalı tur · R direksiyona geç · Esc menü' : st === ST.POSE ? 'Açı ' + (UI.pose + 1) + ' · ' + POSES[UI.pose].nome + ' · 1-6 değiştirir · Esc sürmeye döner' : '';
+  UI.tag.textContent = st === ST.BENCH ? 'Ölçüm · Esc iptal' : st === ST.FITA ? 'Rotalı tur · R sürmeye dön · Esc menü' : st === ST.POSE ? 'Açı ' + (UI.pose + 1) + ' · Esc sürmeye döner' : '';
   UI.tag.style.display = UI.tag.textContent ? 'block' : 'none';
   hudShow(st === ST.JOGO || st === ST.FITA || (st === ST.PAUSA && UI.back !== ST.BENCH));
   sndRun(st === ST.JOGO || st === ST.FITA || st === ST.BENCH);

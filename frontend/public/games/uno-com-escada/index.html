@@ -21,27 +21,34 @@ body.has-touch #ht{display:none !important}
 #ht{left:50%;top:1.6vh;transform:translateX(-50%)}
 #hs{left:1.6vh;top:1.6vh}
 #tag{left:50%;bottom:2.2vh;transform:translateX(-50%);padding:.45em 1.1em;border-radius:1.2em;background:rgba(9,11,14,.62);color:#fff;white-space:nowrap}
-#ui{inset:0;pointer-events:auto;align-items:center;justify-content:center;background:rgba(6,8,10,.62);font-size:clamp(11px,1.72vh,17px);padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);box-sizing:border-box}
+/* #ui ekranın ortasına yerleşir: eskiden display:none ile gizliydi ve
+   uiSet() onu 'flex' yapıyordu; ancak display:none <style> içinde kalınca
+   satır içi 'flex' ekranı gösteremiyordu — MENÜ HİÇ AÇILMIYORDU ("Başla"
+   düğmesi görünmüyordu). Artık varsayılan flex'tir, uiSet tarafından
+   kapatılır/açılır. */
+#ui{inset:0;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:rgba(6,8,10,.62);font-size:clamp(11px,1.72vh,17px);padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);box-sizing:border-box}
 #ui.ini{background:linear-gradient(rgba(6,8,10,.5),rgba(6,8,10,.82))}
-#ui>div{max-width:94vw;max-height:96vh;overflow:auto;padding:1.4em 2.2em;box-sizing:border-box;text-align:center}
-#ui h1{margin:0;font-size:3.1em;line-height:1.1;letter-spacing:.02em;color:#fff}
+/* Menü kutusu: telefonda taşmasın. max-height ekranın içinde kalır, gerekirse
+   yalnızca kutu kaydırılır (düğmeler ekran dışına çıkmaz). */
+#ui>div{width:min(560px,94vw);max-height:min(92vh,92dvh);overflow-y:auto;overscroll-behavior:contain;padding:1.1em 1.4em;box-sizing:border-box;text-align:center;border-radius:1em;background:rgba(8,11,15,.55)}
+#ui h1{margin:0;font-size:2.2em;line-height:1.1;letter-spacing:.02em;color:#fff}
 #ui .sub{margin:.3em 0 1.3em;opacity:.8;letter-spacing:.12em;text-transform:uppercase;font-size:.9em}
-#ui h2{margin:0 0 .5em;font-size:1.05em;letter-spacing:.1em;text-transform:uppercase;color:#ff8a6a}
-#ui .cols{display:flex;gap:3.2em;justify-content:center;flex-wrap:wrap;text-align:left}
+#ui h2{margin:0 0 .5em;font-size:.95em;letter-spacing:.1em;text-transform:uppercase;color:#ff8a6a}
+#ui .cols{display:flex;gap:1.8em;justify-content:center;flex-wrap:wrap;text-align:left;margin-top:.4em}
 #ui table{border-collapse:collapse}
 #ui td,#ui th{padding:.13em .7em .13em 0;font-weight:400;text-align:left}
-#ui td:first-child{color:#fff;font-weight:600;white-space:nowrap;padding-right:1.3em}
+#ui td:first-child{color:#fff;font-weight:600;white-space:nowrap;padding-right:1.1em}
 #res{display:none;margin:0 0 1.4em;padding:1em 1.4em;border-radius:.8em;background:rgba(255,255,255,.07)}
 #res table{margin:0 auto}#res th,#res td{padding:.2em 1.1em;text-align:right}#res td{color:#fff;font-weight:600;font-variant-numeric:tabular-nums}#res p{margin:.7em 0 0}
-#ui .bt{margin-top:1.5em}
-#ui button{font:inherit;font-size:1.15em;font-weight:600;color:#fff;background:#d8351c;border:0;border-radius:.5em;padding:.6em 2em;margin:.35em .4em;cursor:pointer}
+#ui .bt{margin-top:1.1em}
+/* Başla düğmesi ekran genişliğine sığar (eskiden 2.4em dolgusuyla taşıyordu). */
+#ui button{font:inherit;font-size:1.1em;font-weight:600;color:#fff;background:#d8351c;border:0;border-radius:.6em;padding:.7em 2.4em;margin:.35em .3em;max-width:100%;cursor:pointer;touch-action:manipulation}
 #ui button+button{background:rgba(255,255,255,.16)}
 #ui button:focus-visible{outline:2px solid #fff;outline-offset:2px}
 /* ---- çok oyunculu arayüz (Türkçe ek) — kamera arayüzü tamamen kaldırıldı ---- */
-#ol{margin-top:1.2em;font-size:.9em;line-height:1.6;color:#cfd6dd;max-width:34em;margin-left:auto;margin-right:auto}
+#ol{margin-top:.9em;font-size:.86em;line-height:1.5;color:#cfd6dd;max-width:30em;margin-left:auto;margin-right:auto}
 #ol b{color:#fff}
-#ol kbd{display:inline-block;min-width:1.5em;padding:.05em .4em;border-radius:.3em;background:rgba(255,255,255,.16);color:#fff;font:inherit;font-weight:600;font-size:.92em}
-#mpStat{margin-top:.7em;font-size:.92em;color:#ffb4c8;font-weight:600}
+#mpStat{margin-top:.5em;font-size:.95em;color:#ffb4c8;font-weight:600}
 #mpSay{
   display:none;position:absolute;pointer-events:auto;left:50%;transform:translateX(-50%);
   bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:20;
@@ -53,15 +60,29 @@ body.has-touch #ht{display:none !important}
 body.has-touch #mpSay{bottom:calc(30vmin + env(safe-area-inset-bottom,0px));left:auto;right:2.6vmin;transform:none}
 body.has-touch #mpSay .say{padding:7px 12px;font-size:11px}
 @media (max-width:640px){
-  #ui>div{padding:1em 1.2em}
+  #ui>div{padding:.9em 1.1em}
   #ui .cols{gap:1.4em}
-  #ui h1{font-size:2.2em}
+  #ui h1{font-size:1.9em}
 }
-/* ---- dokunmatik kumanda ---- */
+/* kısa yatay ekranda (telefon yatay) menü yazısı küçülür: düğme hep görünür kalsın */
+@media (max-height:430px){
+  #ui{font-size:clamp(10px,2.6vh,14px)}
+  #ui h1{font-size:1.5em}
+  #ui .cols{gap:1.2em}
+  #ui td,#ui th{padding:.08em .5em .08em 0}
+  #ui .bt{margin-top:.7em}
+}
+/* dokunmatikte klavye tablosu gereksiz: yer kaplamasın */
+body.has-touch #ui .cols > div:first-child{display:none}
+/* DOKUNMATİK KUMANDA: düğmeler vmin ile ölçülüyor; vmin kısa kenardır. Telefon
+   yatayken kısa kenar ~360-420 px olduğu için sağ/sol kümeler + üst sıra
+   ekranın dışına taşıyordu. Artık her küme kendi köşesine sabit: sol alt =
+   direksiyon, sağ alt = gaz/fren, üst sıra = el freni / kamera / piste dön.
+   Menü açıkken (duraklat/başlangıç) kumanda gizlenir. */
 #touchui{display:block;position:fixed;inset:0;pointer-events:none;z-index:15;overflow:hidden;
   padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
-/* dokunmatik olmayan cihazda düğmeler görünmesin */
 body:not(.has-touch) #touchui{display:none}
+body.menu-open #touchui{display:none}
 /* Büyük dokunma hedefleri: parmak ucuyla ıskalamadan basılsın diye düğmeler
    ve yazıları büyütüldü. Konumlar aynı köşelerden hizalıdır, böylece sağ/sol
    kümeler birbirine ve gösterge paneline değmez. */
@@ -76,28 +97,34 @@ body:not(.has-touch) #touchui{display:none}
 .tbtn .lb{font-size:.34em;letter-spacing:.03em;opacity:.95;white-space:nowrap;line-height:1.15;margin-top:.15em}
 .tbtn.on{background:rgba(216,53,28,.82);border-color:#fff;transform:scale(.94)}
 /* Dokunmatikte sürüş düğmeleri başparmağın doğal yerinde: sol alt = direksiyon,
-   sağ alt = gaz/fren. Gösterge paneli küçültüldüğü için artık çakışmıyor. */
+   sağ alt = gaz/fren; küçük yardımcı düğmeler üst sırada.
+   Eski sürümde sol ok düğmesi "sol kenar + direksiyon genişliği" ile hesaplanıyordu
+   (left:calc(22vmin + 5.2vmin)) ve telefonda sol küme ekranın dışına; üstteki
+   el freni/kamera/piste dön sırası da sağa taşıyordu. Artık her düğme kendi
+   köşesine sabit (sol/sağ + alt/üst), hiçbir hesap birikmiyor. */
 .t-left{left:2.6vmin}
-.t-left.t-mid{width:22vmin;height:22vmin;bottom:2.6vmin;font-size:4.6vmin}
-.t-right2{left:calc(22vmin + 5.2vmin) !important;bottom:2.6vmin}
 .t-right{right:2.6vmin}
-.t-gas{right:2.6vmin;bottom:2.6vmin;width:24vmin;height:24vmin;font-size:5vmin}
-.t-brake{right:calc(24vmin + 4.4vmin);bottom:2.6vmin;width:18vmin;height:18vmin;font-size:3.8vmin}
-/* küçük yardımcı düğmeler: sol köşenin üstünde yatay sıra */
-.t-small{width:14vmin;height:14vmin;font-size:3.1vmin;bottom:calc(22vmin + 3.4vmin)}
+.t-gas{right:2.6vmin;bottom:2.6vmin;width:22vmin;height:22vmin;font-size:4.6vmin}
+.t-brake{right:2.6vmin;bottom:calc(2.6vmin + 22vmin + 2.4vmin);width:16vmin;height:16vmin;font-size:3.4vmin}
+/* sol alt: direksiyon — DİKKAT: iki ok düğmesi aynı satırda (2.6 + ş + 2.4 + ş)
+   her zaman ekran içinde kalmalı; vmin = kısa kenar olduğu için telefon
+   yatayında bol bol sığar. */
+.t-mid{left:2.6vmin;bottom:2.6vmin;width:20vmin;height:20vmin;font-size:4.2vmin}
+.t-mid + .t-mid{left:calc(2.6vmin + 20vmin + 2.4vmin)}
+/* küçük yardımcı düğmeler: üst sıra, sol köşeden sağa doğru */
+.t-small{width:12vmin;height:12vmin;font-size:2.7vmin;bottom:auto;top:calc(env(safe-area-inset-top,0px) + 2.6vmin)}
 .t-hand{left:2.6vmin}
-.t-cam{left:calc(14vmin + 3.4vmin)}
-.t-reset{left:calc(2 * 14vmin + 4.2vmin)}
-/* çok kısa yatay ekranda (tarayıcı çubuğu açıkken) düğmeler bir tık küçülür,
-   yoksa üstteki küçük sıra gösterge paneline değer */
+.t-cam{left:calc(2.6vmin + 12vmin + 2.2vmin)}
+.t-reset{left:calc(2.6vmin + 2 * (12vmin + 2.2vmin))}
+/* Çok küçük yatay ekranda (tarayıcı çubuğu açıkken) düğmeler bir tık küçülür. */
 @media (max-height:400px),(max-width:700px){
-  .t-left.t-mid{width:19vmin;height:19vmin;font-size:4vmin}
-  .t-right2{left:calc(19vmin + 4.6vmin) !important}
-  .t-gas{width:21vmin;height:21vmin;font-size:4.4vmin}
-  .t-brake{right:calc(21vmin + 4vmin);width:16vmin;height:16vmin;font-size:3.4vmin}
-  .t-small{width:12vmin;height:12vmin;font-size:2.7vmin;bottom:calc(19vmin + 3vmin)}
-  .t-cam{left:calc(12vmin + 3vmin)}
-  .t-reset{left:calc(2 * 12vmin + 3.6vmin)}
+  .t-mid{width:17vmin;height:17vmin;font-size:3.6vmin}
+  .t-mid + .t-mid{left:calc(2.6vmin + 17vmin + 2vmin)}
+  .t-gas{width:19vmin;height:19vmin;font-size:4vmin}
+  .t-brake{bottom:calc(2.6vmin + 19vmin + 2vmin);width:14vmin;height:14vmin;font-size:3vmin}
+  .t-small{width:10vmin;height:10vmin;font-size:2.4vmin}
+  .t-cam{left:calc(2.6vmin + 10vmin + 2vmin)}
+  .t-reset{left:calc(2.6vmin + 2 * (10vmin + 2vmin))}
 }
 /* dikey ekranda "telefonu yan çevir" ekranı (CSS ile 90° çevirme yok: HUD ve
    düğmeleri bozuyordu) */
@@ -121,47 +148,31 @@ body:not(.has-touch) #touchui{display:none}
 <div id="hint">W gaz · S fren/geri · A/D direksiyon · Boşluk el freni · C kamera · R piste dön</div>
 <canvas id="hg"></canvas><canvas id="ht"></canvas><canvas id="hs"></canvas><div id="tag"></div>
 <div id="ui"><div>
-<h1>Uno merdivenli</h1>
-<p class="sub">Fiat Uno Mille EP 1996 · pist</p>
+<h1>Uno Merdivenli</h1>
 <div id="res"></div>
+<!-- Sade menü: teknik detay yok, telefonda kaydırmadan sığar. -->
 <div class="cols">
-<div><h2>Klavye</h2><table>
-<tr><td>W veya ↑</td><td>gaz</td></tr>
-<tr><td>S veya ↓</td><td>fren ve geri</td></tr>
-<tr><td>A D veya ← →</td><td>direksiyon</td></tr>
+<div><h2>Klavyede</h2><table>
+<tr><td>Ok tuşları</td><td>sür</td></tr>
 <tr><td>Boşluk</td><td>el freni</td></tr>
-<tr><td>C</td><td>kamerayı değiştir</td></tr>
-<tr><td>V (basılı)</td><td>arkaya bak</td></tr>
+<tr><td>C</td><td>kamera</td></tr>
 <tr><td>R</td><td>piste dön</td></tr>
-<tr><td>Esc</td><td>duraklat, bu menü</td></tr>
+<tr><td>Esc</td><td>durakla</td></tr>
 </table></div>
-<div><h2>Kumanda</h2><table>
-<tr><td>Sağ tetik</td><td>gaz</td></tr>
-<tr><td>Sol tetik</td><td>fren ve geri</td></tr>
-<tr><td>Sol analog</td><td>direksiyon</td></tr>
-<tr><td>A</td><td>el freni</td></tr>
-<tr><td>Y</td><td>kamerayı değiştir</td></tr>
-<tr><td>RB (basılı)</td><td>arkaya bak</td></tr>
-<tr><td>X</td><td>piste dön</td></tr>
-<tr><td>Start</td><td>bu menü</td></tr>
-</table></div>
-<div><h2>Araçlar</h2><table>
-<tr><td>M</td><td>sesi aç / kapat</td></tr>
-<tr><td>H</td><td>performans istatistikleri</td></tr>
-<tr><td>B</td><td>ölçüm (60 sn'lik rotalı tur)</td></tr>
-<tr><td>F</td><td>rotalı turu izle</td></tr>
-<tr><td>1 – 6</td><td>sabit kamera açıları</td></tr>
-<tr><td colspan="2" style="font-weight:400;color:#ddd;opacity:.75;padding-top:.5em">Otomatik vites · tur, start<br>çizgisi geçilince sayılır</td></tr>
+<div><h2>Telefonda</h2><table>
+<tr><td>Sol</td><td>direksiyon</td></tr>
+<tr><td>Sağ</td><td>gaz / fren</td></tr>
+<tr><td>✋</td><td>el freni</td></tr>
+<tr><td>🎥</td><td>kamera</td></tr>
+<tr><td>↺</td><td>piste dön</td></tr>
 </table></div>
 </div>
 <div id="ol">
-<b>Beraber oynayın:</b> iki telefon da Ahududu'nun içinden oyunu açsın, ikiniz de aynı pistte olursunuz.
-Sevgilinin arabası pistte canlı görünür (pembe), motor sesi kameraya göre sağdan/soldan gelir.
-İkiniz de <b>Başla</b>'ya bastığınızda 3-2-1 geri sayım aynı anda başlar; iki araba start çizgisinden birlikte kalkar.
-<div id="mpStat">bekleniyor…</div>
+İkiniz de oyunu açın: birlikte aynı pistte sürersiniz.<br>
+Sevgilin oyuna girince arabası pistte belirir; ikiniz de <b>Başla</b>'ya basınca birlikte kalkarsınız.
+<div id="mpStat">tek başına sürüyorsun</div>
 </div>
-<div class="bt"><button id="b0">Başla</button><button id="b1">Ölçüm</button></div>
-<button id="quit" type="button" style="display:none;background:rgba(255,255,255,.16)">Oyundan çık</button>
+<div class="bt"><button id="b0">Başla</button></div>
 </div></div>
 <div id="mpSay"><button class="say" type="button">🎤 Basılı tut: konuş</button></div>
 <script>
@@ -3165,7 +3176,7 @@ function genMips(tex, format, layers) {
   if (!_mipPipe[format]) _mipPipe[format] = mkFsPipe('blit', {}, [format]);
   const pipe = _mipPipe[format];
   const samp = dev.createSampler({ minFilter: 'linear', magFilter: 'linear' });
-  const enc = dev.createCommandEncoder();
+  const enc = apiEncoder();
   for (let L = 0; L < (layers || 1); L++) for (let m = 1; m < tex.mipLevelCount; m++) {
     const srcV = tex.createView({ dimension: '2d', baseMipLevel: m - 1, mipLevelCount: 1, baseArrayLayer: L, arrayLayerCount: 1 });
     const dstV = tex.createView({ dimension: '2d', baseMipLevel: m, mipLevelCount: 1, baseArrayLayer: L, arrayLayerCount: 1 });
@@ -4216,6 +4227,8 @@ function cubeSetup(f) {
 // ---- quadro ----
 // Os únicos objetos criados por quadro são os que a API WebGPU obriga a criar (codificador, passes, buffer de comandos,
 // textura/vista do canvas); ficam isolados nestas quatro funções para a medição de alocação poder separá-los.
+// Tek giriş noktası: gpuInit cihazı gerçek API'ye bağlar; testlerde sahte
+// cihaz atanabilir (window.__cap.dev).
 function apiEncoder() { return G.dev.createCommandEncoder(); }
 function apiPass(enc, desc) { return enc.beginRenderPass(desc); }
 function apiFinish(enc) { return enc.finish(); }
@@ -4281,7 +4294,7 @@ function renderStaticShadow() {
   staticShadowSetup(); setPass(4, R.casc.vp[3], ctr);
   G.dev.queue.writeBuffer(R.frameBuf, 0, FR.data); G.dev.queue.writeBuffer(R.passBuf, 0, R.passData, 0, 12 * 64);
   G.dev.queue.writeBuffer(R.objBuf, 0, R.objData, 0, R.objCount * 64);
-  const enc = G.dev.createCommandEncoder(); const p = enc.beginRenderPass(R.pd.shadowS);
+  const enc = apiEncoder(); const p = enc.beginRenderPass(R.pd.shadowS);
   drawAll(p, ctxFrom(KIND.SHADOW, R.casc.vp[3], 4, ctr, 3), 4, R.passBG); p.end();
   G.dev.queue.submit([enc.finish()]);
 }
@@ -4428,7 +4441,7 @@ async function skyInit(progress) {
   for (let z = 0; z < 64; z++) { ud[z * 64] = (z + 0.5) / 64; ud[z * 64 + 1] = 0; } ud[64 * 64 + 1] = 1;
   dev.queue.writeBuffer(ub, 0, ud);
   const nbp = nb, nbg = dev.createBindGroup({ layout: nb.bgls[0], entries: [{ binding: 0, resource: { buffer: ub, size: 16 } }] });
-  let enc = dev.createCommandEncoder();
+  let enc = apiEncoder();
   { const p = enc.beginRenderPass({ colorAttachments: [{ view: T.noise.createView({ baseMipLevel: 0, mipLevelCount: 1 }), loadOp: 'clear', storeOp: 'store' }] }); p.setPipeline(nbp); p.setBindGroup(0, nbg, [64 * 256]); p.draw(3); p.end(); }
   for (let z = 0; z < 64; z++) { const p = enc.beginRenderPass({ colorAttachments: [{ view: V.noise3, depthSlice: z, loadOp: 'clear', storeOp: 'store' }] }); p.setPipeline(nbp); p.setBindGroup(0, nbg, [z * 256]); p.draw(3); p.end(); }
   dev.queue.submit([enc.finish()]);
@@ -4439,7 +4452,7 @@ async function skyInit(progress) {
   const sbg = bgOf(sb, 0, [su, V.noise3, V.noise, R.sLin]);
   const strips = 16;
   for (let i = 0; i < strips; i++) {
-    enc = dev.createCommandEncoder();
+    enc = apiEncoder();
     const p = enc.beginRenderPass({ colorAttachments: [{ view: V.sky, loadOp: i ? 'load' : 'clear', storeOp: 'store' }] });
     p.setPipeline(sb); p.setBindGroup(0, sbg); p.setScissorRect(i * SKY_W / strips, 0, SKY_W / strips, SKY_H); p.draw(3); p.end();
     dev.queue.submit([enc.finish()]);
@@ -4451,7 +4464,7 @@ function halfToFloat(h) { const s = (h & 0x8000) ? -1 : 1, e = (h >> 10) & 31, f
 async function computeSH() {
   const dev = G.dev, mip = 3, n = ENV_RES >> mip, bpr = Math.ceil(n * 8 / 256) * 256;
   const buf = dev.createBuffer({ size: bpr * n * 6, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  const enc = dev.createCommandEncoder();
+  const enc = apiEncoder();
   for (let f = 0; f < 6; f++) enc.copyTextureToBuffer({ texture: R.tex.env, mipLevel: mip, origin: [0, 0, f] }, { buffer: buf, offset: f * bpr * n, bytesPerRow: bpr, rowsPerImage: n }, [n, n, 1]);
   dev.queue.submit([enc.finish()]); await buf.mapAsync(GPUMapMode.READ);
   const u16 = new Uint16Array(buf.getMappedRange()), sh = new Float64Array(27); let wsum = 0;
@@ -5242,6 +5255,9 @@ const CAR = {
       for (let i = 0; i < 4; i++) { set.add(wm, CAR.slotWheel[i], 3); set.add(wbm, CAR.slotWheel[i], 1); }   // disco de borrão: só no passe principal
     }
     if (typeof carBuildSteer === 'function') { const s = new MeshBuilder(1 << 12); carBuildSteer(s); CAR.tris += s.ni / 3; set.add(s.upload(), CAR.slotSteer, 3); }
+    // Ortak (paylaşılan) meshler: kendi araba ve partner arabası AYNI buffer'ları
+    // kullanır; biri bufersa diğeri de kaybeder (bkz. 55_multiplayer.js).
+    CAR.shared = { body: set.items[0], wheels: set.items[1] ? set.items.slice(1, 5) : [], steer: set.items[5] || null };
     const tex = typeof carAtlas === 'function' ? carAtlas() : mkTex(4, 4, 'rgba8unorm-srgb');
     // desenhável: liga o atlas (grupo 3) ve não entra no mapa de sombras estático do mundo
     const drawable = { draw(pass, ctx) {
@@ -6966,7 +6982,7 @@ function vegBakeImpostors(cpu) {
   }
   const ubuf = mkBuf(ub.byteLength, BU.U, ub);
   const bg = dev.createBindGroup({ layout: bgls[0], entries: [{ binding: 0, resource: { buffer: ubuf, size: 64 } }, { binding: 1, resource: V.leafView }, { binding: 2, resource: V.sLeaf }, { binding: 3, resource: R.view.noise }] });
-  const enc = dev.createCommandEncoder();
+  const enc = apiEncoder();
   for (let a = 0; a < VEG_NT; a++) for (let k = 0; k < 8; k++) {
     const L = a * 8 + k, lv = t => t.createView({ dimension: '2d', baseArrayLayer: L, arrayLayerCount: 1, baseMipLevel: 0, mipLevelCount: 1 });
     const p = enc.beginRenderPass({
@@ -8359,7 +8375,7 @@ function hudStats(on) { HUD.stats = on; if (HUD.cs) HUD.cs.style.display = on ? 
 // poses, teclas de ferramenta e leitura do controle. Nas ferramentas de trabalho/ (captura, poses, teste, medição) nada
 // disto é ligado: sem menu, sem painel, sem som.
 const ST = { INICIO: 0, JOGO: 1, PAUSA: 2, BENCH: 3, FITA: 4, RESULT: 5, POSE: 6 };
-const UI = { st: ST.INICIO, back: ST.JOGO, el: null, tag: null, res: null, b0: null, b1: null, bench: null, benchN: 0, padPrev: 0, padN: 0, pose: -1, stats: false, warm: false, countdown: false, countdownTimer: null };
+const UI = { st: ST.INICIO, back: ST.JOGO, el: null, tag: null, res: null, b0: null, b1: null, bench: null, benchN: 0, padPrev: 0, padN: 0, pose: -1, stats: false, warm: false, countdown: false, countdownTimer: null, menuOn: false };
 const $ = id => document.getElementById(id);
 function uiInit() {
   UI.el = $('ui'); UI.tag = $('tag'); UI.res = $('res'); UI.b0 = $('b0'); UI.b1 = $('b1');
@@ -8367,20 +8383,24 @@ function uiInit() {
   try { const b = +localStorage.getItem('uno-melhor'); if (b > 20 && b < 600) LAP[2] = b; } catch (e) { /* sem armazenamento local: a melhor volta vale só nesta sessão */ }
   UI.b0.onclick = () => {
     if (UI.st === ST.INICIO) {
+      // Telefonda ses ancak bir dokunuşla açılabilir: "Başla" o dokunuş.
+      try { if (typeof mobUnlockAudio === 'function') mobUnlockAudio(); } catch (e) { /* yok say */ }
       sndStart();
-      // Çift oynanıyorsa: ikinizin de aynı anda kalkması için ortak başlangıç
-      // saati duyurulur (3-2-1 geri sayım). Ağ yoksa hemen başlar.
-      if (typeof mpAnnounceStart === 'function' && typeof NET !== 'undefined' && NET.live) {
+      // Yalnız oynanabilir: sevgili oyunda yoksa geri sayım beklemeden başla.
+      // İkiniz de oyundaysanız (bağlantı AÇIK ve partner pistte) iki araba da
+      // aynı anda kalksın diye 3-2-1 geri sayımı kurulur.
+      const partnerReady = typeof NET !== 'undefined' && NET.live && typeof MP !== 'undefined' && MP.partnerOn;
+      if (partnerReady && typeof mpAnnounceStart === 'function') {
         let armed = false;
         try { armed = mpAnnounceStart() !== false; } catch (e) { console.warn('[ui] geri sayım:', e); }
         if (armed) { uiCountdown(); return; }
-        uiSet(ST.JOGO);
-        return;
       }
-      uiSet(ST.JOGO);
+      uiSet(ST.JOGO);                              // tek oyuncu: hemen başla
+      try { if (typeof NET !== 'undefined' && NET.live && typeof mpAnnounceStart === 'function') mpAnnounceStart(); } catch (e) { /* yok say */ }
+      return;
     } else uiResume();
   };
-  UI.b1.onclick = () => benchStart();
+  UI.b1 = $('b1');                                // (ölçüm düğmesi kullanıcı arayüzünden kaldırıldı)
   addEventListener('keydown', uiKey);
   document.addEventListener('visibilitychange', () => { if (document.hidden && (UI.st === ST.JOGO || UI.st === ST.FITA || UI.st === ST.BENCH)) uiPause(); });
   addEventListener('gamepadconnected', padCount); addEventListener('gamepaddisconnected', padCount);
@@ -8391,12 +8411,21 @@ function uiInit() {
 function uiSet(st) {
   const menu = st === ST.INICIO || st === ST.PAUSA || st === ST.RESULT;
   UI.st = st; UI.el.style.display = menu ? 'flex' : 'none'; UI.el.className = st === ST.INICIO ? 'ini' : '';
+  // menü açıkken dokunmatik kumanda gizlenir (düğmeler ekran dışına taşmasın
+  // ve "Başla"yı örtmesin)
+  UI.menuOn = menu;
+  try {
+    // Sınıf YERİNE yazılır: mobBoot ekler, uiSet tek doğru kaynak kalır
+    // (eskiden tight: başka bir ekran sınıfı silince menü işareti kayboluyordu).
+    document.body.classList.toggle('menu-open', menu);
+    document.body.classList.toggle('has-touch', !!(typeof MOB !== 'undefined' && MOB.touch));
+  } catch (e) { /* yok say */ }
   UI.b0.textContent = st === ST.INICIO ? 'Başla' : st === ST.RESULT ? 'Sürmeye dön' : 'Devam et';
-  UI.b1.style.display = st === ST.INICIO ? 'none' : ''; UI.b1.textContent = st === ST.RESULT ? 'Ölçümü yinele' : 'Ölçüm';
+  if (UI.b1) { UI.b1.style.display = 'none'; UI.b1.textContent = 'Ölçüm'; }   // ölçüm düğmesi sade arayüzde yok
   UI.res.style.display = st === ST.RESULT ? 'block' : 'none';
   // menü açılınca kamera durumu tazelenir
   if (typeof mpUiRefresh === 'function') { try { mpUiRefresh(); } catch (e) { /* yok say */ } }
-  UI.tag.textContent = st === ST.BENCH ? 'Ölçüm: 60 sn rotalı tur · Esc iptal' : st === ST.FITA ? 'Rotalı tur · R direksiyona geç · Esc menü' : st === ST.POSE ? 'Açı ' + (UI.pose + 1) + ' · ' + POSES[UI.pose].nome + ' · 1-6 değiştirir · Esc sürmeye döner' : '';
+  UI.tag.textContent = st === ST.BENCH ? 'Ölçüm · Esc iptal' : st === ST.FITA ? 'Rotalı tur · R sürmeye dön · Esc menü' : st === ST.POSE ? 'Açı ' + (UI.pose + 1) + ' · Esc sürmeye döner' : '';
   UI.tag.style.display = UI.tag.textContent ? 'block' : 'none';
   hudShow(st === ST.JOGO || st === ST.FITA || (st === ST.PAUSA && UI.back !== ST.BENCH));
   sndRun(st === ST.JOGO || st === ST.FITA || st === ST.BENCH);
@@ -8725,7 +8754,7 @@ const MP = {
   // partnerin arabası: T = ağdan gelen hedef, S = ekranda yumuşatılan kopya
   T: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0, s: 0, d: 0 },
   S: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0 },
-  hasT: false, carReady: false,
+  hasT: false, carReady: false, shown: false, seqRank: 0, helloAt: 0, lastRxHelloAt: 0,
   set: null, bodyObj: 0, wheelObj: [0, 0, 0, 0],
   paint: MP_PAINT
 };
@@ -8748,48 +8777,73 @@ function mpSetUser(id) {
 }
 
 // ------------------- 3) PARTNER ARABASI (ayrı objeler) ---------------------
-// CAR'ın meshlerini kendi objelerimize ekler: gövde + 4 tekerlek. Direksiyon
-// gibi ek parçalar da (varsa) partnerin gövdesine bağlanır ki iç kısım boş
-// görünmesin.
+// ÖNEMLİ HATA (düzeltildi): eski sürüm kendi arabanın mesh listesini partnerin
+// listesine taşıyıp ARDINDAN kendi listesini BOŞALTIYOR (`src.items.length = 0`)
+// ve camları `CAR.glass.items.length = 0` ile siliyordu. Sonuç: kendi arabamız
+// hiçbir şey çizmiyordu (arabayı bile görünmüyordu) ve partner arabası sadece
+// ilk paket geldikten sonra ortaya çıkıyordu. Ayrıca partner paketleri oyuna hiç
+// ulaşmadığı için pratikte ikisi de yoktu.
+//
+// Doğrusu: meshler PAYLAŞILIR (aynı vertex/index buffer'ları iki MeshSet'te
+// birden kullanılabilir; hiçbir liste tüketilmez), yalnızca nesne yuvaları
+// (slot) ayrıdır — bu sayede iki araba bağımsız hareket eder.
+// Partner arabası yalnızca sevgili oyuna girdiğinde çizilir (R.drawables'a o an
+// eklenir); önceden pistte duran bir "hayalet araba" yok.
 function mpBuildPartnerCar() {
   if (MP.carReady) return true;
   try {
-    if (typeof R === 'undefined' || typeof CAR === 'undefined' || !CAR.set) return false;
-    const fam = CAR.fam, src = CAR.set;
-    if (!fam || !src.items || !src.items.length) return false;
-    const set = MP.set = new MeshSet(fam);
+    if (typeof R === 'undefined' || typeof CAR === 'undefined' || !CAR.set || typeof objSlot !== 'function') return false;
+    const shared = CAR.shared;
+    if (!shared || !shared.body || !shared.wheels || shared.wheels.length < 4) return false;
+    const fam = CAR.fam;
+    if (!fam) return false;
+    // gövde + 4 tekerlek için kendi yuvalarımız
     MP.bodyObj = objSlot();
     for (let i = 0; i < 4; i++) MP.wheelObj[i] = objSlot();
-    for (let i = 0; i < src.items.length; i++) {
-      const it = src.items[i];
-      const slot = it.slot === CAR.slotBody ? MP.bodyObj
-        : it.slot === CAR.slotWheel[0] ? MP.wheelObj[0]
-          : it.slot === CAR.slotWheel[1] ? MP.wheelObj[1]
-            : it.slot === CAR.slotWheel[2] ? MP.wheelObj[2]
-              : it.slot === CAR.slotWheel[3] ? MP.wheelObj[3]
-                : MP.bodyObj;                     // direksiyon vb. → gövdeyle birlikte hareket eder
-      set.add({ vb: it.vb, ib: it.ib, count: it.count, bounds: { c: [it.cx, it.cy, it.cz], r: it.r } }, slot, it.flags, it.maxDist);
+    const set = MP.set = new MeshSet(fam);
+    // gövde (gölge dahil). Direksiyon simidi partnerin gövde yuvasına bağlanır:
+    // ayrı bir yuva açıp hiç güncellemezsek son matrisiyle kalır ve boş görünür.
+    const b = shared.body;
+    set.add({ vb: b.vb, ib: b.ib, count: b.count, bounds: { c: [b.cx, b.cy, b.cz], r: b.r } }, MP.bodyObj, 7);
+    if (shared.steer) set.add({ vb: shared.steer.vb, ib: shared.steer.ib, count: shared.steer.count, bounds: { c: [shared.steer.cx, shared.steer.cy, shared.steer.cz], r: shared.steer.r } }, MP.bodyObj, 3);
+    for (let i = 0; i < 4; i++) {
+      const w = shared.wheels[i];
+      if (!w) continue;
+      set.add({ vb: w.vb, ib: w.ib, count: w.count, bounds: { c: [w.cx, w.cy, w.cz], r: w.r } }, MP.wheelObj[i], 7);
     }
-    // Partnerin meshleri artık KENDİ listesinde. CAR.set'ten çıkarılır:
-    // aksi hâlde aynı meshler kendi arabanın matrisiyle ikinci kez çizilir
-    // (partner arabası üst üste biner, gölge geçişi bind grubu olmadan çizim
-    // yapıp komut tamponunu geçersiz kılar → ekran donar).
-    src.items.length = 0;
-    // Partner çizilebilirler listesinde kendi arabamızdan SONRA gelir; böylece
-    // camları (transparent) da doğru sırada bağlanır.
-    R.drawables.push(set);
-    // Camlar: kendi arabamızla aynı meshler, partnerin gövde nesnesine bağlı.
-    // (GlassSet.bind = çizimden hemen önce hangi gövde nesnesinin kullanılacağı)
-    if (typeof CAR.glass !== 'undefined' && CAR.glass && CAR.glass.items) {
+    // camlar: aynı meshler, partnerin gövdesine bağlı (kendi camlarımız da kalır)
+    if (CAR.glass && CAR.glass.items && CAR.glass.items.length) {
       const gl = new GlassSet();
       for (const g of CAR.glass.items) gl.add_({ vb: g.vb, ib: g.ib, count: g.count }, MP.bodyObj);
       gl.bind = () => MP.bodyObj;
-      R.transparents.push(gl);
-      CAR.glass.items.length = 0;                // camlar da partnerde çizilir (kopya)
+      MP.glass = gl;
     }
+    // R.drawables listesine HENÜZ eklenmez: partner oyunda yokken çizilecek bir
+    // şey yok. İlk "hello"/araba paketinde mpShowPartner() ekler.
     MP.carReady = true;
     return true;
   } catch (e) { console.warn('[uno-mp] partner arabası kurulamadı:', e); return false; }
+}
+// Partner pistte göründüğünde çizim listesine ekle, kaybolunca çıkar.
+function mpShowPartner(on) {
+  try {
+    if (!MP.carReady) return;
+    const add = !!on;
+    if (add) {
+      // Partner çizim listesinde YALNIZCA BİR KEZ olmalı; yoksa her turda bir
+      // kez daha eklenir ve "kayboldu" sanılır (eskiden fresnel/normal
+      // eşlemesinin sessizce çifte eklemesi pistte hayalet araba bırakıyordu).
+      let k = 0;
+      for (let i = 0; i < R.drawables.length; i++) if (R.drawables[i] === MP.set) k++;
+      if (!k) R.drawables.push(MP.set);                 // kendi arabamızdan SONRA çizilir
+      if (MP.glass && R.transparents.indexOf(MP.glass) < 0) R.transparents.push(MP.glass);
+    } else {
+      let i;
+      while ((i = R.drawables.indexOf(MP.set)) >= 0) R.drawables.splice(i, 1);
+      if (MP.glass) { let j; while ((j = R.transparents.indexOf(MP.glass)) >= 0) R.transparents.splice(j, 1); }
+    }
+  } catch (e) { /* yok say */ }
+  MP.shown = !!on && MP.carReady;
 }
 // Kendi arabamızın rengini bir kez yazar (partnerin arabası farklı renkte olsun).
 function mpPaintMine() {
@@ -8995,20 +9049,39 @@ function mpOnCar(d) {
   T.x = +d[0] || 0; T.y = +d[1] || 0; T.z = +d[2] || 0; T.yaw = +d[3] || 0;
   T.spd = +d[4] || 0; T.gear = +d[5] || 0; T.acc = +d[6] || 0; T.s = +d[7] || 0; T.d = +d[8] || 0;
   if (jump) { MP.S.x = T.x; MP.S.y = T.y; MP.S.z = T.z; MP.S.yaw = T.yaw; MP.S.spd = T.spd; MP.hasT = true; }
-  if (!MP.partnerOn) { MP.partnerOn = true; mpUiRefresh(); }
+  if (!MP.partnerOn) { MP.partnerOn = true; mpShowPartner(true); mpUiRefresh(); }
   MP.lastRxCarAt = performance.now();
+}
+// Partner oyundan çıkınca: arabasını pistten kaldır (hedef/ekran kopyası temizlenir).
+function mpPartnerGone() {
+  MP.partnerOn = false; MP.hasT = false;
+  mpShowPartner(false);
+  if (typeof mpUiRefresh === 'function') mpUiRefresh();
 }
 function mpOnPacket(d) {
   if (!d || typeof d !== 'object') return;
   switch (d.type) {
     case 'game_hello':
       if (d.from === MP.userId) break;          // kendi yankımız — yok say
+      if (MP._helloAnswered) MP.heardOurHello = true;   // karşı taraf bizim hello'muza yanıt verdi
       MP.partnerOn = true;
+      MP.helloAt = performance.now(); MP.lastRxHelloAt = MP.helloAt;
+      if (!MP.seqRankSent && typeof d.seq === 'number') MP.seqRank = d.seq === 0 ? 1 : 0;   // sıra tersine dönmesin
+      mpShowPartner(true);                      // partner oyuna girdi: pistte görünür
       if (!MP.sentAt || MP.sentAt < 0) MP.sentAt = 0;
+      // Karşı taraf bizi tanısın diye (yalnızca bizim hello'muza karşılık
+      // gelmediyse) kendimizi tanıt ve nerede olduğumuzu söyle.
+      if (typeof NET !== 'undefined' && NET.live && !MP._helloAnswered) {
+        MP._helloAnswered = true;
+        NET.json({ type: 'game_hello', game: GAME_ID, from: MP.userId, seq: MP.seqRank });
+        NET.json({ type: 'game_car', d: mpSelfState() });   // partnerimiz bizi hemen görsün
+      }
       mpUiRefresh();
       break;
     case 'game_car': mpOnCar(d.d); break;
-    case 'game_bye': MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); break;
+    case 'game_bye':
+      if (!d.from || d.from !== MP.userId) mpPartnerGone();   // kendi çıkışımız bize yansımasın
+      break;
     case 'game_countdown': mpOnCountdown(d); break;
     case 'game_start': mpOnStart(d); break;
     case 'game_mic':
@@ -9016,9 +9089,12 @@ function mpOnPacket(d) {
       break;
   }
 }
+// Menüdeki durum yazısı: teknik detay yok, sade cümle.
 function mpUiRefresh() {
   const st = document.getElementById('mpStat');
-  if (st) st.textContent = MP.partnerOn ? MP.partnerName + ' oyunda · arabası pistte' : 'bekleniyor… (sevgilin de oyunu açmalı)';
+  if (st) st.textContent = MP.partnerOn
+    ? MP.partnerName + ' oyunda · arabası pistte'
+    : 'tek başına sürüyorsun';
   const say = document.getElementById('mpSay');
   if (say) say.style.display = MP.partnerOn ? 'block' : 'none';
 }
@@ -9075,23 +9151,46 @@ function mpAnnounceStart() {
 }
 
 // ---------------------------- 8) DÖNGÜ KANCALARI ---------------------------
-// Partner arabasını, ağdan ilk konum gelmeden de start çizgisinde göster
-// (ikiniz de aynı anda giriyorsanız birbirinizi hemen görürsünüz).
+// SPAWN: partner oyuna girdiğinde ARABASI HARİTADA belirir (ilk paket bu
+// konumu taşır). Paketten önce kendi konumumuzun yanına bir "hayalet" koymak
+// yanlıştı: partner pistte olmasa bile onun arabası görünüyordu. Bu yüzden
+// seed yalnızca hâlâ ilk paket bekleniyorsa ve partner gerçekten oyundaysa,
+// ilk "hello"dan sonra kısa bir an için devreye girer.
+// Başlangıç sıralaması: iki araba aynı yerde doğmasın diye geri sayım
+// başlamadan önce (start çizgisinde) sıra verilir; ilk hello'daki sıra
+// bilgisi (seq) hangi arabanın önde duracağını belirler.
 function mpSeedPartnerAtGrid() {
   if (MP.hasT || !MP.carReady || typeof VEH === 'undefined') return;
   try {
     const V = VEH, T = MP.T;
-    T.x = MP.S.x = V.x; T.y = MP.S.y = V.y; T.z = MP.S.z = V.z; T.yaw = MP.S.yaw = V.yaw;
+    // partner bir sıra arkada/önde durur; aynı noktaya iki araba binmez
+    const back = (MP.seqRank || 0) === 0 ? -5.2 : 5.2;      // kendi yönümüze göre geri/ileri
+    const c = Math.cos(V.yaw), s = Math.sin(V.yaw);
+    T.x = MP.S.x = V.x + c * back; T.z = MP.S.z = V.z + s * back;
+    T.y = MP.S.y = V.y; T.yaw = MP.S.yaw = V.yaw;
     T.spd = MP.S.spd = 0; MP.hasT = true;
     mpBeginFrame();
   } catch (e) { /* yok say */ }
 }
+// Bağlantı kurulduğunda: kendimizi tanıt ve nerede olduğumuzu bildir; sevgili
+// de oyundaysa arabası HARİTADA belirir (game_hello -> mpShowPartner).
+function mpAnnounce() {
+  if (typeof NET === 'undefined' || !NET.live) return;
+  MP.seqRankSent = true;
+  NET.json({ type: 'game_hello', game: GAME_ID, from: MP.userId, seq: MP.seqRank });
+  if (typeof VEH !== 'undefined') NET.json({ type: 'game_car', d: mpSelfState() });
+}
 function mpNetHousekeeping() {
   const now = performance.now();
-  if (MP.partnerOn && !MP.hasT && now - MP.bootAt > 1500) mpSeedPartnerAtGrid();
+  // ilk "hello"dan sonra 0,25 s içinde araba paketi gelmezse partner kendi
+  // menüsündedir: onu hemen kaybolmuş saymayız, yalnızca temsilî bir yerde
+  // gösterilir (paket gelince gerçek konumuna oturur).
+  if (MP.partnerOn && !MP.hasT && MP.helloAt && now - MP.helloAt > 250) mpSeedPartnerAtGrid();
   if (!NET.opened && MP.retryAt && now >= MP.retryAt) { MP.retryAt = 0; NET.connect(); }
-  // partner uzun süre paket göndermediyse kaybolsun (30 sn)
-  if (MP.hasT && MP.partnerOn && now - MP.lastRxCarAt > 30000) { MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); }
+  // partner uzun süre paket göndermediyse pistten kalksın (15 sn)
+  if (MP.partnerOn && now - Math.max(MP.lastRxCarAt, MP.lastRxHelloAt, MP.helloAt || 0) > 15000) {
+    mpPartnerGone();
+  }
   if (MPSTART.pending) mpArmStart();
 }
 
@@ -9101,6 +9200,7 @@ function mpBoot() {
   mpSoundInit();
   mpBuildPartnerCar();
   mpPaintMine();
+  MP.seqRank = MP.userId === 'murat' ? 0 : 1;     // sıra: murat önde, selin arkada
   // Kabuktan gelen partner paketleri (önceden hiç bağlanmamıştı: partnerin
   // arabası ve geri sayım hiç ulaşmıyordu).
   try { if (MPSHARE && MPSHARE.on) MPSHARE.on((d) => mpOnPacket(d)); } catch (e) { /* yok say */ }
@@ -9112,7 +9212,7 @@ function mpBoot() {
         if (NET.ws) { NET.close(); }
         NET.opened = false;
         MP.retryAt = 0;
-        NET.json({ type: 'game_hello', game: GAME_ID });   // yeni bağlantıda kendimizi tanıt
+        mpAnnounce();                                     // yeni bağlantıda kendimizi tanıt
       } else if (!NET.ws) {
         NET.closedByUser = false; MP.retryAt = 0;
         NET._probed = true;                                 // artık köprü yanıt vermiyor
@@ -9122,12 +9222,24 @@ function mpBoot() {
     });
   } catch (e) { /* yok say */ }
   NET.connect();
+  setTimeout(() => { try { mpAnnounce(); } catch (e) { /* yok say */ } }, 1200);
+  if (typeof window !== 'undefined') {
+    // oyun kapanırken partner pistten kalksın (sayfa kapanırken paket yarışı)
+    addEventListener('pagehide', () => { try { if (NET.live) NET.json({ type: 'game_bye', from: MP.userId }); } catch (e) { /* yok say */ } });
+  }
+  mpUiRefresh();
 }
 BUILD.push(async () => { try { mpBuildPartnerCar(); } catch (e) { } try { mpBoot(); } catch (e) { console.warn('[uno-mp] başlatılamadı', e); } });
 // Teşhis: konsoldan window.__mp ile çok oyunculu durumu inceleyebilirsin
+// (otomatik testler de paket işleyicisini buradan sürer: tests/test_game_logic.py)
 try {
   window.__mp = {
     net: NET, mp: MP, snd: MPSND,
+    packet: (d) => mpOnPacket(d),
+    show: (on) => mpShowPartner(on),
+    gone: () => mpPartnerGone(),
+    src: { show: mpShowPartner.toString(), bye: mpPartnerGone.toString() },
+    carInfo: () => ({ ownItems: CAR.set.items.length, ownGlass: CAR.glass ? CAR.glass.items.length : 0, partnerItems: MP.set ? MP.set.items.length : -1, carReady: MP.carReady, shown: R.drawables.indexOf(MP.set) >= 0 }),
     state() {
       return {
         userId: MP.userId, partnerName: MP.partnerName,
@@ -9231,10 +9343,11 @@ const MOB_BTN = [
   { id: 'gas', bit: () => K_W, icon: '▲', label: 'GAZ', side: 'right', size: 'big' },
   { id: 'brake', bit: () => K_S, icon: '▼', label: 'FREN', side: 'right', size: 'mid' },
   { id: 'left', bit: () => K_A, icon: '◀', label: 'SOL', side: 'left', size: 'mid' },
-  { id: 'right', bit: () => K_D, icon: '▶', label: 'SAĞ', side: 'left', size: 'mid', extra: 't-right2' },
+  { id: 'right', bit: () => K_D, icon: '▶', label: 'SAĞ', side: 'left', size: 'mid' },
   { id: 'hand', bit: () => K_SPACE, icon: '✋', label: 'EL FRENİ', side: 'left', size: 'small' },
   { id: 'cam', bit: () => K_C, icon: '🎥', label: 'KAMERA', side: 'left', size: 'small', tap: true },
-  { id: 'reset', bit: () => K_R, icon: '↺', label: 'PİSTE DÖN', side: 'right', size: 'small', tap: true }
+  // üst sıra soldan sağa dizilir: el freni · kamera · piste dön
+  { id: 'reset', bit: () => K_R, icon: '↺', label: 'PİSTE DÖN', side: 'left', size: 'small', tap: true }
 ];
 
 function mobBuildControls() {
@@ -9294,10 +9407,16 @@ function mobHookKeyboard() {
 
 // Arkadaşının motorunu duyabilmek için ses bağlamını ilk dokunuşta aç
 // (tarayıcı/WebView kuralları: kullanıcı hareketi olmadan ses başlamaz).
+// Menüdeki "Başla"ya dokununca da çağrılır (uiInit -> mobUnlockAudio), böylece
+// oyun sesi sessiz başlamaz.
 function mobUnlockAudio() {
   try { if (typeof mpSoundInit === 'function') mpSoundInit(); } catch (e) { /* yok say */ }
-  const C = window.__mp && window.__mp.snd && window.__mp.snd.ctx;
-  if (C && C.state === 'suspended') C.resume().catch(() => { });
+  const groups = [];
+  try { if (window.__mp && window.__mp.snd && window.__mp.snd.ctx) groups.push(window.__mp.snd.ctx); } catch (e) { /* yok say */ }
+  try { if (typeof SND !== 'undefined' && SND.ctx) groups.push(SND.ctx); } catch (e) { /* yok say */ }
+  for (const C of groups) {
+    try { if (C && C.state === 'suspended') C.resume().catch(() => { }); } catch (e) { /* yok say */ }
+  }
 }
 
 function mobBoot() {
@@ -9314,9 +9433,16 @@ function mobBoot() {
   // Tam ekran: iframe içinde tek dokunuşla tam ekrana geçilemez; üstteki
   // Ahududu kabuğu (GamePlayer) oyun açılırken bunu kendisi yapıyor. Yine de
   // kullanıcı bir yere dokunduğunda tarayıcı tam ekranına izin veriliyorsa
-  // denenir (hata sessizce yutulur).
+  // denenir (hata sessizce yutulur). Menüdeki düğmelere dokunuşta DENENMEZ:
+  // aksi hâlde "Başla"ya basınca tam ekran isteği menü düğmesini örtüyordu.
   if (MOB.touch) {
-    const once = () => { mobUnlockAudio(); mobTryFullscreen(); removeEventListener('pointerdown', once); };
+    const once = ev => {
+      mobUnlockAudio();
+      const t = ev && ev.target;
+      if (t && t.closest && t.closest('#ui')) return;      // menü dokunuşu: tam ekran yok
+      removeEventListener('pointerdown', once);
+      mobTryFullscreen();
+    };
     addEventListener('pointerdown', once, { passive: true });
   }
 }
@@ -9605,6 +9731,8 @@ function rafLoop(t) {
 let _cap2d = null;
 window.__cap = {
   ready: () => GAME.ready, error: () => GAME.error || G.lastErr || null,
+  /** Testler için cihaz kancası (gpuInit doldurur) */
+  G: null, dev: null, hasF32Filter: () => !!G.hasF32Filter, get Ctx() { return G; },
   cam(ex, ey, ez, tx, ty, tz, fov) { if (typeof GS !== 'undefined') { GS.freeCam = true; GS.cut = true; } setCamera(ex, ey, ez, tx, ty, tz, fov); },
   // avança n quadros com passo fixo e renderiza cada um
   frames(n, dt) {

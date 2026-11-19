@@ -19,6 +19,9 @@ const CAR = {
       for (let i = 0; i < 4; i++) { set.add(wm, CAR.slotWheel[i], 3); set.add(wbm, CAR.slotWheel[i], 1); }   // disco de borrão: só no passe principal
     }
     if (typeof carBuildSteer === 'function') { const s = new MeshBuilder(1 << 12); carBuildSteer(s); CAR.tris += s.ni / 3; set.add(s.upload(), CAR.slotSteer, 3); }
+    // Ortak (paylaşılan) meshler: kendi araba ve partner arabası AYNI buffer'ları
+    // kullanır; biri bufersa diğeri de kaybeder (bkz. 55_multiplayer.js).
+    CAR.shared = { body: set.items[0], wheels: set.items[1] ? set.items.slice(1, 5) : [], steer: set.items[5] || null };
     const tex = typeof carAtlas === 'function' ? carAtlas() : mkTex(4, 4, 'rgba8unorm-srgb');
     // desenhável: liga o atlas (grupo 3) ve não entra no mapa de sombras estático do mundo
     const drawable = { draw(pass, ctx) {

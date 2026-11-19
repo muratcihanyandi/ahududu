@@ -97,6 +97,8 @@ function rafLoop(t) {
 let _cap2d = null;
 window.__cap = {
   ready: () => GAME.ready, error: () => GAME.error || G.lastErr || null,
+  /** Testler için cihaz kancası (gpuInit doldurur) */
+  G: null, dev: null, hasF32Filter: () => !!G.hasF32Filter, get Ctx() { return G; },
   cam(ex, ey, ez, tx, ty, tz, fov) { if (typeof GS !== 'undefined') { GS.freeCam = true; GS.cut = true; } setCamera(ex, ey, ez, tx, ty, tz, fov); },
   // avança n quadros com passo fixo e renderiza cada um
   frames(n, dt) {

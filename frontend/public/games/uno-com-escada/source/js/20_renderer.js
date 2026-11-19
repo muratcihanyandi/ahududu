@@ -392,6 +392,8 @@ function cubeSetup(f) {
 // ---- quadro ----
 // Os únicos objetos criados por quadro são os que a API WebGPU obriga a criar (codificador, passes, buffer de comandos,
 // textura/vista do canvas); ficam isolados nestas quatro funções para a medição de alocação poder separá-los.
+// Tek giriş noktası: gpuInit cihazı gerçek API'ye bağlar; testlerde sahte
+// cihaz atanabilir (window.__cap.dev).
 function apiEncoder() { return G.dev.createCommandEncoder(); }
 function apiPass(enc, desc) { return enc.beginRenderPass(desc); }
 function apiFinish(enc) { return enc.finish(); }
@@ -457,7 +459,7 @@ function renderStaticShadow() {
   staticShadowSetup(); setPass(4, R.casc.vp[3], ctr);
   G.dev.queue.writeBuffer(R.frameBuf, 0, FR.data); G.dev.queue.writeBuffer(R.passBuf, 0, R.passData, 0, 12 * 64);
   G.dev.queue.writeBuffer(R.objBuf, 0, R.objData, 0, R.objCount * 64);
-  const enc = G.dev.createCommandEncoder(); const p = enc.beginRenderPass(R.pd.shadowS);
+  const enc = apiEncoder(); const p = enc.beginRenderPass(R.pd.shadowS);
   drawAll(p, ctxFrom(KIND.SHADOW, R.casc.vp[3], 4, ctr, 3), 4, R.passBG); p.end();
   G.dev.queue.submit([enc.finish()]);
 }

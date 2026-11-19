@@ -19,7 +19,7 @@ async function skyInit(progress) {
   for (let z = 0; z < 64; z++) { ud[z * 64] = (z + 0.5) / 64; ud[z * 64 + 1] = 0; } ud[64 * 64 + 1] = 1;
   dev.queue.writeBuffer(ub, 0, ud);
   const nbp = nb, nbg = dev.createBindGroup({ layout: nb.bgls[0], entries: [{ binding: 0, resource: { buffer: ub, size: 16 } }] });
-  let enc = dev.createCommandEncoder();
+  let enc = apiEncoder();
   { const p = enc.beginRenderPass({ colorAttachments: [{ view: T.noise.createView({ baseMipLevel: 0, mipLevelCount: 1 }), loadOp: 'clear', storeOp: 'store' }] }); p.setPipeline(nbp); p.setBindGroup(0, nbg, [64 * 256]); p.draw(3); p.end(); }
   for (let z = 0; z < 64; z++) { const p = enc.beginRenderPass({ colorAttachments: [{ view: V.noise3, depthSlice: z, loadOp: 'clear', storeOp: 'store' }] }); p.setPipeline(nbp); p.setBindGroup(0, nbg, [z * 256]); p.draw(3); p.end(); }
   dev.queue.submit([enc.finish()]);
@@ -30,7 +30,7 @@ async function skyInit(progress) {
   const sbg = bgOf(sb, 0, [su, V.noise3, V.noise, R.sLin]);
   const strips = 16;
   for (let i = 0; i < strips; i++) {
-    enc = dev.createCommandEncoder();
+    enc = apiEncoder();
     const p = enc.beginRenderPass({ colorAttachments: [{ view: V.sky, loadOp: i ? 'load' : 'clear', storeOp: 'store' }] });
     p.setPipeline(sb); p.setBindGroup(0, sbg); p.setScissorRect(i * SKY_W / strips, 0, SKY_W / strips, SKY_H); p.draw(3); p.end();
     dev.queue.submit([enc.finish()]);
@@ -42,7 +42,7 @@ function halfToFloat(h) { const s = (h & 0x8000) ? -1 : 1, e = (h >> 10) & 31, f
 async function computeSH() {
   const dev = G.dev, mip = 3, n = ENV_RES >> mip, bpr = Math.ceil(n * 8 / 256) * 256;
   const buf = dev.createBuffer({ size: bpr * n * 6, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-  const enc = dev.createCommandEncoder();
+  const enc = apiEncoder();
   for (let f = 0; f < 6; f++) enc.copyTextureToBuffer({ texture: R.tex.env, mipLevel: mip, origin: [0, 0, f] }, { buffer: buf, offset: f * bpr * n, bytesPerRow: bpr, rowsPerImage: n }, [n, n, 1]);
   dev.queue.submit([enc.finish()]); await buf.mapAsync(GPUMapMode.READ);
   const u16 = new Uint16Array(buf.getMappedRange()), sh = new Float64Array(27); let wsum = 0;

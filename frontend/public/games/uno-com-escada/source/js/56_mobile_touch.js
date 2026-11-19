@@ -87,10 +87,11 @@ const MOB_BTN = [
   { id: 'gas', bit: () => K_W, icon: '▲', label: 'GAZ', side: 'right', size: 'big' },
   { id: 'brake', bit: () => K_S, icon: '▼', label: 'FREN', side: 'right', size: 'mid' },
   { id: 'left', bit: () => K_A, icon: '◀', label: 'SOL', side: 'left', size: 'mid' },
-  { id: 'right', bit: () => K_D, icon: '▶', label: 'SAĞ', side: 'left', size: 'mid', extra: 't-right2' },
+  { id: 'right', bit: () => K_D, icon: '▶', label: 'SAĞ', side: 'left', size: 'mid' },
   { id: 'hand', bit: () => K_SPACE, icon: '✋', label: 'EL FRENİ', side: 'left', size: 'small' },
   { id: 'cam', bit: () => K_C, icon: '🎥', label: 'KAMERA', side: 'left', size: 'small', tap: true },
-  { id: 'reset', bit: () => K_R, icon: '↺', label: 'PİSTE DÖN', side: 'right', size: 'small', tap: true }
+  // üst sıra soldan sağa dizilir: el freni · kamera · piste dön
+  { id: 'reset', bit: () => K_R, icon: '↺', label: 'PİSTE DÖN', side: 'left', size: 'small', tap: true }
 ];
 
 function mobBuildControls() {
@@ -150,10 +151,16 @@ function mobHookKeyboard() {
 
 // Arkadaşının motorunu duyabilmek için ses bağlamını ilk dokunuşta aç
 // (tarayıcı/WebView kuralları: kullanıcı hareketi olmadan ses başlamaz).
+// Menüdeki "Başla"ya dokununca da çağrılır (uiInit -> mobUnlockAudio), böylece
+// oyun sesi sessiz başlamaz.
 function mobUnlockAudio() {
   try { if (typeof mpSoundInit === 'function') mpSoundInit(); } catch (e) { /* yok say */ }
-  const C = window.__mp && window.__mp.snd && window.__mp.snd.ctx;
-  if (C && C.state === 'suspended') C.resume().catch(() => { });
+  const groups = [];
+  try { if (window.__mp && window.__mp.snd && window.__mp.snd.ctx) groups.push(window.__mp.snd.ctx); } catch (e) { /* yok say */ }
+  try { if (typeof SND !== 'undefined' && SND.ctx) groups.push(SND.ctx); } catch (e) { /* yok say */ }
+  for (const C of groups) {
+    try { if (C && C.state === 'suspended') C.resume().catch(() => { }); } catch (e) { /* yok say */ }
+  }
 }
 
 function mobBoot() {
@@ -170,9 +177,16 @@ function mobBoot() {
   // Tam ekran: iframe içinde tek dokunuşla tam ekrana geçilemez; üstteki
   // Ahududu kabuğu (GamePlayer) oyun açılırken bunu kendisi yapıyor. Yine de
   // kullanıcı bir yere dokunduğunda tarayıcı tam ekranına izin veriliyorsa
-  // denenir (hata sessizce yutulur).
+  // denenir (hata sessizce yutulur). Menüdeki düğmelere dokunuşta DENENMEZ:
+  // aksi hâlde "Başla"ya basınca tam ekran isteği menü düğmesini örtüyordu.
   if (MOB.touch) {
-    const once = () => { mobUnlockAudio(); mobTryFullscreen(); removeEventListener('pointerdown', once); };
+    const once = ev => {
+      mobUnlockAudio();
+      const t = ev && ev.target;
+      if (t && t.closest && t.closest('#ui')) return;      // menü dokunuşu: tam ekran yok
+      removeEventListener('pointerdown', once);
+      mobTryFullscreen();
+    };
     addEventListener('pointerdown', once, { passive: true });
   }
 }

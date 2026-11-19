@@ -18,26 +18,25 @@ export interface GameEntry {
   subtitle: string;
   emoji: string;
   accent: string;
-  /** Oyun içi tarayıcı gereksinimi (WebGPU gibi) */
+  /** Oyun içi tarayıcı gereksinimi (WebGPU gibi). TEKNİK: arayüzde GÖSTERİLMEZ. */
   requirement?: string;
   players: 'tek' | 'çift' | 'online-çift';
   notes?: string[];
 }
 
+/** Kullanıcıya gösterilen oyunlar: teknik detay (tarayıcı, motor, çözünürlük) yok. */
 export const GAMES: GameEntry[] = [
   {
     id: 'uno-com-escada',
     folder: 'uno-com-escada',
     title: 'Uno Merdivenli',
-    subtitle: 'Fiat Uno Mille EP 1996 · dağ pisti · merdivenli',
+    subtitle: 'Dağ pistinde araba yarışı',
     emoji: '🚗',
     accent: 'from-berry-500 to-rose-500',
-    requirement: 'WebGPU (Chrome / Edge)',
     players: 'online-çift',
     notes: [
-      'İkiniz aynı pistte olursunuz; sevgilinin arabası olarak (pembe) canlı görünür.',
-      'İkiniz de "Başla"ya basınca 3-2-1 geri sayım aynı anda başlar, birlikte kalkarsınız.',
-      'Ses: "Basılı tut: konuş" ile birbirinize seslenebilirsiniz.',
+      'Tek başına da oynayabilirsin; Selin oyunu açınca arabası pistte belirir.',
+      'İkiniz "Başla"ya basınca birlikte kalkarsınız.',
     ],
   },
 ];
@@ -53,9 +52,6 @@ export const GamesList: React.FC<GamesListProps> = ({ currentUserId, onOpen }) =
     <div className="flex flex-col space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="font-serif text-lg font-bold text-berry-950">Oyunlar 🎮</h2>
-        <span className="text-[10px] font-semibold text-stone-500 px-2.5 py-1 rounded-full bg-rose-100/70">
-          {GAMES.length} oyun
-        </span>
       </div>
 
       {GAMES.map((game) => (
@@ -75,18 +71,6 @@ export const GamesList: React.FC<GamesListProps> = ({ currentUserId, onOpen }) =
                 {game.title}
               </h3>
               <p className="text-[11px] text-stone-500 mt-0.5">{game.subtitle}</p>
-              <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                {game.players === 'online-çift' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                    ● Beraber oyna
-                  </span>
-                )}
-                {game.requirement && (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                    {game.requirement}
-                  </span>
-                )}
-              </div>
             </div>
           </div>
 

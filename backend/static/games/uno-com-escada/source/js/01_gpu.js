@@ -244,7 +244,7 @@ function genMips(tex, format, layers) {
   if (!_mipPipe[format]) _mipPipe[format] = mkFsPipe('blit', {}, [format]);
   const pipe = _mipPipe[format];
   const samp = dev.createSampler({ minFilter: 'linear', magFilter: 'linear' });
-  const enc = dev.createCommandEncoder();
+  const enc = apiEncoder();
   for (let L = 0; L < (layers || 1); L++) for (let m = 1; m < tex.mipLevelCount; m++) {
     const srcV = tex.createView({ dimension: '2d', baseMipLevel: m - 1, mipLevelCount: 1, baseArrayLayer: L, arrayLayerCount: 1 });
     const dstV = tex.createView({ dimension: '2d', baseMipLevel: m, mipLevelCount: 1, baseArrayLayer: L, arrayLayerCount: 1 });

@@ -186,7 +186,7 @@ const MP = {
   // partnerin arabası: T = ağdan gelen hedef, S = ekranda yumuşatılan kopya
   T: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0, s: 0, d: 0 },
   S: { x: 0, y: 0, z: 0, yaw: 0, spd: 0, gear: 1, acc: 0 },
-  hasT: false, carReady: false,
+  hasT: false, carReady: false, shown: false, seqRank: 0, helloAt: 0, lastRxHelloAt: 0,
   set: null, bodyObj: 0, wheelObj: [0, 0, 0, 0],
   paint: MP_PAINT
 };
@@ -209,48 +209,73 @@ function mpSetUser(id) {
 }
 
 // ------------------- 3) PARTNER ARABASI (ayrı objeler) ---------------------
-// CAR'ın meshlerini kendi objelerimize ekler: gövde + 4 tekerlek. Direksiyon
-// gibi ek parçalar da (varsa) partnerin gövdesine bağlanır ki iç kısım boş
-// görünmesin.
+// ÖNEMLİ HATA (düzeltildi): eski sürüm kendi arabanın mesh listesini partnerin
+// listesine taşıyıp ARDINDAN kendi listesini BOŞALTIYOR (`src.items.length = 0`)
+// ve camları `CAR.glass.items.length = 0` ile siliyordu. Sonuç: kendi arabamız
+// hiçbir şey çizmiyordu (arabayı bile görünmüyordu) ve partner arabası sadece
+// ilk paket geldikten sonra ortaya çıkıyordu. Ayrıca partner paketleri oyuna hiç
+// ulaşmadığı için pratikte ikisi de yoktu.
+//
+// Doğrusu: meshler PAYLAŞILIR (aynı vertex/index buffer'ları iki MeshSet'te
+// birden kullanılabilir; hiçbir liste tüketilmez), yalnızca nesne yuvaları
+// (slot) ayrıdır — bu sayede iki araba bağımsız hareket eder.
+// Partner arabası yalnızca sevgili oyuna girdiğinde çizilir (R.drawables'a o an
+// eklenir); önceden pistte duran bir "hayalet araba" yok.
 function mpBuildPartnerCar() {
   if (MP.carReady) return true;
   try {
-    if (typeof R === 'undefined' || typeof CAR === 'undefined' || !CAR.set) return false;
-    const fam = CAR.fam, src = CAR.set;
-    if (!fam || !src.items || !src.items.length) return false;
-    const set = MP.set = new MeshSet(fam);
+    if (typeof R === 'undefined' || typeof CAR === 'undefined' || !CAR.set || typeof objSlot !== 'function') return false;
+    const shared = CAR.shared;
+    if (!shared || !shared.body || !shared.wheels || shared.wheels.length < 4) return false;
+    const fam = CAR.fam;
+    if (!fam) return false;
+    // gövde + 4 tekerlek için kendi yuvalarımız
     MP.bodyObj = objSlot();
     for (let i = 0; i < 4; i++) MP.wheelObj[i] = objSlot();
-    for (let i = 0; i < src.items.length; i++) {
-      const it = src.items[i];
-      const slot = it.slot === CAR.slotBody ? MP.bodyObj
-        : it.slot === CAR.slotWheel[0] ? MP.wheelObj[0]
-          : it.slot === CAR.slotWheel[1] ? MP.wheelObj[1]
-            : it.slot === CAR.slotWheel[2] ? MP.wheelObj[2]
-              : it.slot === CAR.slotWheel[3] ? MP.wheelObj[3]
-                : MP.bodyObj;                     // direksiyon vb. → gövdeyle birlikte hareket eder
-      set.add({ vb: it.vb, ib: it.ib, count: it.count, bounds: { c: [it.cx, it.cy, it.cz], r: it.r } }, slot, it.flags, it.maxDist);
+    const set = MP.set = new MeshSet(fam);
+    // gövde (gölge dahil). Direksiyon simidi partnerin gövde yuvasına bağlanır:
+    // ayrı bir yuva açıp hiç güncellemezsek son matrisiyle kalır ve boş görünür.
+    const b = shared.body;
+    set.add({ vb: b.vb, ib: b.ib, count: b.count, bounds: { c: [b.cx, b.cy, b.cz], r: b.r } }, MP.bodyObj, 7);
+    if (shared.steer) set.add({ vb: shared.steer.vb, ib: shared.steer.ib, count: shared.steer.count, bounds: { c: [shared.steer.cx, shared.steer.cy, shared.steer.cz], r: shared.steer.r } }, MP.bodyObj, 3);
+    for (let i = 0; i < 4; i++) {
+      const w = shared.wheels[i];
+      if (!w) continue;
+      set.add({ vb: w.vb, ib: w.ib, count: w.count, bounds: { c: [w.cx, w.cy, w.cz], r: w.r } }, MP.wheelObj[i], 7);
     }
-    // Partnerin meshleri artık KENDİ listesinde. CAR.set'ten çıkarılır:
-    // aksi hâlde aynı meshler kendi arabanın matrisiyle ikinci kez çizilir
-    // (partner arabası üst üste biner, gölge geçişi bind grubu olmadan çizim
-    // yapıp komut tamponunu geçersiz kılar → ekran donar).
-    src.items.length = 0;
-    // Partner çizilebilirler listesinde kendi arabamızdan SONRA gelir; böylece
-    // camları (transparent) da doğru sırada bağlanır.
-    R.drawables.push(set);
-    // Camlar: kendi arabamızla aynı meshler, partnerin gövde nesnesine bağlı.
-    // (GlassSet.bind = çizimden hemen önce hangi gövde nesnesinin kullanılacağı)
-    if (typeof CAR.glass !== 'undefined' && CAR.glass && CAR.glass.items) {
+    // camlar: aynı meshler, partnerin gövdesine bağlı (kendi camlarımız da kalır)
+    if (CAR.glass && CAR.glass.items && CAR.glass.items.length) {
       const gl = new GlassSet();
       for (const g of CAR.glass.items) gl.add_({ vb: g.vb, ib: g.ib, count: g.count }, MP.bodyObj);
       gl.bind = () => MP.bodyObj;
-      R.transparents.push(gl);
-      CAR.glass.items.length = 0;                // camlar da partnerde çizilir (kopya)
+      MP.glass = gl;
     }
+    // R.drawables listesine HENÜZ eklenmez: partner oyunda yokken çizilecek bir
+    // şey yok. İlk "hello"/araba paketinde mpShowPartner() ekler.
     MP.carReady = true;
     return true;
   } catch (e) { console.warn('[uno-mp] partner arabası kurulamadı:', e); return false; }
+}
+// Partner pistte göründüğünde çizim listesine ekle, kaybolunca çıkar.
+function mpShowPartner(on) {
+  try {
+    if (!MP.carReady) return;
+    const add = !!on;
+    if (add) {
+      // Partner çizim listesinde YALNIZCA BİR KEZ olmalı; yoksa her turda bir
+      // kez daha eklenir ve "kayboldu" sanılır (eskiden fresnel/normal
+      // eşlemesinin sessizce çifte eklemesi pistte hayalet araba bırakıyordu).
+      let k = 0;
+      for (let i = 0; i < R.drawables.length; i++) if (R.drawables[i] === MP.set) k++;
+      if (!k) R.drawables.push(MP.set);                 // kendi arabamızdan SONRA çizilir
+      if (MP.glass && R.transparents.indexOf(MP.glass) < 0) R.transparents.push(MP.glass);
+    } else {
+      let i;
+      while ((i = R.drawables.indexOf(MP.set)) >= 0) R.drawables.splice(i, 1);
+      if (MP.glass) { let j; while ((j = R.transparents.indexOf(MP.glass)) >= 0) R.transparents.splice(j, 1); }
+    }
+  } catch (e) { /* yok say */ }
+  MP.shown = !!on && MP.carReady;
 }
 // Kendi arabamızın rengini bir kez yazar (partnerin arabası farklı renkte olsun).
 function mpPaintMine() {
@@ -456,20 +481,39 @@ function mpOnCar(d) {
   T.x = +d[0] || 0; T.y = +d[1] || 0; T.z = +d[2] || 0; T.yaw = +d[3] || 0;
   T.spd = +d[4] || 0; T.gear = +d[5] || 0; T.acc = +d[6] || 0; T.s = +d[7] || 0; T.d = +d[8] || 0;
   if (jump) { MP.S.x = T.x; MP.S.y = T.y; MP.S.z = T.z; MP.S.yaw = T.yaw; MP.S.spd = T.spd; MP.hasT = true; }
-  if (!MP.partnerOn) { MP.partnerOn = true; mpUiRefresh(); }
+  if (!MP.partnerOn) { MP.partnerOn = true; mpShowPartner(true); mpUiRefresh(); }
   MP.lastRxCarAt = performance.now();
+}
+// Partner oyundan çıkınca: arabasını pistten kaldır (hedef/ekran kopyası temizlenir).
+function mpPartnerGone() {
+  MP.partnerOn = false; MP.hasT = false;
+  mpShowPartner(false);
+  if (typeof mpUiRefresh === 'function') mpUiRefresh();
 }
 function mpOnPacket(d) {
   if (!d || typeof d !== 'object') return;
   switch (d.type) {
     case 'game_hello':
       if (d.from === MP.userId) break;          // kendi yankımız — yok say
+      if (MP._helloAnswered) MP.heardOurHello = true;   // karşı taraf bizim hello'muza yanıt verdi
       MP.partnerOn = true;
+      MP.helloAt = performance.now(); MP.lastRxHelloAt = MP.helloAt;
+      if (!MP.seqRankSent && typeof d.seq === 'number') MP.seqRank = d.seq === 0 ? 1 : 0;   // sıra tersine dönmesin
+      mpShowPartner(true);                      // partner oyuna girdi: pistte görünür
       if (!MP.sentAt || MP.sentAt < 0) MP.sentAt = 0;
+      // Karşı taraf bizi tanısın diye (yalnızca bizim hello'muza karşılık
+      // gelmediyse) kendimizi tanıt ve nerede olduğumuzu söyle.
+      if (typeof NET !== 'undefined' && NET.live && !MP._helloAnswered) {
+        MP._helloAnswered = true;
+        NET.json({ type: 'game_hello', game: GAME_ID, from: MP.userId, seq: MP.seqRank });
+        NET.json({ type: 'game_car', d: mpSelfState() });   // partnerimiz bizi hemen görsün
+      }
       mpUiRefresh();
       break;
     case 'game_car': mpOnCar(d.d); break;
-    case 'game_bye': MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); break;
+    case 'game_bye':
+      if (!d.from || d.from !== MP.userId) mpPartnerGone();   // kendi çıkışımız bize yansımasın
+      break;
     case 'game_countdown': mpOnCountdown(d); break;
     case 'game_start': mpOnStart(d); break;
     case 'game_mic':
@@ -477,9 +521,12 @@ function mpOnPacket(d) {
       break;
   }
 }
+// Menüdeki durum yazısı: teknik detay yok, sade cümle.
 function mpUiRefresh() {
   const st = document.getElementById('mpStat');
-  if (st) st.textContent = MP.partnerOn ? MP.partnerName + ' oyunda · arabası pistte' : 'bekleniyor… (sevgilin de oyunu açmalı)';
+  if (st) st.textContent = MP.partnerOn
+    ? MP.partnerName + ' oyunda · arabası pistte'
+    : 'tek başına sürüyorsun';
   const say = document.getElementById('mpSay');
   if (say) say.style.display = MP.partnerOn ? 'block' : 'none';
 }
@@ -536,23 +583,46 @@ function mpAnnounceStart() {
 }
 
 // ---------------------------- 8) DÖNGÜ KANCALARI ---------------------------
-// Partner arabasını, ağdan ilk konum gelmeden de start çizgisinde göster
-// (ikiniz de aynı anda giriyorsanız birbirinizi hemen görürsünüz).
+// SPAWN: partner oyuna girdiğinde ARABASI HARİTADA belirir (ilk paket bu
+// konumu taşır). Paketten önce kendi konumumuzun yanına bir "hayalet" koymak
+// yanlıştı: partner pistte olmasa bile onun arabası görünüyordu. Bu yüzden
+// seed yalnızca hâlâ ilk paket bekleniyorsa ve partner gerçekten oyundaysa,
+// ilk "hello"dan sonra kısa bir an için devreye girer.
+// Başlangıç sıralaması: iki araba aynı yerde doğmasın diye geri sayım
+// başlamadan önce (start çizgisinde) sıra verilir; ilk hello'daki sıra
+// bilgisi (seq) hangi arabanın önde duracağını belirler.
 function mpSeedPartnerAtGrid() {
   if (MP.hasT || !MP.carReady || typeof VEH === 'undefined') return;
   try {
     const V = VEH, T = MP.T;
-    T.x = MP.S.x = V.x; T.y = MP.S.y = V.y; T.z = MP.S.z = V.z; T.yaw = MP.S.yaw = V.yaw;
+    // partner bir sıra arkada/önde durur; aynı noktaya iki araba binmez
+    const back = (MP.seqRank || 0) === 0 ? -5.2 : 5.2;      // kendi yönümüze göre geri/ileri
+    const c = Math.cos(V.yaw), s = Math.sin(V.yaw);
+    T.x = MP.S.x = V.x + c * back; T.z = MP.S.z = V.z + s * back;
+    T.y = MP.S.y = V.y; T.yaw = MP.S.yaw = V.yaw;
     T.spd = MP.S.spd = 0; MP.hasT = true;
     mpBeginFrame();
   } catch (e) { /* yok say */ }
 }
+// Bağlantı kurulduğunda: kendimizi tanıt ve nerede olduğumuzu bildir; sevgili
+// de oyundaysa arabası HARİTADA belirir (game_hello -> mpShowPartner).
+function mpAnnounce() {
+  if (typeof NET === 'undefined' || !NET.live) return;
+  MP.seqRankSent = true;
+  NET.json({ type: 'game_hello', game: GAME_ID, from: MP.userId, seq: MP.seqRank });
+  if (typeof VEH !== 'undefined') NET.json({ type: 'game_car', d: mpSelfState() });
+}
 function mpNetHousekeeping() {
   const now = performance.now();
-  if (MP.partnerOn && !MP.hasT && now - MP.bootAt > 1500) mpSeedPartnerAtGrid();
+  // ilk "hello"dan sonra 0,25 s içinde araba paketi gelmezse partner kendi
+  // menüsündedir: onu hemen kaybolmuş saymayız, yalnızca temsilî bir yerde
+  // gösterilir (paket gelince gerçek konumuna oturur).
+  if (MP.partnerOn && !MP.hasT && MP.helloAt && now - MP.helloAt > 250) mpSeedPartnerAtGrid();
   if (!NET.opened && MP.retryAt && now >= MP.retryAt) { MP.retryAt = 0; NET.connect(); }
-  // partner uzun süre paket göndermediyse kaybolsun (30 sn)
-  if (MP.hasT && MP.partnerOn && now - MP.lastRxCarAt > 30000) { MP.partnerOn = false; MP.hasT = false; mpUiRefresh(); }
+  // partner uzun süre paket göndermediyse pistten kalksın (15 sn)
+  if (MP.partnerOn && now - Math.max(MP.lastRxCarAt, MP.lastRxHelloAt, MP.helloAt || 0) > 15000) {
+    mpPartnerGone();
+  }
   if (MPSTART.pending) mpArmStart();
 }
 
@@ -562,6 +632,7 @@ function mpBoot() {
   mpSoundInit();
   mpBuildPartnerCar();
   mpPaintMine();
+  MP.seqRank = MP.userId === 'murat' ? 0 : 1;     // sıra: murat önde, selin arkada
   // Kabuktan gelen partner paketleri (önceden hiç bağlanmamıştı: partnerin
   // arabası ve geri sayım hiç ulaşmıyordu).
   try { if (MPSHARE && MPSHARE.on) MPSHARE.on((d) => mpOnPacket(d)); } catch (e) { /* yok say */ }
@@ -573,7 +644,7 @@ function mpBoot() {
         if (NET.ws) { NET.close(); }
         NET.opened = false;
         MP.retryAt = 0;
-        NET.json({ type: 'game_hello', game: GAME_ID });   // yeni bağlantıda kendimizi tanıt
+        mpAnnounce();                                     // yeni bağlantıda kendimizi tanıt
       } else if (!NET.ws) {
         NET.closedByUser = false; MP.retryAt = 0;
         NET._probed = true;                                 // artık köprü yanıt vermiyor
@@ -583,12 +654,24 @@ function mpBoot() {
     });
   } catch (e) { /* yok say */ }
   NET.connect();
+  setTimeout(() => { try { mpAnnounce(); } catch (e) { /* yok say */ } }, 1200);
+  if (typeof window !== 'undefined') {
+    // oyun kapanırken partner pistten kalksın (sayfa kapanırken paket yarışı)
+    addEventListener('pagehide', () => { try { if (NET.live) NET.json({ type: 'game_bye', from: MP.userId }); } catch (e) { /* yok say */ } });
+  }
+  mpUiRefresh();
 }
 BUILD.push(async () => { try { mpBuildPartnerCar(); } catch (e) { } try { mpBoot(); } catch (e) { console.warn('[uno-mp] başlatılamadı', e); } });
 // Teşhis: konsoldan window.__mp ile çok oyunculu durumu inceleyebilirsin
+// (otomatik testler de paket işleyicisini buradan sürer: tests/test_game_logic.py)
 try {
   window.__mp = {
     net: NET, mp: MP, snd: MPSND,
+    packet: (d) => mpOnPacket(d),
+    show: (on) => mpShowPartner(on),
+    gone: () => mpPartnerGone(),
+    src: { show: mpShowPartner.toString(), bye: mpPartnerGone.toString() },
+    carInfo: () => ({ ownItems: CAR.set.items.length, ownGlass: CAR.glass ? CAR.glass.items.length : 0, partnerItems: MP.set ? MP.set.items.length : -1, carReady: MP.carReady, shown: R.drawables.indexOf(MP.set) >= 0 }),
     state() {
       return {
         userId: MP.userId, partnerName: MP.partnerName,
