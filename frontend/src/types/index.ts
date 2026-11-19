@@ -6,7 +6,21 @@ export const USERS: Record<UserId, { name: string; emoji: string }> = {
 };
 
 export const partnerOf = (id: UserId): UserId => (id === 'murat' ? 'selin' : 'murat');
-export const nameOf = (id: UserId): string => USERS[id].name;
+export const nameOf = (id?: string | null): string => {
+  if (!id) return '';
+  if (id in USERS) return USERS[id as UserId].name;
+  if (id === 'calendar') return 'Sinema Takvimi';
+  if (id === 'openclaw') return 'Program';
+  if (id === 'ortak') return 'İkimiz';
+  return id;
+};
+export const emojiOf = (id?: string | null): string => {
+  if (!id) return '🎬';
+  if (id in USERS) return USERS[id as UserId].emoji;
+  if (id === 'calendar') return '📅';
+  if (id === 'ortak') return '💞';
+  return '🎬';
+};
 
 export interface UserProfile {
   id: UserId;
@@ -270,14 +284,14 @@ export interface CinemaRoom {
   cover_url?: string;
   poster_url?: string;
   kind: string;
-  created_by: UserId;
+  created_by: UserId | string;
   is_playing: boolean;
   is_active: boolean;
   is_calendar?: boolean;
   showtime_id?: number | null;
   position: number;
   duration: number;
-  updated_by?: UserId;
+  updated_by?: UserId | string;
   last_seen_at?: string;
   created_at: string;
   updated_at: string;
@@ -286,12 +300,12 @@ export interface CinemaRoom {
 export interface CinemaSyncEvent {
   type: 'cinema_sync';
   room_id: number;
-  action: 'play' | 'pause' | 'seek' | 'adopt' | 'join' | 'leave' | 'stop';
+  action: 'play' | 'pause' | 'seek' | 'adopt' | 'join' | 'join_sync' | 'duration' | 'leave' | 'stop';
   position: number;
   duration: number;
   is_playing: boolean;
   is_active: boolean;
-  updated_by: UserId;
+  updated_by: UserId | string;
   updated_at: string;
 }
 

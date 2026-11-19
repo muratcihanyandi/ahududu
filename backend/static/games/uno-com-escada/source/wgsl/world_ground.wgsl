@@ -32,7 +32,11 @@ fn groundSurf(wpos: vec3f, Ng: vec3f, forest: f32) -> Surface {
   let nA = textureSample(tNoise, sLin, xz * 0.0137);
   let nB = textureSample(tNoise, sLin, vec2f(xz.x * 0.8 - xz.y * 0.6, xz.x * 0.6 + xz.y * 0.8) * 0.083);
   let nC = textureSample(tNoise, sLin, xz * 0.61 + nA.rg * 0.2);
+#ifdef MOB_FAST
+  let nD = textureSample(tNoise, sLin, vec2f(xz.x * 0.6 + xz.y * 0.8, -xz.x * 0.8 + xz.y * 0.6) * 4.7);
+#else
   let nD = (textureSample(tNoise, sLin, vec2f(xz.x * 0.6 + xz.y * 0.8, -xz.x * 0.8 + xz.y * 0.6) * 4.7) + textureSample(tNoise, sLin, vec2f(xz.x * 0.966 - xz.y * 0.259, xz.x * 0.259 + xz.y * 0.966) * 3.31 + 0.37)) * 0.5;
+#endif
   let near = 1.0 - smoothstep(20.0, 110.0, dist);
   let near2 = 1.0 - smoothstep(4.0, 30.0, dist);
   // ---- grama ----
@@ -46,7 +50,11 @@ fn groundSurf(wpos: vec3f, Ng: vec3f, forest: f32) -> Surface {
   let gt = mix(COL_GRASS * 0.85, COL_GRASS_TALL, 0.25 + 0.6 * nB.g) * (0.66 + 0.6 * nC.g);
   g = mix(g, gt, z.b);
   // manchas de ~3-6 m (trevo mais escuro, capim mais seco) e fibra fina das folhas (os mips levam à média ao longe)
+#ifdef MOB_FAST
+  let nE = nB;
+#else
   let nE = textureSample(tNoise, sLin, vec2f(xz.x * 0.342 + xz.y * 0.94, -xz.x * 0.94 + xz.y * 0.342) * 0.177 + 0.3);
+#endif
   g = mix(g, g * vec3f(0.62, 0.8, 0.6), smoothstep(0.5, 0.68, nE.r) * 0.7);
   g *= 0.8 + 0.4 * nA.b;
   g = mix(g, g * vec3f(1.22, 1.12, 0.8), smoothstep(0.55, 0.75, nE.g) * 0.4 * (1.0 - z.b * 0.5));
@@ -54,12 +62,20 @@ fn groundSurf(wpos: vec3f, Ng: vec3f, forest: f32) -> Surface {
   // lâminas: fibras alongadas em três direções (ruído esticado ~7:1). De perto o gramado lê como folhas, com sombra entre elas;
   // os mips levam à média ao longe, sem trocar o tom.
   let bq = xz + (nC.rg - 0.5) * 0.25;
+#ifdef MOB_FAST
+  let b1 = textureSample(tNoise, sLin, vec2f(bq.x * 9.3, bq.y * 1.3));
+  let b2 = nD;
+  let b3 = b1;
+  let b4 = nD;
+  let b5 = b1;
+#else
   let b1 = textureSample(tNoise, sLin, vec2f(bq.x * 9.3, bq.y * 1.3));
   let b2 = textureSample(tNoise, sLin, vec2f((bq.x * 0.5 + bq.y * 0.866) * 8.1, (-bq.x * 0.866 + bq.y * 0.5) * 1.15) + 0.31);
   let b3 = textureSample(tNoise, sLin, vec2f((bq.x * 0.5 - bq.y * 0.866) * 10.4, (bq.x * 0.866 + bq.y * 0.5) * 1.45) + 0.67);
   let bq2 = bq * 2.3 + 0.37;
   let b4 = textureSample(tNoise, sLin, vec2f((bq2.x * 0.966 + bq2.y * 0.259) * 9.0, (-bq2.x * 0.259 + bq2.y * 0.966) * 1.2));
   let b5 = textureSample(tNoise, sLin, vec2f((bq2.x * 0.259 - bq2.y * 0.966) * 9.6, (bq2.x * 0.966 + bq2.y * 0.259) * 1.3) + 0.53);
+#endif
   let blade = max(smoothstep(0.5, 0.7, max(b1.r, max(b2.g, b3.r))), smoothstep(0.55, 0.72, max(b4.g, b5.r)) * 0.8);
   let tuft = smoothstep(0.35, 0.7, nD.b);                              // tufos: moitas mais claras/escuras de ~10 cm
   g *= (0.56 + 0.66 * blade) * (0.84 + 0.32 * tuft);
@@ -85,7 +101,11 @@ fn groundSurf(wpos: vec3f, Ng: vec3f, forest: f32) -> Surface {
       // copas: ruído celular (≈ 8 m por copa) + variação de espécie
       let cuv = xz / 190.0 + (nB.rg - 0.5) * 0.012;
       let e = 0.0012;
+#ifdef MOB_FAST
+      let c0 = textureSample(tNoise, sLin, cuv).b; let cx = c0; let cz = c0;
+#else
       let c0 = textureSample(tNoise, sLin, cuv).b; let cx = textureSample(tNoise, sLin, cuv + vec2f(e, 0.0)).b; let cz = textureSample(tNoise, sLin, cuv + vec2f(0.0, e)).b;
+#endif
       let far2 = smoothstep(1500.0, 5000.0, dist);
       var cc = COL_FOREST * (0.55 + 1.0 * c0) * (0.75 + 0.5 * nA.r);
       cc = mix(cc, vec3f(0.075, 0.085, 0.022) * (0.6 + c0), smoothstep(0.55, 0.75, nB.g) * 0.55);
@@ -101,6 +121,23 @@ fn groundSurf(wpos: vec3f, Ng: vec3f, forest: f32) -> Surface {
   let gm = smoothstep(0.5 - gw, 0.5 + gw, z.g + (nC.b - 0.5) * 0.012);
   if (gm > 0.0) {
     let wq = xz + (nA.rg - 0.5) * 2.4 + (nC.rg - 0.5) * 0.22;      // domínio torcido: a textura fina não repete em ladrilho
+#ifdef MOB_FAST
+    let st = nD;
+    let st2 = nB;
+    let rk = xz.y * 13.96 + (nB.r + nA.g) * 9.0; let rkf = 0.0; let rake = 0.0;
+    let fur = nC;
+    let rake2 = (fur.r - 0.5) * 2.0; let rkf2 = 1.0;
+    let trk = nB;
+    let ruts = smoothstep(0.6, 0.72, trk.r) * (1.0 - smoothstep(0.72, 0.84, trk.r));
+    let peb = nC;
+    let big = smoothstep(0.72, 0.86, peb.b);
+    var gc = COL_GRAVEL * (0.62 + 0.76 * st.b) * (0.86 + 0.28 * st2.r) * (0.97 + 0.05 * rake + 0.035 * rake2);
+    gc = mix(gc, gc * vec3f(1.08, 0.98, 0.86), nB.g);
+    gc = mix(gc, gc * vec3f(0.78, 0.8, 0.84), smoothstep(0.5, 0.7, st2.g) * 0.5);
+    gc = mix(gc, gc * mix(0.82, 1.3, smoothstep(0.35, 0.65, peb.a)), big * 0.6);
+    let gr1 = textureSample(tNoise, sLin, wq * 5.3 + 0.11);
+    let gr2 = nD;
+#else
     let st = (textureSample(tNoise, sLin, wq * 2.9) + textureSample(tNoise, sLin, vec2f(xz.x * 0.342 - xz.y * 0.94, xz.x * 0.94 + xz.y * 0.342) * 2.13 + 0.61)) * 0.5;
     let st2 = textureSample(tNoise, sLin, vec2f(xz.x * 0.8 - xz.y * 0.6, xz.x * 0.6 + xz.y * 0.8) * 0.21 + 0.5);
     // sulcos do rastelo: finos (45 cm) de perto e leiras largas (1,6 m) que se leem de longe; somem antes de serrilhar
@@ -122,6 +159,7 @@ fn groundSurf(wpos: vec3f, Ng: vec3f, forest: f32) -> Surface {
     // pedrisco: seixos de ~8 mm e ~22 mm (canal celular), cada um com tom próprio e sombra na junta
     let gr1 = textureSample(tNoise, sLin, wq * 5.3 + 0.11);
     let gr2 = textureSample(tNoise, sLin, vec2f(xz.x * 0.8 + xz.y * 0.6, -xz.x * 0.6 + xz.y * 0.8) * 1.9 + 0.43);
+#endif
     gc *= (0.74 + 0.42 * smoothstep(0.25, 0.85, gr1.b)) * (0.84 + 0.26 * smoothstep(0.3, 0.85, gr2.b)) * (0.92 + 0.16 * gr1.a);
     // manchas largas (brita mais fina/úmida, areia) que se leem de longe
     gc *= (0.74 + 0.5 * nA.r) * (0.86 + 0.28 * nB.b) * (1.0 - 0.3 * ruts);

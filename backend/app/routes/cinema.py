@@ -7,8 +7,11 @@ WebSocket üzerinden anında karşı tarafa yansır.
 """
 
 import asyncio
+import html
+import ipaddress
 import logging
 import re
+import socket
 import time
 from typing import List, Optional
 from urllib.parse import urlparse, parse_qs, quote, urljoin
@@ -35,6 +38,69 @@ from backend.app.services.site_stream import resolve_site_stream
 logger = logging.getLogger("ahududu.cinema")
 
 router = APIRouter(prefix="/api/cinema", tags=["cinema"])
+
+_http_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=25.0,
+            limits=httpx.Limits(max_connections=40, max_keepalive_connections=20),
+        )
+    return _http_client
+
+
+async def close_http_client() -> None:
+    global _http_client
+    if _http_client is not None and not _http_client.is_closed:
+        await _http_client.aclose()
+    _http_client = None
+
+
+def _is_disallowed_ip(ip_obj: ipaddress._BaseAddress) -> bool:
+    return (
+        ip_obj.is_private
+        or ip_obj.is_loopback
+        or ip_obj.is_link_local
+        or ip_obj.is_reserved
+        or ip_obj.is_multicast
+        or ip_obj.is_unspecified
+    )
+
+
+async def _is_safe_external_url(url: str) -> bool:
+    """Validate an external HTTP(S) URL against SSRF targets."""
+    try:
+        parsed = urlparse((url or "").strip())
+    except Exception:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    host = parsed.hostname.strip().lower()
+    if host in ("localhost", "0.0.0.0", "169.254.169.254") or host.endswith((".local", ".internal")):
+        return False
+    try:
+        ip_obj = ipaddress.ip_address(host)
+        return not _is_disallowed_ip(ip_obj)
+    except ValueError:
+        pass
+    try:
+        loop = asyncio.get_running_loop()
+        infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        for info in infos:
+            addr = info[4][0]
+            try:
+                if _is_disallowed_ip(ipaddress.ip_address(addr)):
+                    return False
+            except ValueError:
+                continue
+    except OSError:
+        # DNS may not resolve in offline tests; IP literals and local hostnames are still blocked above
+        pass
+    return True
 
 # Doğrudan oynatılabilen video dosyaları
 VIDEO_EXTENSIONS = (".mp4", ".webm", ".m4v", ".mov", ".ogv", ".ogg", ".mkv", ".m3u8", ".ts")
@@ -200,7 +266,7 @@ def resolve_video(raw_url: str) -> dict:
         return {
             "source": "facebook",
             "video_url": url,
-            "embed_url": f"https://www.facebook.com/plugins/video.php?href={url}&show_text=false",
+            "embed_url": f"https://www.facebook.com/plugins/video.php?href={quote(url, safe='')}&show_text=false",
             "kind": "embed",
             "poster_url": None,
         }
@@ -435,9 +501,10 @@ async def cinema_hls(url: str, referer: Optional[str] = None):
     alt adresler de bu proxy'ye çevrilir, böylece video perdeye gelir.
     """
     target = (url or "").strip()
-    if not target or not target.startswith(("http://", "https://")):
+    if not target or not await _is_safe_external_url(target):
         raise HTTPException(status_code=400, detail="Geçersiz akış adresi")
 
+    ref_parsed = urlparse(referer) if referer else urlparse(target)
     fetch_headers = {
         "User-Agent": (
             "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 "
@@ -445,14 +512,15 @@ async def cinema_hls(url: str, referer: Optional[str] = None):
         ),
         "Accept": "*/*",
         "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Origin": "https://" + (urlparse(referer).netloc if referer else urlparse(target).netloc),
     }
-    if referer:
+    if ref_parsed.scheme in ("http", "https") and ref_parsed.netloc:
+        fetch_headers["Origin"] = f"{ref_parsed.scheme}://{ref_parsed.netloc}"
+    if referer and await _is_safe_external_url(referer):
         fetch_headers["Referer"] = referer
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=25.0, headers=fetch_headers) as client:
-            resp = await client.get(target)
+        client = _get_http_client()
+        resp = await client.get(target, headers=fetch_headers, timeout=25.0)
     except Exception as exc:  # noqa: BLE001
         logger.warning("HLS proxy hatası (%s): %s", target, exc)
         raise HTTPException(status_code=502, detail="Akışa ulaşılamadı")
@@ -462,19 +530,21 @@ async def cinema_hls(url: str, referer: Optional[str] = None):
         raise HTTPException(status_code=502, detail=f"Akış {resp.status_code} döndü")
 
     body = resp.content
+    final_url = str(resp.url) or target
     content_type = (resp.headers.get("content-type") or "").lower()
-    prefix = f"/api/cinema/hls?url="
+    prefix = "/api/cinema/hls?url="
     ref_part = f"&referer={quote(referer, safe='')}" if referer else ""
 
     def proxied(raw: str) -> str:
-        absolute = urljoin(target, raw.strip())
+        absolute = urljoin(final_url, raw.strip())
         return f"{prefix}{quote(absolute, safe='')}{ref_part}"
 
     # ---- Playlist (m3u8): alt adresleri de proxy'ye çevir ----
+    head_text = body[:256].lstrip(b"\xef\xbb\xbf \t\r\n").decode("utf-8", "ignore")
     is_playlist = (
-        "#EXTM3U" in body[:64].decode("utf-8", "ignore")
+        head_text.startswith("#EXTM3U")
+        or "#EXT-X-" in head_text
         or "mpegurl" in content_type
-        or target.lower().split("?")[0].endswith((".m3u8", ".txt"))
     )
     if is_playlist:
         text = body.decode("utf-8", "replace")
@@ -509,7 +579,7 @@ async def cinema_hls(url: str, referer: Optional[str] = None):
     # Segmentler `.jpg` kılığında gelebilir ama içerik MPEG-TS'tir; tarayıcıya
     # doğru tipi söylemek zorundayız yoksa hls.js parçayı atar.
     media_type = content_type
-    head = body[:4]
+    head = body[:12]
     if head[:1] == b"\x47":  # MPEG-TS senkron baytı
         media_type = "video/mp2t"
     elif head[:4] == b"\x00\x00\x00\x01" or head[4:8] == b"ftyp":
@@ -535,7 +605,8 @@ def _blocked_notice_html(target: str) -> str:
     bembeyaz bir ekran görüyor ve "video oynamıyor" diyordu. Artık ne olduğunu
     ve ne yapması gerektiğini söyleyen bir kart gösteriyoruz.
     """
-    site = urlparse(target).netloc or target
+    safe_site = html.escape(urlparse(target).netloc or target, quote=True)
+    safe_target = html.escape(target, quote=True)
     return f"""<!DOCTYPE html>
     <html lang="tr">
     <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -543,13 +614,13 @@ def _blocked_notice_html(target: str) -> str:
     <body style="background:#09090b;color:#f4f4f5;font-family:system-ui,-apple-system,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;padding:24px;text-align:center;box-sizing:border-box;">
         <p style="font-size:34px;margin:0 0 10px;">🎬</p>
         <p style="font-size:15px;line-height:1.5;margin:0 0 6px;max-width:440px;">
-            <strong>{site}</strong> filmi burada açmaya izin vermedi.
+            <strong>{safe_site}</strong> filmi burada açmaya izin vermedi.
         </p>
         <p style="font-size:12px;line-height:1.5;margin:0 0 18px;max-width:420px;color:#a1a1aa;">
             Site kendi güvenlik kontrolünü gösterdiği için video perdeye gelemedi.
             Filmi sitede açıp bağlantısını kopyalayabilir ya da doğrudan bir YouTube bağlantısı ekleyebilirsin.
         </p>
-        <a href="{target}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:11px 22px;background:#f59e0b;color:#18181b;font-weight:bold;text-decoration:none;border-radius:999px;font-size:13px;">
+        <a href="{safe_target}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:11px 22px;background:#f59e0b;color:#18181b;font-weight:bold;text-decoration:none;border-radius:999px;font-size:13px;">
             Siteyi tarayıcıda aç ↗
         </a>
     </body>
@@ -591,7 +662,7 @@ async def cinema_proxy(url: str, referer: Optional[str] = None):
     yerine ne olduğunu anlatan bir kart döner: perde bembeyaz kalmaz.
     """
     target = (url or "").strip()
-    if not target or not target.startswith(("http://", "https://")):
+    if not target or not await _is_safe_external_url(target):
         raise HTTPException(status_code=400, detail="Geçersiz adres")
 
     # İframe'i taklit eden başlıklar: embed'lerin çoğu bunlar olmadan 404 verir.
@@ -608,99 +679,97 @@ async def cinema_proxy(url: str, referer: Optional[str] = None):
         "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1",
     }
-    if referer:
+    if referer and await _is_safe_external_url(referer):
         req_headers["Referer"] = referer
 
     try:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=12.0,
-            headers=req_headers,
-        ) as client:
-            resp = await client.get(target)
+        client = _get_http_client()
+        resp = await client.get(target, headers=req_headers, timeout=12.0)
 
-            # Bazı oynatıcılar yalnızca referer'lı ister; referer verilmişse
-            # ve hâlâ hata alıyorsak origin ile tekrar dene.
-            if resp.status_code >= 400 and referer:
-                parsed_ref = urlparse(referer)
-                retry_headers = dict(req_headers)
-                retry_headers["Referer"] = f"{parsed_ref.scheme}://{parsed_ref.netloc}/"
-                try:
-                    resp = await client.get(target, headers=retry_headers)
-                except Exception:  # noqa: BLE001
-                    pass
+        # Bazı oynatıcılar yalnızca referer'lı ister; referer verilmişse
+        # ve hâlâ hata alıyorsak origin ile tekrar dene.
+        if resp.status_code >= 400 and referer and await _is_safe_external_url(referer):
+            parsed_ref = urlparse(referer)
+            retry_headers = dict(req_headers)
+            retry_headers["Referer"] = f"{parsed_ref.scheme}://{parsed_ref.netloc}/"
+            try:
+                resp = await client.get(target, headers=retry_headers, timeout=12.0)
+            except Exception:  # noqa: BLE001
+                pass
 
-            content_type = resp.headers.get("content-type", "text/html")
+        content_type = resp.headers.get("content-type", "text/html")
 
-            if "text/html" in content_type.lower():
-                html = resp.text
+        if "text/html" in content_type.lower():
+            page_html = resp.text
 
-                # Bot koruması: sitenin gerçek sayfası elimizde değil.
-                if _looks_blocked(resp.status_code, html):
-                    logger.info(
-                        "Proxy engellendi (%s -> %s): %s", target, resp.status_code, resp.url
-                    )
-                    blocked = HTMLResponse(
-                        content=_blocked_notice_html(target),
-                        status_code=200,  # iframe içinde düzgün görünsün
-                    )
-                    blocked.headers["X-Frame-Options"] = "ALLOWALL"
-                    blocked.headers["Content-Security-Policy"] = "frame-ancestors *"
-                    blocked.headers["Access-Control-Allow-Origin"] = "*"
-                    return blocked
-
-                final_url = str(resp.url)
-                base_tag = f'<base href="{final_url}" />'
-                injected = f"""
-                {base_tag}
-                <style>
-                    html, body {{
-                        overflow-y: auto !important;
-                        -webkit-overflow-scrolling: touch !important;
-                        touch-action: pan-y !important;
-                    }}
-                </style>
-                <script>
-                    try {{
-                        window.open = function() {{ console.log("[Ahududu] Pop-up engellendi"); return null; }};
-                    }} catch (e) {{}}
-                </script>
-                """
-                lower_html = html.lower()
-                if "<head>" in lower_html:
-                    idx = lower_html.find("<head>") + 6
-                    html = html[:idx] + injected + html[idx:]
-                elif "<html>" in lower_html:
-                    idx = lower_html.find("<html>") + 6
-                    html = html[:idx] + f"<head>{injected}</head>" + html[idx:]
-                else:
-                    html = f"<!DOCTYPE html><html><head>{injected}</head><body>{html}</body></html>"
-
-                response = HTMLResponse(content=html, status_code=resp.status_code)
-                response.headers["X-Frame-Options"] = "ALLOWALL"
-                response.headers["Content-Security-Policy"] = "frame-ancestors *"
-                response.headers["Access-Control-Allow-Origin"] = "*"
-                return response
-            else:
-                return Response(
-                    content=resp.content,
-                    media_type=content_type,
-                    status_code=resp.status_code,
-                    headers={
-                        "X-Frame-Options": "ALLOWALL",
-                        "Content-Security-Policy": "frame-ancestors *",
-                        "Access-Control-Allow-Origin": "*",
-                    },
+            # Bot koruması: sitenin gerçek sayfası elimizde değil.
+            if _looks_blocked(resp.status_code, page_html):
+                logger.info(
+                    "Proxy engellendi (%s -> %s): %s", target, resp.status_code, resp.url
                 )
+                blocked = HTMLResponse(
+                    content=_blocked_notice_html(target),
+                    status_code=200,  # iframe içinde düzgün görünsün
+                )
+                blocked.headers["X-Frame-Options"] = "ALLOWALL"
+                blocked.headers["Content-Security-Policy"] = "frame-ancestors *"
+                blocked.headers["Access-Control-Allow-Origin"] = "*"
+                return blocked
+
+            final_url = html.escape(str(resp.url), quote=True)
+            base_tag = f'<base href="{final_url}" />'
+            injected = f"""
+            {base_tag}
+            <style>
+                html, body {{
+                    overflow-y: auto !important;
+                    -webkit-overflow-scrolling: touch !important;
+                    touch-action: pan-y !important;
+                }}
+            </style>
+            <script>
+                try {{
+                    window.open = function() {{ console.log("[Ahududu] Pop-up engellendi"); return null; }};
+                }} catch (e) {{}}
+            </script>
+            """
+            head_match = re.search(r"<head\b[^>]*>", page_html, re.I)
+            html_match = re.search(r"<html\b[^>]*>", page_html, re.I)
+            if head_match:
+                idx = head_match.end()
+                page_html = page_html[:idx] + injected + page_html[idx:]
+            elif html_match:
+                idx = html_match.end()
+                page_html = page_html[:idx] + f"<head>{injected}</head>" + page_html[idx:]
+            else:
+                page_html = f"<!DOCTYPE html><html><head>{injected}</head><body>{page_html}</body></html>"
+
+            response = HTMLResponse(content=page_html, status_code=resp.status_code)
+            response.headers["X-Frame-Options"] = "ALLOWALL"
+            response.headers["Content-Security-Policy"] = "frame-ancestors *"
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+        else:
+            return Response(
+                content=resp.content,
+                media_type=content_type,
+                status_code=resp.status_code,
+                headers={
+                    "X-Frame-Options": "ALLOWALL",
+                    "Content-Security-Policy": "frame-ancestors *",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
     except Exception as exc:
         logger.warning("Proxy erişim hatası (%s): %s", target, exc)
+        safe_target = html.escape(target, quote=True)
         return HTMLResponse(
             f"""<!DOCTYPE html>
             <html>
             <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
             <body style="background:#09090b;color:#f4f4f5;font-family:system-ui,-apple-system,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;padding:20px;text-align:center;">
                 <p style="font-size:15px;margin-bottom:12px;">Film sitesi salonda doğrudan açılamadı 🎬</p>
-                <a href="{target}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 20px;background:#f59e0b;color:#18181b;font-weight:bold;text-decoration:none;border-radius:999px;font-size:13px;">
+                <a href="{safe_target}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 20px;background:#f59e0b;color:#18181b;font-weight:bold;text-decoration:none;border-radius:999px;font-size:13px;">
                     Siteyi tarayıcıda aç ↗
                 </a>
             </body>
@@ -776,9 +845,14 @@ async def create_room(payload: CinemaRoomCreate, db: AsyncSession = Depends(get_
 
     if room:
         room.title = payload.title.strip() or room.title
-        room.kind = payload.kind or room.kind
+        room.kind = resolved.get("kind") or payload.kind or room.kind
         room.cover_url = payload.cover_url or room.cover_url
         room.poster_url = payload.poster_url or resolved["poster_url"] or room.poster_url
+        if not payload.is_calendar and getattr(room, "is_calendar", False):
+            room.is_calendar = False
+            room.showtime_id = None
+            if room.created_by not in settings.USER_IDS:
+                room.created_by = payload.created_by or "murat"
         # Çözülen GERÇEK akış her zaman kazanır: film sitesinin HTML sayfası
         # perdede açılamadığı için kara ekran bırakıyordu.
         if resolved.get("stream_url"):
@@ -787,6 +861,7 @@ async def create_room(payload: CinemaRoomCreate, db: AsyncSession = Depends(get_
             room.embed_url = None
             room.stream_url = resolved["stream_url"]
             room.stream_referer = resolved.get("stream_referer")
+            room.kind = resolved.get("kind") or "hls"
         # Film sitesi linki verildiyse odanın adresi sitenin kendisi olmalı;
         # eski kayıttan kalma YouTube fragmanı varsa temizlenir.
         elif _is_generic_site(resolved, resolved.get("video_url", "")):
@@ -810,9 +885,8 @@ async def create_room(payload: CinemaRoomCreate, db: AsyncSession = Depends(get_
             stream_referer=resolved.get("stream_referer"),
             cover_url=payload.cover_url,
             poster_url=payload.poster_url or resolved["poster_url"],
-            # Gömme siteleri (YouTube, Vimeo…) "embed", doğrudan dosyalar "film".
-            # Karışık durumlar için embed_url varlığı oynatıcıyı belirler.
-            kind=("embed" if resolved.get("embed_url") else "film"),
+            # Gömme siteleri (YouTube, Vimeo…) "embed", çözülmüş HLS "hls", doğrudan dosyalar "file"/"film".
+            kind=resolved.get("kind") or ("embed" if resolved.get("embed_url") else "film"),
             created_by=payload.created_by or "murat",
             is_playing=False,
             is_active=False,
@@ -915,13 +989,13 @@ async def start_room(room_id: int, payload: dict, db: AsyncSession = Depends(get
     await db.commit()
     await db.refresh(room)
 
-    # Bu salon için "hazır" kayıtlarını sıfırla.
-    _ready_markers.pop(room.id, None)
+    # Bu salon için önceki çalışma zamanı durumunu sıfırla.
+    clear_room_runtime(room.id)
 
     await ws_manager.broadcast({
         "type": "cinema_started",
         "room": _room_payload(room),
-        "started_by": payload.get("user_id", "murat"),
+        "started_by": payload.user_id if hasattr(payload, "user_id") else payload.get("user_id", "murat"),
         "title": room.title,
     })
     return room
@@ -936,23 +1010,80 @@ async def start_room(room_id: int, payload: dict, db: AsyncSession = Depends(get
 # oynatıcısı hazır olunca `/ready` çağırır ve ikisi de hazırsa sunucu tek bir
 # `cinema_play` olayı yayınlar. O an ikisi de aynı saniyeden (0) başlar.
 #
-# Bir taraf hiç gelmezse film sonsuza kadar beklemesin: 20 saniye sonra
-# hazır olan taraf tek başına başlar.
+# Partner çevrimdışıysa veya 5 saniye içinde gelmezse hazır olan taraf başlar.
 
 # room_id -> {user_id: hazır_olma_zamani}
 _ready_markers: dict[int, dict[str, float]] = {}
+_ready_timers: dict[int, asyncio.Task] = {}
 READY_TIMEOUT_SECONDS = 20.0
+READY_AUTO_START_SECONDS = 5.0
+
+
+def clear_room_runtime(room_id: int) -> None:
+    """Bir oda yeniden başlatılırken/kapatılırken eski çalışma zamanı izlerini temizle."""
+    _device_positions.pop(room_id, None)
+    _ready_markers.pop(room_id, None)
+    timer = _ready_timers.pop(room_id, None)
+    if timer and not timer.done():
+        timer.cancel()
+    for key in [k for k in _position_requests if k[0] == room_id]:
+        entry = _position_requests.pop(key, None)
+        fut = entry.get("future") if entry else None
+        if fut and not fut.done():
+            fut.cancel()
+
+
+async def _delayed_ready_start(room_id: int, position: float, delay: float = READY_AUTO_START_SECONDS) -> None:
+    """Partner kısa süre içinde hazır olmazsa filmi otomatik başlat."""
+    try:
+        await asyncio.sleep(delay)
+        if room_id not in _ready_markers:
+            return
+        from backend.app.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            room = await db.get(CinemaRoom, room_id)
+            if not room or not room.is_active or room.is_playing:
+                _ready_markers.pop(room_id, None)
+                return
+            room.is_playing = True
+            room.position = position
+            room.updated_at = now_utc()
+            await db.commit()
+            await db.refresh(room)
+
+        _ready_markers.pop(room_id, None)
+        logger.info("Sinema süre doldu, otomatik başlatıldı: room=%s pos=%.1f", room_id, position)
+        await ws_manager.broadcast({
+            "type": "cinema_play",
+            "room_id": room_id,
+            "position": position,
+            "is_playing": True,
+            "started": True,
+        })
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Sinema otomatik başlatma hatası (room=%s): %s", room_id, exc)
+    finally:
+        current = _ready_timers.get(room_id)
+        if current is asyncio.current_task():
+            _ready_timers.pop(room_id, None)
 
 
 @router.post("/{room_id}/ready")
 async def mark_ready(room_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
-    """Bir cihazın oynatıcısı hazır: ikisi de hazırsa filmi başlat."""
+    """Bir cihazın oynatıcısı hazır: ikisi de hazırsa (ya da partner yoksa) filmi başlat."""
     room = await db.get(CinemaRoom, room_id)
     if not room:
         raise HTTPException(status_code=404, detail="Salon bulunamadı")
 
+    if room.is_playing:
+        return {"started": True, "position": room.position or 0.0}
+
     user_id = payload.get("user_id") or "murat"
     position = float(payload.get("position") or 0.0)
+    force = bool(payload.get("force"))
 
     # Bu salon için hazır kayıtları (varsa) — `start` bunları sıfırlamıştı.
     markers = _ready_markers.setdefault(room_id, {})
@@ -961,12 +1092,17 @@ async def mark_ready(room_id: int, payload: dict, db: AsyncSession = Depends(get
     now = time.time()
     others = [u for u in markers if u != user_id]
     others_ready = any(now - markers[u] < READY_TIMEOUT_SECONDS for u in others)
+    partner_id = settings.partner_of(user_id)
+    partner_online = bool(ws_manager.active_connections.get(partner_id))
 
-    # İki taraf da hazırsa VEYA bir taraf 20 sn'dir bekliyorsa başla.
-    waited_long = (now - min(markers.values())) >= READY_TIMEOUT_SECONDS
-    should_start = others_ready or waited_long
+    # İki taraf da hazırsa, bekleme süresi dolduysa, zorlandıysa ya da partner çevrimdışıysa başla.
+    waited_long = (now - min(markers.values())) >= READY_AUTO_START_SECONDS
+    should_start = others_ready or waited_long or force or not partner_online
 
     if should_start:
+        timer = _ready_timers.pop(room_id, None)
+        if timer and not timer.done():
+            timer.cancel()
         room.is_playing = True
         room.position = position
         room.updated_at = now_utc()
@@ -974,8 +1110,8 @@ async def mark_ready(room_id: int, payload: dict, db: AsyncSession = Depends(get
         await db.refresh(room)
         _ready_markers.pop(room_id, None)
         logger.info(
-            "Sinema başladı: room=%s pos=%.1f (diğer hazır=%s, süre doldu=%s)",
-            room_id, position, others_ready, waited_long,
+            "Sinema başladı: room=%s pos=%.1f (diğer hazır=%s, süre doldu=%s, online=%s, force=%s)",
+            room_id, position, others_ready, waited_long, partner_online, force,
         )
 
         await ws_manager.broadcast({
@@ -987,8 +1123,13 @@ async def mark_ready(room_id: int, payload: dict, db: AsyncSession = Depends(get
         })
         return {"started": True, "position": position}
 
-    # İkinci cihazı bekle.
-    return {"started": False, "waiting_for_partner": not others_ready}
+    # İkinci cihaz çevrimiçi: gelmesini bekle, yoksa READY_AUTO_START_SECONDS sonra otomatik başlat.
+    existing_timer = _ready_timers.get(room_id)
+    if not existing_timer or existing_timer.done():
+        _ready_timers[room_id] = asyncio.create_task(
+            _delayed_ready_start(room_id, position, READY_AUTO_START_SECONDS)
+        )
+    return {"started": False, "waiting_for_partner": True}
 
 
 @router.post("/{room_id}/control", response_model=CinemaRoomResponse)
@@ -1010,6 +1151,14 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
     # Bu cihazın bildirdiği konum (varsa).
     reported = float(payload.position) if payload.position is not None else None
 
+    if action == "duration":
+        if payload.duration and float(payload.duration) > 0:
+            room.duration = float(payload.duration)
+            room.updated_at = now_utc()
+            await db.commit()
+            await db.refresh(room)
+        return room
+
     if action == "seek":
         if getattr(room, "is_calendar", False):
             raise HTTPException(status_code=400, detail="Takvim seanslarında ileri/geri sarma yapılamaz")
@@ -1019,18 +1168,9 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
     elif action == "pause":
         room.is_playing = False
     elif action in ("adopt", "join"):
-        # ---- SALONA SONRADAN GİREN: TEK SEFERLİK SENKRON ----
-        #
-        # Kullanıcı isteği: "Murat filmi izliyor 11. dakikada; Selin odaya
-        # girdiğinde 1 kere senkronize işlemi başlatılsın, Murat'ın videosu
-        # durdurulsun, Selin'le senkronize edilsin ve ikisi 11. dakikadan
-        # devam etsin."
-        #
-        # Yani: salonda ZATEN oynayan tarafın saniyesi ESAS ALINIR; yeni giren
-        # oraya hizalanır. Oynayan kişinin konumu `_device_positions` içinde
-        # (pause/play/seek anlarında) tutuluyor; burada en son kalan
-        # (en ileride) konumu kullanıyoruz.
         room.last_seen_at = now_utc()
+        if payload.duration and float(payload.duration) > 0:
+            room.duration = float(payload.duration)
 
         # Salonda ZATEN oynayan biri var mı? (bizden başka biri)
         others = [u for u in _device_positions.get(room.id, {}) if u != payload.user_id]
@@ -1096,6 +1236,7 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
         room.is_playing = False
         room.is_active = False
         room.updated_by = payload.user_id
+        clear_room_runtime(room.id)
         try:
             await set_cinema_presence(payload.user_id, False)
         except Exception as exc:  # noqa: BLE001
@@ -1104,6 +1245,7 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
         room.is_active = False
         room.is_playing = False
         room.position = 0.0
+        clear_room_runtime(room.id)
     elif action == "sync":
         pass
     else:
@@ -1113,18 +1255,50 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
         room.position = reported
         _device_positions.setdefault(room.id, {})[payload.user_id] = reported
     elif reported is not None and action == "play":
-        _device_positions.setdefault(room.id, {}).setdefault(payload.user_id, reported)
+        _device_positions.setdefault(room.id, {})[payload.user_id] = reported
 
-    # ---- DURDUR: İki tarafta da durdurulur ve karşı tarafın pozisyonu öğrenilir ----
+    # ---- DURDUR: İki tarafta da durdurulur ve karşı tarafın pozisyonu gecikmeden öğrenilir ----
     if action == "pause":
+        if payload.duration and float(payload.duration) > 0:
+            room.duration = float(payload.duration)
+        room.updated_by = payload.user_id
+        room.updated_at = now_utc()
+        await db.commit()
+        await db.refresh(room)
+
         partner_id = settings.partner_of(payload.user_id)
-        # Karşı tarafın o an durduğu pozisyonu tek tur canlı sor
-        try:
-            partner_pos = await ask_position(room.id, payload.user_id, partner_id, wait_seconds=0.8)
-            if partner_pos is not None:
-                _device_positions.setdefault(room.id, {})[partner_id] = float(partner_pos)
-        except Exception:
-            pass
+        partner_online = bool(ws_manager.active_connections.get(partner_id))
+        waiter_future: Optional[asyncio.Future] = None
+        waiter_entry: Optional[dict] = None
+        if partner_online:
+            waiter_future = asyncio.get_running_loop().create_future()
+            waiter_entry = {"requester": payload.user_id, "future": waiter_future}
+            _position_requests[(room.id, partner_id)] = waiter_entry
+
+        await ws_manager.broadcast({
+            "type": "cinema_sync",
+            "room_id": room.id,
+            "action": "pause",
+            "position": room.position,
+            "duration": room.duration,
+            "is_playing": room.is_playing,
+            "is_active": room.is_active,
+            "updated_by": room.updated_by,
+            "updated_at": room.updated_at.isoformat(),
+            "behind_by": None,
+        })
+
+        if waiter_future is not None:
+            try:
+                await asyncio.wait_for(waiter_future, timeout=0.5)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            finally:
+                key = (room.id, partner_id)
+                if _position_requests.get(key) is waiter_entry:
+                    _position_requests.pop(key, None)
+
+        return room
 
     # ---- OYNAT: Senkronizasyon Modelleri ----
     if action == "play":
@@ -1181,14 +1355,18 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
                         positions[leader] = float(live_pos)
                         room.position = max(0.0, live_pos)
                     else:
-                        room.position = room.position or 0.0
+                        room.position = reported if reported is not None else (room.position or 0.0)
                 except Exception:
-                    room.position = room.position or 0.0
+                    room.position = reported if reported is not None else (room.position or 0.0)
                 logger.info(
                     "Hızlı izle play: yönetici=%s canlı/son pos=%.1fs -> iki kişi de eşitlendi",
                     leader, room.position,
                 )
             behind_by = leader
+
+        # Eşitlenen pozisyonu her iki cihaz için güncelle ki eski değer kalmasın
+        for uid in list(positions.keys()):
+            positions[uid] = room.position
     else:
         behind_by = None
 
@@ -1221,8 +1399,8 @@ async def control_room(room_id: int, payload: CinemaControl, db: AsyncSession = 
 _device_positions: dict[int, dict[str, float]] = {}
 
 # Salona giriş senkronu: oynayan taraftan CANLI konum istemek için bekleyenler.
-# room_id -> { requester_id, event, future }  (WS üzerinden tek tur soru-cevap)
-_position_requests: dict[int, dict] = {}
+# (room_id, user_id) -> { requester, future }  (WS üzerinden tek tur soru-cevap)
+_position_requests: dict[tuple[int, str], dict] = {}
 
 
 async def ask_position(room_id: int, requester_id: str, user_id: str, wait_seconds: float = 3.0) -> Optional[float]:
@@ -1234,8 +1412,19 @@ async def ask_position(room_id: int, requester_id: str, user_id: str, wait_secon
     Sürekli checkpoint YOK. Yalnızca salona biri girdiğinde bu tek tur
     çalışır: karşı tarafın tarayıcısı o anki saniyesini bir kez bildirir.
     """
-    future: asyncio.Future = asyncio.get_event_loop().create_future()
-    _position_requests[room_id] = {"requester": requester_id, "future": future}
+    if not ws_manager.active_connections.get(user_id):
+        return None
+
+    key = (room_id, user_id)
+    prev = _position_requests.get(key)
+    if prev:
+        old_fut = prev.get("future")
+        if old_fut and not old_fut.done():
+            old_fut.cancel()
+
+    future: asyncio.Future = asyncio.get_running_loop().create_future()
+    entry = {"requester": requester_id, "future": future}
+    _position_requests[key] = entry
 
     await ws_manager.send_to_user(user_id, {
         "type": "cinema_position_request",
@@ -1246,10 +1435,11 @@ async def ask_position(room_id: int, requester_id: str, user_id: str, wait_secon
     try:
         value = await asyncio.wait_for(future, timeout=wait_seconds)
         return float(value) if value is not None else None
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, asyncio.CancelledError):
         return None
     finally:
-        _position_requests.pop(room_id, None)
+        if _position_requests.get(key) is entry:
+            _position_requests.pop(key, None)
 
 
 def record_device_position(room_id: int, user_id: str, position: float) -> None:
@@ -1261,12 +1451,18 @@ def resolve_position(room_id: int, position: float, user_id: Optional[str] = Non
     """Karşı taraf konumunu bildirdi: bekleyen soruyu yanıtla ve konumu kaydet."""
     if user_id:
         record_device_position(room_id, user_id, position)
-    entry = _position_requests.get(room_id)
-    if not entry:
-        return
-    future = entry.get("future")
-    if future and not future.done():
-        future.set_result(position)
+        entry = _position_requests.get((room_id, user_id))
+        if entry:
+            future = entry.get("future")
+            if future and not future.done():
+                future.set_result(position)
+            return
+
+    for key, entry in list(_position_requests.items()):
+        if key[0] == room_id:
+            future = entry.get("future")
+            if future and not future.done():
+                future.set_result(position)
 
 
 @router.post("/{room_id}/react")
@@ -1321,8 +1517,10 @@ async def set_cinema_presence(user_id: str, is_watching: bool, title: Optional[s
             label = f"Sinemada 🍿" + (f" · {title}" if title else "")
             profile.status_text = label[:100]
         else:
-            profile.status_text = presence_memory.get(user_id, "") or ""
-            presence_memory.pop(user_id, None)
+            if not (profile.status_text or "").startswith("Sinemada"):
+                presence_memory.pop(user_id, None)
+                return
+            profile.status_text = presence_memory.pop(user_id, "") or ""
 
         profile.last_seen = now_utc()
         await db.commit()
@@ -1352,6 +1550,7 @@ async def delete_room(room_id: int, db: AsyncSession = Depends(get_db)):
     room = await db.get(CinemaRoom, room_id)
     if not room:
         raise HTTPException(status_code=404, detail="Salon bulunamadı")
+    clear_room_runtime(room_id)
     await db.delete(room)
     await db.commit()
     await ws_manager.broadcast({"type": "cinema_room_deleted", "room_id": room_id})

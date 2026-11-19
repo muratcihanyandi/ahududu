@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapPin, Navigation2, Battery, RefreshCw, Vibrate, ExternalLink, Heart } from 'lucide-react';
+import { MapPin, Navigation2, RefreshCw, Heart } from 'lucide-react';
 import { CoupleStatus, UserId, USERS, partnerOf } from '../types';
 import { api } from '../services/api';
 import { wsClient } from '../services/websocket';
-import { playHaptic, HAPTIC_PATTERNS } from '../services/haptics';
+import { playHaptic } from '../services/haptics';
 
 import { getRealBatteryStatus } from '../services/battery';
 
@@ -16,6 +16,14 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
   const [status, setStatus] = useState<CoupleStatus | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Panel, "Neredeyiz?" kısayoluna dokununca açılıyor; hemen görünür alana gel.
   useEffect(() => {
@@ -34,16 +42,17 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
       setStatus((prev) => {
         if (!prev) return prev;
         const partnerKey = partnerOf(currentUserId);
+        const existing = prev[partnerKey];
         return {
           ...prev,
           [partnerKey]: {
-            ...prev[partnerKey],
-            lat: data.latitude,
-            lon: data.longitude,
-            place: data.place_name,
-            battery: data.battery,
+            ...existing,
+            lat: data.latitude ?? existing?.lat,
+            lon: data.longitude ?? existing?.lon,
+            place: data.place_name || existing?.place,
+            battery: data.battery ?? existing?.battery,
           },
-          distance_km: data.distance_km,
+          distance_km: data.distance_km ?? prev.distance_km,
         };
       });
     });
@@ -54,7 +63,7 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
   const loadStatus = async () => {
     try {
       const data = await api.getCoupleStatus();
-      setStatus(data);
+      if (mountedRef.current) setStatus(data);
     } catch (e) {
       console.error(e);
     }
@@ -73,24 +82,31 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
       async (pos) => {
         try {
           const batteryInfo = await getRealBatteryStatus();
-          const res = await api.updateLocation({
+          await api.updateLocation({
             user_id: currentUserId,
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
             accuracy: pos.coords.accuracy,
             battery: batteryInfo.level,
-            place_name: '',
+            place_name: undefined,
           });
+          if (!mountedRef.current) return;
           setIsUpdating(false);
-          loadStatus();
+          await loadStatus();
         } catch (e) {
-          setIsUpdating(false);
+          console.error(e);
+          if (mountedRef.current) {
+            setIsUpdating(false);
+            alert('Konum güncellenemedi, lütfen tekrar dene.');
+          }
         }
       },
       (err) => {
         console.warn(err);
-        setIsUpdating(false);
-        alert('Konum izni verilemedi veya GPS sinyali zayıf.');
+        if (mountedRef.current) {
+          setIsUpdating(false);
+          alert('Konum izni verilemedi veya GPS sinyali zayıf.');
+        }
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
@@ -100,7 +116,7 @@ export const CoupleRadar: React.FC<CoupleRadarProps> = ({ currentUserId, partner
   const partnerData = status?.[partnerOf(currentUserId)];
 
   const openNavigation = () => {
-    if (partnerData?.lat && partnerData?.lon) {
+    if (partnerData?.lat != null && partnerData?.lon != null) {
       window.open(
         `https://www.google.com/maps/dir/?api=1&destination=${partnerData.lat},${partnerData.lon}`,
         '_blank'

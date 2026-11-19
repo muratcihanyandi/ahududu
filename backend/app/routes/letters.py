@@ -5,6 +5,7 @@ her mektup silinmeden önce diske JSON yedeği yazılır. Arayüzdeki "arşiv"
 sekmesi silinmiş mektupları da gösterip geri getirmeye izin verir.
 """
 
+import asyncio
 import logging
 from typing import List, Optional
 
@@ -26,27 +27,18 @@ router = APIRouter(prefix="/api/letters", tags=["letters"])
 @router.get("", response_model=List[LoveLetterResponse])
 async def list_letters(
     include_deleted: bool = Query(
-        False,
-        description="Arşivdeki (silinmiş) mektupları da getir. Arayüz varsayılan "
-        "olarak hepsini göstermek için true gönderir.",
+        True,
+        description="Arşivdeki (silinmiş) mektupları da getir. Varsayılan olarak tümü döner.",
     ),
     db: AsyncSession = Depends(get_db),
 ):
-    """Mektuplar — varsayılan olarak ARŞİVDEKİLER DAHİL hepsi döner.
-
-    Not: `include_deleted` geriye dönük uyumluluk için var; eşya kaybını
-    önlemek adına hiçbir mektup arayüzden gizlenmez.
-    """
-    query = select(LoveLetter).order_by(desc(LoveLetter.created_at))
+    """Mektuplar — varsayılan olarak arşivdekiler dahil hepsi döner."""
+    query = select(LoveLetter)
+    if not include_deleted:
+        query = query.where(LoveLetter.is_deleted.is_not(True))
+    query = query.order_by(desc(LoveLetter.created_at))
     result = await db.execute(query)
-    letters = result.scalars().all()
-    if letters:
-        # Yedeği olmayan mektuplar için bir kez arşiv al (tekrarlamaz).
-        try:
-            await letter_archive.backfill_letter_backups(letters)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Mektup yedeği alınamadı: %s", exc)
-    return letters
+    return result.scalars().all()
 
 
 @router.post("", response_model=LoveLetterResponse)
@@ -66,7 +58,7 @@ async def create_letter(payload: LoveLetterCreate, db: AsyncSession = Depends(ge
     await db.refresh(letter)
 
     # Yeni mektup diske de yedeklenir (kalıcı arşiv).
-    letter_archive.backup_letter(letter_archive.letter_to_dict(letter), reason="created")
+    await asyncio.to_thread(letter_archive.backup_letter, letter_archive.letter_to_dict(letter), "created")
 
     # Send real-time notification to recipient
     recipient = settings.partner_of(payload.sender)
@@ -100,13 +92,13 @@ async def restore_all_letters(db: AsyncSession = Depends(get_db)):
             restored += 1
     if restored:
         await db.commit()
-        await ws_manager.broadcast({"type": "new_letter"})
+        await ws_manager.broadcast({"type": "letters_updated"})
     return {"success": True, "restored": restored}
 
 
 @router.get("/archive")
 async def letter_archive_report(db: AsyncSession = Depends(get_db)):
-    """Mektup arşivinin özeti (yedeği alınmış miktar dahil)."""
+    """Mektup arşivinin özeti."""
     result = await db.execute(select(LoveLetter))
     letters = result.scalars().all()
     deleted = [l for l in letters if getattr(l, "is_deleted", False)]
@@ -114,7 +106,6 @@ async def letter_archive_report(db: AsyncSession = Depends(get_db)):
         "total": len(letters),
         "active": len(letters) - len(deleted),
         "archived": len(deleted),
-        "backup_dir": letter_archive.backup_dir(),
     }
 
 
@@ -127,13 +118,21 @@ async def get_letter(letter_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{letter_id}/open", response_model=LoveLetterResponse)
-async def open_letter(letter_id: int, db: AsyncSession = Depends(get_db)):
+async def open_letter(
+    letter_id: int,
+    viewer: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
     letter = await db.get(LoveLetter, letter_id)
     if not letter:
         raise HTTPException(status_code=404, detail="Mektup bulunamadı")
-    
+
+    if viewer and viewer == letter.sender:
+        return letter
+
     if not letter.is_opened:
         letter.is_opened = True
+        letter.is_sealed = False
         letter.opened_at = now_utc()
         await db.commit()
         await db.refresh(letter)
@@ -159,12 +158,12 @@ async def delete_letter(letter_id: int, db: AsyncSession = Depends(get_db)):
     if not letter:
         raise HTTPException(status_code=404, detail="Mektup bulunamadı")
 
-    letter_archive.backup_letter(letter_archive.letter_to_dict(letter), reason="deleted")
+    await asyncio.to_thread(letter_archive.backup_letter, letter_archive.letter_to_dict(letter), "deleted")
     _setattr_safe(letter, "is_deleted", True)
     _setattr_safe(letter, "deleted_at", now_utc())
     await db.commit()
     await db.refresh(letter)
-    await ws_manager.broadcast({"type": "new_letter"})
+    await ws_manager.broadcast({"type": "letters_updated"})
     return {"success": True, "archived": True}
 
 
@@ -178,7 +177,7 @@ async def restore_letter(letter_id: int, db: AsyncSession = Depends(get_db)):
     _setattr_safe(letter, "deleted_at", None)
     await db.commit()
     await db.refresh(letter)
-    await ws_manager.broadcast({"type": "new_letter"})
+    await ws_manager.broadcast({"type": "letters_updated"})
     return letter
 
 

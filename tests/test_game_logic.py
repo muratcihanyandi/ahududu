@@ -80,16 +80,39 @@ CHECKS = r"""() => {
   const info = mpApi.carInfo ? mpApi.carInfo() : null;
   push('kendi araba mesh listesi DOLU (araba çizilebilir)', !!info && info.ownItems >= 5, info ? info.ownItems : 'n/a');
   push('kendi camları yerinde', !!info && info.ownGlass >= 1, info ? info.ownGlass : 'n/a');
-  push('partner arabası başta pistte DEĞİL', R.drawables.indexOf(MP.set) < 0);
+  const isPartnerShown = () => R.drawables.indexOf(MP.drawable || MP.set) >= 0;
+  push('partner arabası başta pistte DEĞİL', !isPartnerShown());
 
   mpApi.packet({ type: 'game_hello', from: 'selin', seq: 1 });
-  push('hello -> partner pistte görünür', R.drawables.indexOf(MP.set) >= 0);
+  push('hello -> partner pistte görünür', isPartnerShown());
   mpApi.packet({ type: 'game_car', d: [55, 1.5, 66, 0.4, 12, 3, 1, 70, -1] });
   push('konum paketi alındı', MP.hasT && Math.abs(MP.S.x - 55) < 1e-6 && Math.abs(MP.S.z - 66) < 1e-6, MP.S.x + ',' + MP.S.z);
+
+  // Çarpışma testi: iki araba üst üste/yakın gelince itki + hits artışı olmalı
+  const V = cap.VEH;
+  const oldX = V.x, oldZ = V.z, oldHits = V.hits;
+  V.vx = 18; V.vy = 0; V.r = 0;
+  const c = Math.cos(V.yaw), s = Math.sin(V.yaw);
+  mpApi.packet({ type: 'game_car', d: [V.x + c * 1.1, V.y, V.z + s * 1.1, V.yaw, 0, 1, 1, V.s + 1.1, V.d, 0, 0, 0, 0, 0, 0] });
+  // İlk pakette uzaklıktan sıçrayarak konuma oturur; hemen çarpışma testini çalıştır
+  MP.lastCrashAt = 0;
+  mpApi.collide();
+  const moved = Math.hypot(V.x - oldX, V.z - oldZ);
+  push('araba çarpışması -> pozisyon ayrıştı ve hız düştü', moved > 0.05 && V.vx < 18 && V.hits > oldHits, 'moved=' + moved.toFixed(2) + ' vx=' + V.vx.toFixed(2) + ' hits=' + V.hits);
+
+  // Gelen game_hit paketi -> karşıdan gelen darbe uygulanır
+  MP.lastCrashAt = 0;
+  const preVx = V.vx;
+  mpApi.packet({ type: 'game_hit', from: 'selin', ix: -c * 5, iz: -s * 5, tr: 0.4 });
+  push('game_hit -> karşıdan çarpışma darbesi uygulandı', V.vx < preVx - 1, 'pre=' + preVx.toFixed(2) + ' post=' + V.vx.toFixed(2));
+
   mpApi.packet({ type: 'game_bye', from: 'selin' });
-  push('bye -> partner pistten kalktı', R.drawables.indexOf(MP.set) < 0, 'idx=' + R.drawables.indexOf(MP.set) + ' partnerOn=' + MP.partnerOn);
+  push('bye -> partner pistten kalktı', !isPartnerShown(), 'shown=' + isPartnerShown() + ' partnerOn=' + MP.partnerOn);
   const txt = document.getElementById('mpStat').textContent;
   push('durum yazısı teknik detaysız', !/WebGPU|ms|FPS|çözünürlük/i.test(txt), txt);
+  const uiTxt = document.getElementById('ui').innerText;
+  const hintDisp = getComputedStyle(document.getElementById('hint')).display;
+  push('WASD yönergesi kapalı ve menü Türkçe', hintDisp === 'none' && !/Teclado|W ou|Começar/i.test(uiTxt) && /Başla/.test(uiTxt), 'hint=' + hintDisp);
   const info2 = mpApi.carInfo ? mpApi.carInfo() : null;
   push('kendi arabamızın meshleri hâlâ yerinde', !!info2 && info2.ownItems >= 5, info2 ? info2.ownItems : 'n/a');
   return out;
@@ -130,5 +153,75 @@ def main() -> int:
     return 0 if ok else 1
 
 
+def test_real_gpu_two_players() -> bool:
+    """Gerçek WebGPU ile (sahte cihaz olmadan) 2. oyuncu girince ekranın kararmadığını ve hata vermediğini doğrular."""
+    with sync_playwright() as p:
+        try:
+            browser = p.chromium.launch(channel="chrome", headless=True)
+        except Exception:  # noqa: BLE001
+            browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 720})
+        errors = []
+        gpu_errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("console", lambda m: gpu_errors.append(m.text) if m.type == "error" else None)
+        page.goto(GAME.as_uri())
+        page.wait_for_function("() => window.__cap && (window.__cap.ready() || window.__cap.error())", timeout=180000)
+        init = page.evaluate("""() => ({
+            ready: window.__cap.ready(),
+            err: window.__cap.error(),
+            b0Visible: document.getElementById('b0').offsetHeight > 0,
+            b1Visible: document.getElementById('b1').offsetHeight > 0,
+        })""")
+        if not init["ready"]:
+            print("SKIP  gerçek WebGPU bu ortamda kullanılamıyor:", init["err"])
+            browser.close()
+            return True
+        page.click("#b0")
+        page.wait_for_timeout(300)
+        # 2. oyuncu (Selin) oyuna girsin ve aracımızın hemen önüne (6m ileri) spawn olsun
+        page.evaluate("""() => {
+            const V = window.__cap.VEH;
+            const c = Math.cos(V.yaw), s = Math.sin(V.yaw);
+            window.__mp.packet({ type: 'game_hello', from: 'selin', seq: 1 });
+            window.__mp.packet({ type: 'game_car', from: 'selin', d: [V.x + c * 6, V.y, V.z + s * 6, V.yaw, 0, 1, 1, V.s + 6, V.d, 0] });
+        }""")
+        page.wait_for_timeout(800)
+        res = page.evaluate("""() => {
+            window.__cap.renderFrame();
+            const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+            const ctx = c.getContext('2d');
+            ctx.drawImage(document.getElementById('c'), 0, 0, 64, 64);
+            const data = ctx.getImageData(0, 0, 64, 64).data;
+            let nonBlack = 0;
+            for (let i = 0; i < data.length; i += 4) {
+                if (data[i] > 5 || data[i + 1] > 5 || data[i + 2] > 5) nonBlack++;
+            }
+            return {
+                err: window.__cap.error(),
+                lastErr: window.__cap.G.lastErr || null,
+                nonBlackPixels: nonBlack,
+                totalPixels: 64 * 64,
+                shown: window.__mp.state().shown,
+            };
+        }""")
+        page.screenshot(path=str(ROOT / "tests" / "_real_gpu_2players.png"))
+        browser.close()
+
+    ok = True
+    for name, val, extra in [
+        ("gerçek GPU: başlangıçta her iki buton (b0, b1) görünür", init["b0Visible"] and init["b1Visible"], str(init)),
+        ("gerçek GPU: 2. oyuncu girince WebGPU/shader hatası yok", not res["err"] and not res["lastErr"] and not gpu_errors, f"err={res['err']} gpu={gpu_errors}"),
+        ("gerçek GPU: 2. oyuncu girince ekran simsiyah kalmıyor", res["nonBlackPixels"] > 3000, f"nonBlack={res['nonBlackPixels']}/{res['totalPixels']}"),
+        ("gerçek GPU: 2. oyuncunun aracı sahnede çiziliyor", res["shown"], ""),
+    ]:
+        print(("PASS  " if val else "FAIL  ") + name + ((" :: " + extra) if extra else ""))
+        ok = ok and bool(val)
+    return ok
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    rc = main()
+    if rc == 0 and not test_real_gpu_two_players():
+        rc = 1
+    sys.exit(rc)

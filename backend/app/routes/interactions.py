@@ -25,7 +25,7 @@ async def send_nudge(payload: NudgeRequest):
         "sender": payload.sender,
         "nudge_type": payload.nudge_type,
         "message": payload.message,
-        "vibration_pattern": VIBRATION_PATTERNS["heartbeat"]
+        "vibration_pattern": VIBRATION_PATTERNS.get(payload.nudge_type, VIBRATION_PATTERNS["heartbeat"])
     })
     return {"success": True, "notified": recipient}
 

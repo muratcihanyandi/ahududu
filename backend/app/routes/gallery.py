@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from typing import List, Optional
 from backend.app.database import get_db
-from backend.app.models import GalleryItem, now_utc
+from backend.app.models import GalleryItem
 from backend.app.schemas import GalleryItemCreate, GalleryItemResponse
 from backend.app.config import settings
 from backend.app.websocket_manager import ws_manager
@@ -48,8 +48,10 @@ async def add_gallery_item(payload: GalleryItemCreate, db: AsyncSession = Depend
             "caption": item.caption,
             "media_type": item.media_type,
             "media_url": item.media_url,
+            "thumbnail_url": item.thumbnail_url,
             "album": item.album,
-            "created_at": item.created_at.isoformat()
+            "taken_at": item.taken_at.isoformat() if item.taken_at else None,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
         }
     })
     return item

@@ -4,7 +4,7 @@ Herkes kendi "anını" paylaşır; partneri açtığında mühür kırılır ve
 "Gördüm! ❤️" tepkisi anında WebSocket ile geri gider.
 """
 
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -22,6 +22,15 @@ router = APIRouter(prefix="/api/snaps", tags=["snaps"])
 SNAP_LIFETIME = timedelta(hours=24)
 
 
+def _is_expired(snap: SnapStory) -> bool:
+    if not snap.expires_at:
+        return False
+    exp = snap.expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    return exp <= now_utc()
+
+
 def _snap_payload(snap: SnapStory) -> dict:
     return {
         "id": snap.id,
@@ -33,6 +42,7 @@ def _snap_payload(snap: SnapStory) -> dict:
         "duration": snap.duration,
         "filter_name": snap.filter_name,
         "is_seen": snap.is_seen,
+        "seen_at": snap.seen_at.isoformat() if snap.seen_at else None,
         "created_at": snap.created_at.isoformat() if snap.created_at else None,
         "expires_at": snap.expires_at.isoformat() if snap.expires_at else None,
     }
@@ -42,7 +52,7 @@ def _snap_payload(snap: SnapStory) -> dict:
 async def list_snaps(
     sender: Optional[str] = Query(None, description="Sadece bir kişinin anları"),
     include_seen: bool = Query(True, description="Görülmüş anları da getir"),
-    limit: int = Query(80, le=200),
+    limit: int = Query(80, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
     now = now_utc()
@@ -114,10 +124,18 @@ async def create_snap(payload: SnapStoryCreate, db: AsyncSession = Depends(get_d
 
 
 @router.post("/{snap_id}/seen", response_model=SnapStoryResponse)
-async def mark_snap_seen(snap_id: int, db: AsyncSession = Depends(get_db)):
+async def mark_snap_seen(
+    snap_id: int,
+    viewer: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
     snap = await db.get(SnapStory, snap_id)
     if not snap:
         raise HTTPException(status_code=404, detail="An bulunamadı")
+    if _is_expired(snap):
+        raise HTTPException(status_code=410, detail="Bu anın süresi doldu")
+    if viewer and viewer == snap.sender:
+        return snap
 
     if not snap.is_seen:
         snap.is_seen = True
@@ -127,7 +145,7 @@ async def mark_snap_seen(snap_id: int, db: AsyncSession = Depends(get_db)):
         await ws_manager.send_to_user(snap.sender, {
             "type": "snap_seen",
             "snap_id": snap.id,
-            "seen_by": settings.partner_of(snap.sender),
+            "seen_by": viewer or settings.partner_of(snap.sender),
             "seen_at": snap.seen_at.isoformat(),
         })
     return snap
@@ -138,13 +156,16 @@ async def react_to_snap(snap_id: int, payload: SnapReaction, db: AsyncSession = 
     snap = await db.get(SnapStory, snap_id)
     if not snap:
         raise HTTPException(status_code=404, detail="An bulunamadı")
+    if _is_expired(snap):
+        raise HTTPException(status_code=410, detail="Bu anın süresi doldu")
 
-    await ws_manager.send_to_user(snap.sender, {
-        "type": "snap_reaction",
-        "snap_id": snap.id,
-        "sender": payload.sender,
-        "reaction": payload.reaction,
-    })
+    if payload.sender != snap.sender:
+        await ws_manager.send_to_user(snap.sender, {
+            "type": "snap_reaction",
+            "snap_id": snap.id,
+            "sender": payload.sender,
+            "reaction": payload.reaction,
+        })
     return {"success": True, "reaction": payload.reaction}
 
 

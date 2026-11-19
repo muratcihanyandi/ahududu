@@ -32,12 +32,14 @@ from backend.app.schemas import (
     TicketRequest,
     CalendarImport,
 )
-from backend.app.routes.cinema import resolve_link_deep
+from backend.app.routes.cinema import resolve_link_deep, clear_room_runtime
+from backend.app.time_utils import now_tr, today_tr
 from backend.app.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/api/cinema/calendar", tags=["cinema-calendar"])
 
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
 TIME_PATTERN = re.compile(r"^\d{2}:\d{2}$")
 
 
@@ -65,7 +67,7 @@ def _start_at(show: CinemaShowtime) -> Optional[datetime]:
 def _payload(show: CinemaShowtime, viewer: Optional[str] = None) -> dict:
     booked = _booked_list(show.booked_by)
     start = _start_at(show)
-    now_local = datetime.now()
+    now_local = now_tr().replace(tzinfo=None)
     starts_in_minutes = None
     if start:
         starts_in_minutes = int((start - now_local).total_seconds() // 60)
@@ -102,6 +104,17 @@ def _payload(show: CinemaShowtime, viewer: Optional[str] = None) -> dict:
         "starts_in_minutes": starts_in_minutes,
         "is_tonight": bool(start and start.date() == now_local.date()),
     }
+
+
+def _normalize_month(value: str) -> str:
+    value = (value or "").strip()
+    if not MONTH_PATTERN.match(value):
+        raise HTTPException(status_code=400, detail="Ay YYYY-AA biçiminde olmalı")
+    try:
+        date.fromisoformat(f"{value}-01")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Geçersiz ay") from exc
+    return value
 
 
 def _normalize_date(value: str) -> str:
@@ -149,7 +162,7 @@ async def list_showtimes(
 @router.get("/tonight", response_model=None)
 async def tonight(viewer: Optional[str] = None, db: AsyncSession = Depends(get_db)):
     """Bu akşamki seans (ana ekran kartı için)."""
-    today = date.today().isoformat()
+    today = today_tr().isoformat()
     result = await db.execute(
         select(CinemaShowtime)
         .where(CinemaShowtime.show_date == today)
@@ -164,7 +177,7 @@ async def tonight(viewer: Optional[str] = None, db: AsyncSession = Depends(get_d
 @router.get("/next", response_model=None)
 async def next_showtime(viewer: Optional[str] = None, db: AsyncSession = Depends(get_db)):
     """En yakın gelecek seans (bilet alma daveti için)."""
-    today = date.today().isoformat()
+    today = today_tr().isoformat()
     result = await db.execute(
         select(CinemaShowtime)
         .where(CinemaShowtime.show_date >= today)
@@ -314,9 +327,10 @@ async def cancel_ticket(
     await db.commit()
     await db.refresh(show)
 
-    await ws_manager.send_to_user(settings.partner_of(user_id), {
+    partner = settings.partner_of(user_id)
+    await ws_manager.send_to_user(partner, {
         "type": "cinema_ticket_cancelled",
-        "showtime": _payload(show),
+        "showtime": _payload(show, partner),
         "cancelled_by": user_id,
     })
     return _payload(show, user_id)
@@ -341,18 +355,30 @@ async def open_showtime(
     if booked and payload.user_id not in booked:
         raise HTTPException(status_code=403, detail="Önce bilet almalısın 🎟️")
 
-    resolved = await resolve_link_deep(show.video_url)
     room = await db.get(CinemaRoom, show.room_id) if show.room_id else None
+    if room and room.is_active:
+        # Zaten aktif oynayan/açık salonu sıfırlamadan döndür (ikinci kişi katılırken baştan sarmasın)
+        room.is_calendar = True
+        room.showtime_id = show.id
+        room.last_seen_at = now_utc()
+        if not show.started_at:
+            show.started_at = now_utc()
+        await db.commit()
+        await db.refresh(show)
+        return _payload(show, payload.user_id)
+
+    resolved = await resolve_link_deep(show.video_url)
+    room_kind = resolved.get("kind") or ("embed" if resolved.get("embed_url") else ("hls" if resolved.get("stream_url") else "film"))
     if not room:
         room = CinemaRoom(
             title=show.title,
-            video_url=show.video_url,
+            video_url=resolved["video_url"],
             source=resolved["source"],
             embed_url=resolved.get("embed_url"),
             stream_url=resolved.get("stream_url"),
             stream_referer=resolved.get("stream_referer"),
             poster_url=show.poster_url or resolved.get("poster_url"),
-            kind="embed" if resolved.get("embed_url") else ("hls" if resolved.get("stream_url") else "film"),
+            kind=room_kind,
             created_by=payload.user_id,
             is_playing=False,
             is_active=False,
@@ -365,12 +391,16 @@ async def open_showtime(
         await db.flush()
         show.room_id = room.id
     else:
+        room.title = show.title
+        room.video_url = resolved["video_url"]
+        room.source = resolved["source"]
+        room.embed_url = resolved.get("embed_url")
+        room.stream_url = resolved.get("stream_url")
+        room.stream_referer = resolved.get("stream_referer")
+        room.poster_url = show.poster_url or resolved.get("poster_url") or room.poster_url
+        room.kind = room_kind
         room.is_calendar = True
         room.showtime_id = show.id
-        if resolved.get("stream_url"):
-            room.stream_url = resolved["stream_url"]
-            room.stream_referer = resolved.get("stream_referer")
-            room.kind = "hls"
 
     # Tek aktif salon: diğerlerini kapat
     all_rooms = await db.execute(select(CinemaRoom))
@@ -384,6 +414,7 @@ async def open_showtime(
     room.updated_by = payload.user_id
     room.last_seen_at = now_utc()
     show.started_at = show.started_at or now_utc()
+    clear_room_runtime(room.id)
     await db.commit()
     await db.refresh(show)
     await db.refresh(room)
@@ -425,7 +456,7 @@ async def check_and_start_due_showtimes():
     import logging
     log = logging.getLogger("ahududu.cinema.scheduler")
     from backend.app.database import AsyncSessionLocal
-    now_local = datetime.now()
+    now_local = now_tr().replace(tzinfo=None)
     today_str = now_local.date().isoformat()
 
     try:
@@ -452,27 +483,45 @@ async def check_and_start_due_showtimes():
                 if 0 <= diff_seconds <= 3600:
                     try:
                         resolved = await resolve_link_deep(show.video_url)
-                        room = CinemaRoom(
-                            title=show.title,
-                            video_url=resolved["video_url"],
-                            source=resolved["source"],
-                            embed_url=resolved.get("embed_url"),
-                            stream_url=resolved.get("stream_url"),
-                            stream_referer=resolved.get("stream_referer"),
-                            poster_url=show.poster_url or resolved.get("poster_url"),
-                            kind="embed" if resolved.get("embed_url") else ("hls" if resolved.get("stream_url") else "film"),
-                            created_by="calendar",
-                            is_playing=True,
-                            is_active=True,
-                            is_calendar=True,
-                            showtime_id=show.id,
-                            position=0.0,
-                            duration=0.0,
-                            updated_by="calendar",
-                            last_seen_at=now_utc(),
-                        )
-                        db.add(room)
-                        await db.flush()
+                        room_kind = resolved.get("kind") or ("embed" if resolved.get("embed_url") else ("hls" if resolved.get("stream_url") else "film"))
+                        room = await db.get(CinemaRoom, show.room_id) if show.room_id else None
+                        if room is None:
+                            room = CinemaRoom(
+                                title=show.title,
+                                video_url=resolved["video_url"],
+                                source=resolved["source"],
+                                embed_url=resolved.get("embed_url"),
+                                stream_url=resolved.get("stream_url"),
+                                stream_referer=resolved.get("stream_referer"),
+                                poster_url=show.poster_url or resolved.get("poster_url"),
+                                kind=room_kind,
+                                created_by="calendar",
+                                is_playing=True,
+                                is_active=True,
+                                is_calendar=True,
+                                showtime_id=show.id,
+                                position=0.0,
+                                duration=0.0,
+                                updated_by="calendar",
+                                last_seen_at=now_utc(),
+                            )
+                            db.add(room)
+                            await db.flush()
+                        else:
+                            room.video_url = resolved["video_url"]
+                            room.source = resolved["source"]
+                            room.embed_url = resolved.get("embed_url")
+                            room.stream_url = resolved.get("stream_url")
+                            room.stream_referer = resolved.get("stream_referer")
+                            room.poster_url = show.poster_url or resolved.get("poster_url") or room.poster_url
+                            room.kind = room_kind
+                            room.is_playing = True
+                            room.is_active = True
+                            room.is_calendar = True
+                            room.showtime_id = show.id
+                            room.position = 0.0
+                            room.updated_by = "calendar"
+                            room.last_seen_at = now_utc()
 
                         # Diğer tüm aktif odaları kapat
                         all_rooms = await db.execute(select(CinemaRoom))
@@ -482,6 +531,7 @@ async def check_and_start_due_showtimes():
 
                         show.room_id = room.id
                         show.started_at = now_utc()
+                        clear_room_runtime(room.id)
                         await db.commit()
                         await db.refresh(room)
                         await db.refresh(show)
@@ -554,10 +604,11 @@ async def import_calendar(payload: CalendarImport, db: AsyncSession = Depends(ge
     if not payload.showtimes:
         raise HTTPException(status_code=400, detail="Takvim boş olamaz")
 
-    month = payload.month
-    if not month:
+    if payload.month:
+        month = _normalize_month(payload.month)
+    else:
         dates = sorted(_normalize_date(item.show_date) for item in payload.showtimes)
-        month = dates[0][:7] if dates else date.today().isoformat()[:7]
+        month = dates[0][:7] if dates else today_tr().isoformat()[:7]
 
     removed = 0
     if payload.replace_existing:
@@ -619,9 +670,10 @@ async def auto_schedule(payload: dict, db: AsyncSession = Depends(get_db)):
         {"month": "2026-11", "day": 8, "time": "21:00",
          "films": [{"title": "Inception", "video_url": "..."}], "replace_existing": true}
     """
-    month = payload.get("month")
-    if not month:
+    month_raw = payload.get("month")
+    if not month_raw:
         raise HTTPException(status_code=400, detail="Ay (YYYY-MM) gerekli")
+    month = _normalize_month(str(month_raw))
     films = payload.get("films") or []
     if not films:
         raise HTTPException(status_code=400, detail="Film listesi boş olamaz")

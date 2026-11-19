@@ -19,9 +19,6 @@ const GRASS = {
     { cell: 0.24, bs: 40, B: 16, K: 1, q: [23, 30, 58, 74], w: 0.03, prev: 1 },
   ],
   u: new Float32Array(6 * 64), dyn: new Uint32Array(1), blades: 0, cx: new Float64Array(6), cz: new Float64Array(6),
-  // MOBİL: çim çizim menzili katsayısı (1 = tam). Yalnızca menzil kısalır;
-  // anel dizisi ve shader aynı kalır, arada boşluk oluşmaz.
-  mobileRange: (typeof G !== 'undefined' && G.mobile) ? 0.78 : 1,
 };
 function grassBuild() {
   const dev = G.dev, V = VEG;
@@ -38,11 +35,8 @@ function grassBuild() {
       const camx = R.cam.pos[0], camy = R.cam.pos[1], camz = R.cam.pos[2], u = GRASS.u; GRASS.blades = 0;
       // fora da área dos mapas não há grama
       if (camx < WM.x0 - 80 || camz < WM.z0 - 80 || camx > WM.x0 + WM.sx + 80 || camz > WM.z0 + WM.sz + 80) return;
-      // zoom da lente (1 = câmera de perseguição) ve ponto de interesse
+      // zoom da lente (1 = câmera de perseguição) e ponto de interesse
       let zfac = Math.tan(R.cam.fovy * 0.5) * 2; if (zfac > 1.3) zfac = 1.3;
-      // MOBİL: çim menzili %22 kısalır. Çim, ilk karelerdeki en pahalı tek
-      // sistem (blok başına yüzlerce bıçak); 60-80 m ötesi zaten tüylü doku
-      // ile örtülüyor, bu yüzden görüntüde fark edilmez.
       const f = FR.data, px = f[FO.carMat + 12], pz = f[FO.carMat + 14], ddx = px - camx, ddz = pz - camz, dcc = Math.sqrt(ddx * ddx + ddz * ddz);
       let wf = (dcc - 12) / 18; wf = wf < 0 ? 0 : wf > 1 ? 1 : wf;
       const fx = R.cam.fwd[0], fz = R.cam.fwd[2];
@@ -60,12 +54,12 @@ function grassBuild() {
       }
       G.dev.queue.writeBuffer(GRASS.buf, 0, u);
       pass.setPipeline(pipe);
+      const GR = G.mobile ? 0.65 : 1;
       for (let r = 0; r < nr; r++) {
         const g = GRASS.rings[r]; if (g.tele && zf <= 0) continue;
+        if (G.mobile && (r === 0 || r === 4)) continue;
         const bsz = g.cell * g.bs, o = r * 64, ox = u[o + 10], oz = u[o + 11], B = g.B, per = g.bs * g.bs, nv = g.K ? 2 * g.K + 1 : 4, rad = bsz * 0.7072 + 1.2;
-        const pv = g.prev, ph = pv >= 0 ? u[o + 17] * 0.8 : 0, pcx = u[o + 18], pcz = u[o + 19], qin = g.q[0], qout = g.q[3];
-        // MOBİL: menzil kısalır; TV lente aneli (r>=4) daha da dar
-        const GR = GRASS.mobileRange * (r >= 4 ? 0.5 : 1);
+        const pv = g.prev, ph = pv >= 0 ? u[o + 17] * 0.8 : 0, pcx = u[o + 18], pcz = u[o + 19], qin = g.q[0] * GR, qout = g.q[3] * GR;
         GRASS.dyn[0] = r * 256; pass.setBindGroup(3, GRASS.bg, GRASS.dyn, 0, 1);
         for (let bz = 0; bz < B; bz++) {
           let run = -1;
@@ -74,8 +68,8 @@ function grassBuild() {
             if (bx < B) {
               const x = (ox + bx + 0.5) * bsz, z = (oz + bz + 0.5) * bsz, dx = x - camx, dz = z - camz, d = Math.sqrt(dx * dx + dz * dz);
               // bloco além do alcance (em distância efetiva), ou todo dentro da cobertura do anel anterior: não desenha
-              let ok = (d - rad) * zfac < qout * GR;
-              if (ok && pv >= 0 && (d + rad) * zfac < qin * GR) { const ex = x - pcx, ez = z - pcz, ax = ex < 0 ? -ex : ex, az = ez < 0 ? -ez : ez; if ((ax > az ? ax : az) + bsz * 0.5 < ph) ok = false; }
+              let ok = (d - rad) * zfac < qout;
+              if (ok && pv >= 0 && (d + rad) * zfac < qin) { const ex = x - pcx, ez = z - pcz, ax = ex < 0 ? -ex : ex, az = ez < 0 ? -ez : ez; if ((ax > az ? ax : az) + bsz * 0.5 < ph) ok = false; }
               // blocos fora da área dos mapas do mundo não têm grama (e hfAtQ cairia no cálculo lento do terreno)
               if (ok && x > HF.x0 + 2 && z > HF.z0 + 2 && x < HF.x0 + HF.w - 3 && z < HF.z0 + HF.h - 3) vis = (SQ[0] = x, SQ[1] = (_gq[0] = x, _gq[1] = z, hfAtQ(_gq), _gq[6]) + 0.3, SQ[2] = z, SQ[3] = rad, sphereQ(ctx.planes, ctx.nPlanes));
             }

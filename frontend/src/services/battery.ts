@@ -45,6 +45,8 @@ export const subscribeToBatteryChanges = (
   callback: (status: BatteryStatus) => void
 ): (() => void) => {
   let isCleanedUp = false;
+  let batteryRef: any = null;
+  let listenerRef: (() => void) | null = null;
 
   // 1. Try Web Battery API event listeners
   try {
@@ -53,12 +55,15 @@ export const subscribeToBatteryChanges = (
         if (isCleanedUp || !battery) return;
 
         const handleUpdate = () => {
+          if (isCleanedUp) return;
           callback({
             level: Math.min(100, Math.max(0, Math.round(battery.level * 100))),
             isCharging: Boolean(battery.charging),
           });
         };
 
+        batteryRef = battery;
+        listenerRef = handleUpdate;
         battery.addEventListener('levelchange', handleUpdate);
         battery.addEventListener('chargingchange', handleUpdate);
 
@@ -70,5 +75,15 @@ export const subscribeToBatteryChanges = (
 
   return () => {
     isCleanedUp = true;
+    if (batteryRef && listenerRef) {
+      try {
+        batteryRef.removeEventListener('levelchange', listenerRef);
+        batteryRef.removeEventListener('chargingchange', listenerRef);
+      } catch {
+        /* yok say */
+      }
+      batteryRef = null;
+      listenerRef = null;
+    }
   };
 };

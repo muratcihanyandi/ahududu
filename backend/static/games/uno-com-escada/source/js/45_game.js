@@ -108,16 +108,18 @@ function gameWarmup() {
 // De quebra mede o custo de GPU de cada vista (tempo de parede para a GPU concluir 4 quadros seguidos) e devolve o pior caso
 // em ms por quadro: main() usa esse número para escolher a cadência (120 ou 60 quadros por segundo).
 async function gamePrewarm() {
-  RT[2] = 1 / 60; GS.frozen = true; let worst = 0;
-  for (let i = 0; i < 36; i++) {
-    vehicleReset(i * TRK.L / 36, (i % 3) - 1, 0); VEH.slip.fill(1); VEH.vx = 25; for (let k = 0; k < 6; k++) fxStep(); VEH.slip.fill(0); VEH.vx = 0;   // com velocidade: emite fumaça (estreia o pipeline de partículas)
-    GS.cam = i % 3; GS.chaseInit = false; GS.tvCur = -1; GS.cut = true; gameTick(true); renderFrame(); gameTick(true); renderFrame();
-    if (i >= 6) {   // as primeiras vistas ainda pagam compilação de pipelines: não entram na medida
+  RT[2] = 1 / 60; GS.frozen = true; let worst = G.mobile ? 16.7 : 0;
+  const n = G.mobile ? 6 : 36;
+  for (let i = 0; i < n; i++) {
+    vehicleReset(i * TRK.L / n, (i % 3) - 1, 0); VEH.slip.fill(1); VEH.vx = 25; for (let k = 0; k < 6; k++) fxStep(); VEH.slip.fill(0); VEH.vx = 0;   // com velocidade: emite fumaça (estreia o pipeline de partículas)
+    GS.cam = i % 3; GS.chaseInit = false; GS.tvCur = -1; GS.cut = true; gameTick(true); renderFrame(); if (!G.mobile) { gameTick(true); renderFrame(); }
+    if (!G.mobile && i >= 6) {   // as primeiras vistas ainda pagam compilação de pipelines: não entram na medida
       await G.dev.queue.onSubmittedWorkDone(); const t0 = performance.now();
       for (let k = 0; k < 4; k++) { gameTick(true); renderFrame(); }
       await G.dev.queue.onSubmittedWorkDone(); const ms = (performance.now() - t0) / 4; if (ms > worst) worst = ms;
     }
   }
+  if (G.mobile) await G.dev.queue.onSubmittedWorkDone();
   GS.frozen = false; gameRestart(); return worst;
 }
 function gameRestart() {
@@ -130,9 +132,7 @@ function gameRestart() {
 // um passo de física; a cada 2 passos (1/60 s) lê as teclas (gravadas, piloto automático ou teclado)
 function gameStep() {
   if ((GS.sub & 1) === 0) {
-    // dokunmatik kumanda: basılı düğmeleri her adımda yeniden uygula
-    // (gameRestart GS.held'i sıfırlar; düğme basılı kalmalı)
-    if (typeof mobApplyKeys === 'function') mobApplyKeys();
+    if (typeof mpApplyTouchKeys === 'function') mpApplyTouchKeys();
     const t = GS.tick60 / 60; let k;
     if (GS.replayOn && GS.tick60 < GS.replay.length) k = GS.replay[GS.tick60];
     else if (GS.ai) k = t < 0.5 ? 0 : aiKeys(t);
@@ -178,7 +178,7 @@ function gameTick(fixed) {
   }
   RT[1] = dt; RT[0] += dt;
   gamePose();
-  if (typeof mpSendCar === 'function') { try { mpSendCar(); mpBeginFrame(); } catch (e) { /* yok say */ } }   // ağ: konumumu yolla + partneri yerleştir
+  if (typeof mpFrame === 'function') mpFrame();
   if (!GS.freeCam) gameCamera();
   if (GS.cut) { R.cam.first = true; R.debug = 1; GS.cut = false; } else R.debug = 0;
   if (GS.fxOn && typeof fxFrame === 'function') fxFrame();

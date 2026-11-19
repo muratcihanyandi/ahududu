@@ -11,7 +11,7 @@ export const getServerBaseUrl = (): string => {
   // If running inside Capacitor Native Android App (where origin is https://localhost)
   if (window.location.hostname === 'localhost' && window.location.port !== '33470' && window.location.port !== '5173') {
     const saved = localStorage.getItem('ahududu_server_url');
-    return saved || 'https://ahududu.fakeyol.com';
+    return (saved || 'https://ahududu.fakeyol.com').replace(/\/+$/, '');
   }
   
   // Normal browser or PWA loaded from Pi or Cloudflare
@@ -19,6 +19,28 @@ export const getServerBaseUrl = (): string => {
 };
 
 const BASE_URL = getServerBaseUrl();
+
+async function requestJson<T>(
+  url: string,
+  init?: RequestInit,
+  fallbackError = 'Sunucu hatası'
+): Promise<T> {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  let parsed: any = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!res.ok) {
+    const detail = parsed && typeof parsed === 'object' && parsed.detail ? String(parsed.detail) : '';
+    throw new Error(detail || `${fallbackError} (${res.status})`);
+  }
+  return parsed as T;
+}
 
 /**
  * Sunucunun döndürdüğü göreli medya yollarını (/api/media/file/...) tarayıcının
@@ -95,28 +117,24 @@ export const cinemaHlsUrl = (
 export const api = {
   // Profiles
   async getProfiles(): Promise<UserProfile[]> {
-    const res = await fetch(`${BASE_URL}/api/auth/profiles`);
-    return res.json();
+    return requestJson<UserProfile[]>(`${BASE_URL}/api/auth/profiles`, undefined, 'Profiller yüklenemedi');
   },
 
   async getProfile(userId: UserId): Promise<UserProfile> {
-    const res = await fetch(`${BASE_URL}/api/auth/profile/${userId}`);
-    return res.json();
+    return requestJson<UserProfile>(`${BASE_URL}/api/auth/profile/${encodeURIComponent(userId)}`, undefined, 'Profil yüklenemedi');
   },
 
   async updateProfile(userId: UserId, data: Partial<UserProfile>): Promise<UserProfile> {
-    const res = await fetch(`${BASE_URL}/api/auth/profile/${userId}`, {
+    return requestJson<UserProfile>(`${BASE_URL}/api/auth/profile/${encodeURIComponent(userId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Profil güncellenemedi');
   },
 
   // Letters
   async listLetters(): Promise<LoveLetter[]> {
-    const res = await fetch(`${BASE_URL}/api/letters`);
-    return res.json();
+    return requestJson<LoveLetter[]>(`${BASE_URL}/api/letters`, undefined, 'Mektuplar yüklenemedi');
   },
 
   async createLetter(data: {
@@ -127,65 +145,36 @@ export const api = {
     canvas_image_url?: string;
     stationery_theme?: string;
   }): Promise<LoveLetter> {
-    const res = await fetch(`${BASE_URL}/api/letters`, {
+    return requestJson<LoveLetter>(`${BASE_URL}/api/letters`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Mektup gönderilemedi');
   },
 
-  async openLetter(letterId: number): Promise<LoveLetter> {
-    const res = await fetch(`${BASE_URL}/api/letters/${letterId}/open`, {
+  async openLetter(letterId: number, viewer?: UserId): Promise<LoveLetter> {
+    const query = viewer ? `?viewer=${encodeURIComponent(viewer)}` : '';
+    return requestJson<LoveLetter>(`${BASE_URL}/api/letters/${letterId}/open${query}`, {
       method: 'POST',
-    });
-    return res.json();
+    }, 'Mektup açılamadı');
   },
 
   async deleteLetter(letterId: number): Promise<{ success: boolean; archived?: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/letters/${letterId}`, {
+    return requestJson(`${BASE_URL}/api/letters/${letterId}`, {
       method: 'DELETE',
-    });
-    return res.json();
+    }, 'Mektup arşive alınamadı');
   },
 
   /** Arşive kaldırılmış mektubu geri getir (kayıt hiç silinmez). */
   async restoreLetter(letterId: number): Promise<LoveLetter> {
-    const res = await fetch(`${BASE_URL}/api/letters/${letterId}/restore`, {
+    return requestJson<LoveLetter>(`${BASE_URL}/api/letters/${letterId}/restore`, {
       method: 'POST',
-    });
-    return res.json();
-  },
-
-  // ----------------------------------------------------------------------
-  // Cihaz kaydı (uygulama kapalıyken mesaj bildirimi için)
-  // ----------------------------------------------------------------------
-  async registerDevice(data: {
-    user_id: UserId;
-    token: string;
-    platform?: string;
-  }): Promise<{ success: boolean; push_ready?: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/devices/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    return res.json();
-  },
-
-  async getPushStatus(): Promise<{
-    configured: boolean;
-    mode: string | null;
-    devices: Record<string, number>;
-  }> {
-    const res = await fetch(`${BASE_URL}/api/devices/status`);
-    return res.json();
+    }, 'Mektup geri getirilemedi');
   },
 
   /** Arşivdeki bütün mektupları kutuya geri getir. */
   async restoreAllLetters(): Promise<{ success: boolean; restored: number }> {
-    const res = await fetch(`${BASE_URL}/api/letters/restore-all`, { method: 'POST' });
-    return res.json();
+    return requestJson(`${BASE_URL}/api/letters/restore-all`, { method: 'POST' }, 'Mektuplar geri getirilemedi');
   },
 
   // Chat
@@ -196,14 +185,12 @@ export const api = {
   async getChatMessages(limit = 50, beforeId?: number): Promise<ChatMessage[]> {
     const params = new URLSearchParams({ limit: String(limit) });
     if (beforeId != null) params.set('before_id', String(beforeId));
-    const res = await fetch(`${BASE_URL}/api/chat/messages?${params.toString()}`);
-    return res.json();
+    return requestJson<ChatMessage[]>(`${BASE_URL}/api/chat/messages?${params.toString()}`, undefined, 'Mesajlar yüklenemedi');
   },
 
   /** Toplam mesaj sayısı (geçmişin başı bilgisi için). */
   async getChatMessageCount(): Promise<number> {
-    const res = await fetch(`${BASE_URL}/api/chat/count`);
-    const data = await res.json();
+    const data = await requestJson<{ total?: number }>(`${BASE_URL}/api/chat/count`, undefined, 'Mesaj sayısı alınamadı');
     return Number(data?.total ?? 0);
   },
 
@@ -216,13 +203,11 @@ export const api = {
     voter: UserId,
     optionIndex: number
   ): Promise<{ success: boolean; votes: number[]; voters: Record<string, number> }> {
-    const res = await fetch(`${BASE_URL}/api/chat/messages/${messageId}/vote`, {
+    return requestJson(`${BASE_URL}/api/chat/messages/${messageId}/vote`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voter, option_index: optionIndex }),
-    });
-    if (!res.ok) throw new Error(`Oy kaydedilemedi (${res.status})`);
-    return res.json();
+    }, 'Oy kaydedilemedi');
   },
 
   async sendChatMessage(data: {
@@ -236,20 +221,17 @@ export const api = {
     longitude?: number;
     place_name?: string;
   }): Promise<ChatMessage> {
-    const res = await fetch(`${BASE_URL}/api/chat/messages`, {
+    return requestJson<ChatMessage>(`${BASE_URL}/api/chat/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    if (!res.ok) throw new Error(`Mesaj gönderilemedi (${res.status})`);
-    return res.json();
+    }, 'Mesaj gönderilemedi');
   },
 
   // Gallery
   async listGallery(album?: string): Promise<GalleryItem[]> {
     const url = album ? `${BASE_URL}/api/gallery?album=${encodeURIComponent(album)}` : `${BASE_URL}/api/gallery`;
-    const res = await fetch(url);
-    const data = await res.json();
+    const data = await requestJson<GalleryItem[]>(url, undefined, 'Galeri yüklenemedi');
     return Array.isArray(data) ? data : [];
   },
 
@@ -261,19 +243,18 @@ export const api = {
     media_url: string;
     album?: string;
   }): Promise<GalleryItem> {
-    const res = await fetch(`${BASE_URL}/api/gallery`, {
+    return requestJson<GalleryItem>(`${BASE_URL}/api/gallery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Galeriye eklenemedi');
   },
 
   // Notes & Wishlist
   async listNotes(category?: string): Promise<SharedNote[]> {
-    const url = category ? `${BASE_URL}/api/notes?category=${category}` : `${BASE_URL}/api/notes`;
-    const res = await fetch(url);
-    return res.json();
+    const url = category ? `${BASE_URL}/api/notes?category=${encodeURIComponent(category)}` : `${BASE_URL}/api/notes`;
+    const data = await requestJson<SharedNote[]>(url, undefined, 'Notlar yüklenemedi');
+    return Array.isArray(data) ? data : [];
   },
 
   async createNote(data: {
@@ -283,28 +264,25 @@ export const api = {
     category: string;
     pinned?: boolean;
   }): Promise<SharedNote> {
-    const res = await fetch(`${BASE_URL}/api/notes`, {
+    return requestJson<SharedNote>(`${BASE_URL}/api/notes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Not kaydedilemedi');
   },
 
   async updateNote(id: number, data: Partial<SharedNote>): Promise<SharedNote> {
-    const res = await fetch(`${BASE_URL}/api/notes/${id}`, {
+    return requestJson<SharedNote>(`${BASE_URL}/api/notes/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Not güncellenemedi');
   },
 
   async deleteNote(id: number): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/notes/${id}`, {
+    return requestJson(`${BASE_URL}/api/notes/${id}`, {
       method: 'DELETE',
-    });
-    return res.json();
+    }, 'Not silinemedi');
   },
 
   // Location & Radar
@@ -317,17 +295,15 @@ export const api = {
     battery?: number;
     speed?: number;
   }): Promise<{ success: boolean; distance_km?: number }> {
-    const res = await fetch(`${BASE_URL}/api/location/update`, {
+    return requestJson(`${BASE_URL}/api/location/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Konum güncellenemedi');
   },
 
   async getCoupleStatus(): Promise<CoupleStatus> {
-    const res = await fetch(`${BASE_URL}/api/location/couple-status`);
-    return res.json();
+    return requestJson<CoupleStatus>(`${BASE_URL}/api/location/couple-status`, undefined, 'Durum alınamadı');
   },
 
   // Nudge & Remote Vibration
@@ -336,12 +312,11 @@ export const api = {
     nudge_type?: string;
     message?: string;
   }): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/interactions/nudge`, {
+    return requestJson(`${BASE_URL}/api/interactions/nudge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Dürtme gönderilemedi');
   },
 
   async triggerRemoteHaptic(data: {
@@ -349,12 +324,11 @@ export const api = {
     pattern: string;
     target_device?: string;
   }): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/interactions/haptic`, {
+    return requestJson(`${BASE_URL}/api/interactions/haptic`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Titreşim gönderilemedi');
   },
 
   // Media Upload
@@ -365,20 +339,18 @@ export const api = {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('media_category', category);
-    const res = await fetch(`${BASE_URL}/api/media/upload`, {
-      method: 'POST',
-      body: formData,
-    });
-    if (!res.ok) throw new Error(`Yükleme başarısız (${res.status})`);
-    const data = await res.json();
+    const data = await requestJson<{ url: string; filename: string; [key: string]: unknown }>(
+      `${BASE_URL}/api/media/upload`,
+      { method: 'POST', body: formData },
+      'Yükleme başarısız'
+    );
     if (!data || !data.url) throw new Error('Yükleme yanıtı geçersiz');
     return data;
   },
 
   // System Version
   async getSystemVersion(): Promise<{ app_name: string; version: string; build_id?: string }> {
-    const res = await fetch(`${BASE_URL}/api/system/version?t=${Date.now()}`);
-    return res.json();
+    return requestJson(`${BASE_URL}/api/system/version?t=${Date.now()}`, undefined, 'Sürüm bilgisi alınamadı');
   },
 
   /** Sohbette gönderilen belge/bağlantı için: sunucunun tam adresi. */
@@ -393,13 +365,11 @@ export const api = {
     const url = sender
       ? `${BASE_URL}/api/snaps?sender=${encodeURIComponent(sender)}`
       : `${BASE_URL}/api/snaps`;
-    const res = await fetch(url);
-    return res.json();
+    return requestJson<SnapStory[]>(url, undefined, 'Anlar yüklenemedi');
   },
 
   async getSnapFeed(userId: UserId): Promise<SnapFeed> {
-    const res = await fetch(`${BASE_URL}/api/snaps/feed?user_id=${encodeURIComponent(userId)}`);
-    return res.json();
+    return requestJson<SnapFeed>(`${BASE_URL}/api/snaps/feed?user_id=${encodeURIComponent(userId)}`, undefined, 'An akışı yüklenemedi');
   },
 
   async createSnap(data: {
@@ -411,33 +381,30 @@ export const api = {
     duration?: number;
     filter_name?: string;
   }): Promise<SnapStory> {
-    const res = await fetch(`${BASE_URL}/api/snaps`, {
+    return requestJson<SnapStory>(`${BASE_URL}/api/snaps`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'An paylaşılamadı');
   },
 
-  async markSnapSeen(snapId: number): Promise<SnapStory> {
-    const res = await fetch(`${BASE_URL}/api/snaps/${snapId}/seen`, { method: 'POST' });
-    return res.json();
+  async markSnapSeen(snapId: number, viewer?: UserId): Promise<SnapStory> {
+    const query = viewer ? `?viewer=${encodeURIComponent(viewer)}` : '';
+    return requestJson<SnapStory>(`${BASE_URL}/api/snaps/${snapId}/seen${query}`, { method: 'POST' }, 'An güncellenemedi');
   },
 
   async reactToSnap(snapId: number, sender: UserId, reaction: string): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/snaps/${snapId}/react`, {
+    return requestJson(`${BASE_URL}/api/snaps/${snapId}/react`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sender, reaction }),
-    });
-    return res.json();
+    }, 'Tepki gönderilemedi');
   },
 
   async deleteSnap(snapId: number, userId: UserId): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/snaps/${snapId}?user_id=${encodeURIComponent(userId)}`, {
+    return requestJson(`${BASE_URL}/api/snaps/${snapId}?user_id=${encodeURIComponent(userId)}`, {
       method: 'DELETE',
-    });
-    return res.json();
+    }, 'An silinemedi');
   },
 
   // ----------------------------------------------------------------------
@@ -446,13 +413,11 @@ export const api = {
   async listDiary(viewer: UserId, month?: string): Promise<DiaryEntry[]> {
     const params = new URLSearchParams({ viewer });
     if (month) params.set('month', month);
-    const res = await fetch(`${BASE_URL}/api/diary?${params.toString()}`);
-    return res.json();
+    return requestJson<DiaryEntry[]>(`${BASE_URL}/api/diary?${params.toString()}`, undefined, 'Günlük yüklenemedi');
   },
 
   async getDiaryStats(): Promise<DiaryStats> {
-    const res = await fetch(`${BASE_URL}/api/diary/stats`);
-    return res.json();
+    return requestJson<DiaryStats>(`${BASE_URL}/api/diary/stats`, undefined, 'İstatistikler alınamadı');
   },
 
   async createDiaryEntry(data: {
@@ -466,26 +431,25 @@ export const api = {
     photo_url?: string;
     is_locked?: boolean;
   }): Promise<DiaryEntry> {
-    const res = await fetch(`${BASE_URL}/api/diary`, {
+    return requestJson<DiaryEntry>(`${BASE_URL}/api/diary`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Günlük kaydedilemedi');
   },
 
-  async updateDiaryEntry(id: number, data: Partial<DiaryEntry>): Promise<DiaryEntry> {
-    const res = await fetch(`${BASE_URL}/api/diary/${id}`, {
+  async updateDiaryEntry(id: number, data: Partial<DiaryEntry>, viewer?: UserId): Promise<DiaryEntry> {
+    const query = viewer ? `?viewer=${encodeURIComponent(viewer)}` : '';
+    return requestJson<DiaryEntry>(`${BASE_URL}/api/diary/${id}${query}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Günlük güncellenemedi');
   },
 
-  async deleteDiaryEntry(id: number): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/diary/${id}`, { method: 'DELETE' });
-    return res.json();
+  async deleteDiaryEntry(id: number, viewer?: UserId): Promise<{ success: boolean }> {
+    const query = viewer ? `?viewer=${encodeURIComponent(viewer)}` : '';
+    return requestJson(`${BASE_URL}/api/diary/${id}${query}`, { method: 'DELETE' }, 'Günlük silinemedi');
   },
 
   // ----------------------------------------------------------------------
@@ -495,8 +459,7 @@ export const api = {
     const url = category && category !== 'Tümü'
       ? `${BASE_URL}/api/pets?category=${encodeURIComponent(category)}`
       : `${BASE_URL}/api/pets`;
-    const res = await fetch(url);
-    return res.json();
+    return requestJson<PetWithPhotos[]>(url, undefined, 'Hayvan albümü yüklenemedi');
   },
 
   async createPet(data: {
@@ -512,26 +475,23 @@ export const api = {
     love_notes?: string;
     is_favorite?: boolean;
   }): Promise<Pet> {
-    const res = await fetch(`${BASE_URL}/api/pets`, {
+    return requestJson<Pet>(`${BASE_URL}/api/pets`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Dost eklenemedi');
   },
 
   async updatePet(id: number, data: Partial<Pet>): Promise<Pet> {
-    const res = await fetch(`${BASE_URL}/api/pets/${id}`, {
+    return requestJson<Pet>(`${BASE_URL}/api/pets/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Dost güncellenemedi');
   },
 
   async deletePet(id: number): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/pets/${id}`, { method: 'DELETE' });
-    return res.json();
+    return requestJson(`${BASE_URL}/api/pets/${id}`, { method: 'DELETE' }, 'Dost silinemedi');
   },
 
   async addPetPhoto(petId: number, data: {
@@ -540,17 +500,15 @@ export const api = {
     media_type?: 'image' | 'video';
     caption?: string;
   }): Promise<PetPhoto> {
-    const res = await fetch(`${BASE_URL}/api/pets/${petId}/photos`, {
+    return requestJson<PetPhoto>(`${BASE_URL}/api/pets/${petId}/photos`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Fotoğraf eklenemedi');
   },
 
   async deletePetPhoto(petId: number, photoId: number): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/pets/${petId}/photos/${photoId}`, { method: 'DELETE' });
-    return res.json();
+    return requestJson(`${BASE_URL}/api/pets/${petId}/photos/${photoId}`, { method: 'DELETE' }, 'Fotoğraf silinemedi');
   },
 
   // ----------------------------------------------------------------------
@@ -565,17 +523,15 @@ export const api = {
     stream_referer?: string | null;
     page_url?: string | null; page_title?: string | null;
   }> {
-    const res = await fetch(`${BASE_URL}/api/cinema/resolve`, {
+    return requestJson(`${BASE_URL}/api/cinema/resolve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ video_url: videoUrl }),
-    });
-    return res.json();
+    }, 'Video bağlantısı çözümlenemedi');
   },
 
   async listCinemaRooms(): Promise<CinemaRoom[]> {
-    const res = await fetch(`${BASE_URL}/api/cinema`);
-    return res.json();
+    return requestJson<CinemaRoom[]>(`${BASE_URL}/api/cinema`, undefined, 'Salonlar yüklenemedi');
   },
 
   async getCurrentCinemaRoom(): Promise<CinemaRoom | null> {
@@ -600,26 +556,23 @@ export const api = {
     stream_referer?: string | null;
     source?: string;
   }): Promise<CinemaRoom> {
-    const res = await fetch(`${BASE_URL}/api/cinema`, {
+    return requestJson<CinemaRoom>(`${BASE_URL}/api/cinema`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Sinema salonu oluşturulamadı');
   },
 
   async getCinemaEmbed(roomId: number): Promise<{ html: string | null; kind: string; src: string }> {
-    const res = await fetch(`${BASE_URL}/api/cinema/${roomId}/embed`);
-    return res.json();
+    return requestJson(`${BASE_URL}/api/cinema/${roomId}/embed`, undefined, 'Oynatıcı alınamadı');
   },
 
   async startCinemaRoom(roomId: number, userId: UserId): Promise<CinemaRoom> {
-    const res = await fetch(`${BASE_URL}/api/cinema/${roomId}/start`, {
+    return requestJson<CinemaRoom>(`${BASE_URL}/api/cinema/${roomId}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userId }),
-    });
-    return res.json();
+    }, 'Salon başlatılamadı');
   },
 
   /**
@@ -632,52 +585,50 @@ export const api = {
   async markCinemaReady(
     roomId: number,
     userId: UserId,
-    position = 0
+    position = 0,
+    force = false
   ): Promise<{ started: boolean; position?: number; waiting_for_partner?: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/cinema/${roomId}/ready`, {
+    return requestJson(`${BASE_URL}/api/cinema/${roomId}/ready`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, position }),
-    });
-    return res.json();
+      body: JSON.stringify({ user_id: userId, position, force }),
+    }, 'Hazır bildirimi başarısız');
   },
 
   async controlCinemaRoom(roomId: number, data: {
     user_id: UserId;
-    action: 'play' | 'pause' | 'seek' | 'adopt' | 'join' | 'leave' | 'stop';
+    action: 'play' | 'pause' | 'seek' | 'adopt' | 'join' | 'duration' | 'leave' | 'stop';
     position?: number;
     duration?: number;
   }): Promise<CinemaRoom> {
-    const res = await fetch(`${BASE_URL}/api/cinema/${roomId}/control`, {
+    return requestJson<CinemaRoom>(`${BASE_URL}/api/cinema/${roomId}/control`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Salon kontrolü başarısız');
   },
 
   async reactInCinema(roomId: number, sender: UserId, emoji: string): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/cinema/${roomId}/react`, {
+    return requestJson(`${BASE_URL}/api/cinema/${roomId}/react`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sender, emoji }),
-    });
-    return res.json();
+    }, 'Tepki gönderilemedi');
   },
 
   async deleteCinemaRoom(roomId: number): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/cinema/${roomId}`, { method: 'DELETE' });
-    return res.json();
+    return requestJson(`${BASE_URL}/api/cinema/${roomId}`, { method: 'DELETE' }, 'Salon silinemedi');
   },
 
   // ----------------------------------------------------------------------
   // Sinema Takvimi
   // ----------------------------------------------------------------------
   async listShowtimes(month: string, viewer: UserId): Promise<Showtime[]> {
-    const res = await fetch(
-      `${BASE_URL}/api/cinema/calendar?month=${encodeURIComponent(month)}&viewer=${encodeURIComponent(viewer)}`
+    const data = await requestJson<Showtime[]>(
+      `${BASE_URL}/api/cinema/calendar?month=${encodeURIComponent(month)}&viewer=${encodeURIComponent(viewer)}`,
+      undefined,
+      'Takvim yüklenemedi'
     );
-    const data = await res.json();
     return Array.isArray(data) ? data : [];
   },
 
@@ -706,64 +657,49 @@ export const api = {
     hall?: string;
     created_by: UserId;
   }): Promise<Showtime> {
-    const res = await fetch(`${BASE_URL}/api/cinema/calendar`, {
+    return requestJson<Showtime>(`${BASE_URL}/api/cinema/calendar`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...data, video_url: cinemaVideoUrl(data.video_url) }),
-    });
-    return res.json();
+    }, 'Seans eklenemedi');
   },
 
   async updateShowtime(id: number, data: Partial<Showtime> & { updated_by?: string }): Promise<Showtime> {
     const payload = { ...data, updated_by: data.updated_by || 'manuel' };
     if (payload.video_url) payload.video_url = cinemaVideoUrl(payload.video_url);
-    const res = await fetch(`${BASE_URL}/api/cinema/calendar/${id}`, {
+    return requestJson<Showtime>(`${BASE_URL}/api/cinema/calendar/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    });
-    return res.json();
+    }, 'Seans güncellenemedi');
   },
 
   async deleteShowtime(id: number): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/cinema/calendar/${id}`, { method: 'DELETE' });
-    return res.json();
+    return requestJson(`${BASE_URL}/api/cinema/calendar/${id}`, { method: 'DELETE' }, 'Seans silinemedi');
   },
 
   async bookTicket(showtimeId: number, userId: UserId): Promise<Showtime> {
-    const res = await fetch(`${BASE_URL}/api/cinema/calendar/${showtimeId}/ticket`, {
+    return requestJson<Showtime>(`${BASE_URL}/api/cinema/calendar/${showtimeId}/ticket`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userId }),
-    });
-    if (!res.ok) throw new Error((await res.json()).detail || 'Bilet alınamadı');
-    return res.json();
+    }, 'Bilet alınamadı');
   },
 
   async cancelTicket(showtimeId: number, userId: UserId): Promise<Showtime> {
-    const res = await fetch(
+    return requestJson<Showtime>(
       `${BASE_URL}/api/cinema/calendar/${showtimeId}/ticket?user_id=${encodeURIComponent(userId)}`,
-      { method: 'DELETE' }
+      { method: 'DELETE' },
+      'Bilet iptal edilemedi'
     );
-    return res.json();
   },
 
   async openShowtime(showtimeId: number, userId: UserId): Promise<Showtime> {
-    const res = await fetch(`${BASE_URL}/api/cinema/calendar/${showtimeId}/open`, {
+    return requestJson<Showtime>(`${BASE_URL}/api/cinema/calendar/${showtimeId}/open`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userId }),
-    });
-    if (!res.ok) {
-      let detail = 'Salon açılamadı';
-      try {
-        detail = (await res.json()).detail || detail;
-      } catch {
-        /* yut */
-      }
-      throw new Error(detail);
-    }
-    return res.json();
+    }, 'Salon açılamadı');
   },
 
   // OpenClaw / otomasyon: bütün ayı tek istekte ayarla
@@ -782,12 +718,11 @@ export const api = {
       hall?: string;
     }[];
   }): Promise<{ success: boolean; month: string; created: number; removed: number }> {
-    const res = await fetch(`${BASE_URL}/api/cinema/calendar/import`, {
+    return requestJson(`${BASE_URL}/api/cinema/calendar/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Takvim içe aktarılamadı');
   },
 
   async autoScheduleCalendar(data: {
@@ -797,12 +732,11 @@ export const api = {
     replace_existing?: boolean;
     films: { title: string; video_url: string }[];
   }): Promise<{ success: boolean; month: string; created: number }> {
-    const res = await fetch(`${BASE_URL}/api/cinema/calendar/auto-schedule`, {
+    return requestJson(`${BASE_URL}/api/cinema/calendar/auto-schedule`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Otomatik plan oluşturulamadı');
   },
 
   // ----------------------------------------------------------------------
@@ -812,85 +746,75 @@ export const api = {
     date: string; prompt: string; my_answer?: string; partner_answer?: string;
     answered_mine: boolean; answered_partner: boolean; both_answered: boolean; demo: boolean;
   }> {
-    const res = await fetch(`${BASE_URL}/api/garden/question?viewer=${encodeURIComponent(userId)}`);
-    return res.json();
+    return requestJson(`${BASE_URL}/api/garden/question?viewer=${encodeURIComponent(userId)}`, undefined, 'Günlük soru alınamadı');
   },
 
   async answerDailyQuestion(userId: UserId, answer: string): Promise<{ success: boolean; revealed: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/garden/question/answer`, {
+    return requestJson(`${BASE_URL}/api/garden/question/answer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userId, answer }),
-    });
-    return res.json();
+    }, 'Cevap gönderilemedi');
   },
 
   async listCapsules(userId: UserId): Promise<any[]> {
-    const res = await fetch(`${BASE_URL}/api/garden/capsules?viewer=${encodeURIComponent(userId)}`);
-    const data = await res.json();
+    const data = await requestJson<any[]>(`${BASE_URL}/api/garden/capsules?viewer=${encodeURIComponent(userId)}`, undefined, 'Kapsüller yüklenemedi');
     return Array.isArray(data) ? data : [];
   },
 
   async createCapsule(data: {
     sender: UserId; title: string; content: string; open_date: string;
   }): Promise<{ success: boolean; id: number }> {
-    const res = await fetch(`${BASE_URL}/api/garden/capsules`, {
+    return requestJson(`${BASE_URL}/api/garden/capsules`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Kapsül oluşturulamadı');
   },
 
   async deleteCapsule(capsuleId: number, userId: UserId): Promise<{ success: boolean }> {
-    const res = await fetch(
+    return requestJson(
       `${BASE_URL}/api/garden/capsules/${capsuleId}?user_id=${encodeURIComponent(userId)}`,
-      { method: 'DELETE' }
+      { method: 'DELETE' },
+      'Kapsül silinemedi'
     );
-    return res.json();
   },
 
   async listSongs(): Promise<any[]> {
-    const res = await fetch(`${BASE_URL}/api/garden/songs`);
-    const data = await res.json();
+    const data = await requestJson<any[]>(`${BASE_URL}/api/garden/songs`, undefined, 'Şarkılar yüklenemedi');
     return Array.isArray(data) ? data : [];
   },
 
   async addSong(data: {
     added_by: UserId; title: string; artist?: string; url: string; note?: string;
   }): Promise<{ success: boolean; id: number }> {
-    const res = await fetch(`${BASE_URL}/api/garden/songs`, {
+    return requestJson(`${BASE_URL}/api/garden/songs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-    });
-    return res.json();
+    }, 'Şarkı eklenemedi');
   },
 
   async getOnThisDay(): Promise<{ date: string; count: number; items: any[]; demo: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/garden/on-this-day`);
-    return res.json();
+    return requestJson(`${BASE_URL}/api/garden/on-this-day`, undefined, 'Geçmiş anılar yüklenemedi');
   },
 
   async getMood(userId: UserId): Promise<{
     today: string | null; history: any[]; moods: Record<string, any>; demo: boolean;
     partner_today?: string | null;
   }> {
-    const res = await fetch(`${BASE_URL}/api/garden/mood?user_id=${encodeURIComponent(userId)}`);
-    return res.json();
+    return requestJson(`${BASE_URL}/api/garden/mood?user_id=${encodeURIComponent(userId)}`, undefined, 'Duygu havası alınamadı');
   },
 
   async setMood(userId: UserId, mood: string): Promise<{ success: boolean }> {
-    const res = await fetch(`${BASE_URL}/api/garden/mood`, {
+    return requestJson(`${BASE_URL}/api/garden/mood`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userId, mood }),
-    });
-    return res.json();
+    }, 'Duygu havası güncellenemedi');
   },
 
   async getGardenSummary(userId: UserId): Promise<any> {
-    const res = await fetch(`${BASE_URL}/api/garden/summary?viewer=${encodeURIComponent(userId)}`);
-    return res.json();
+    return requestJson(`${BASE_URL}/api/garden/summary?viewer=${encodeURIComponent(userId)}`, undefined, 'Bahçe özeti alınamadı');
   },
 };

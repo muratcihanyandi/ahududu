@@ -15,19 +15,13 @@ function mkFwdFamily(name, def) {
   }).then(p => { fam.pipe = p; }));
   return fam;
 }
-// bind group de iluminação (grupo 3) compartilhado pelas famílias diretas.
-// DİKKAT: bu bind group, o anki hedeflerin GÖRÜNÜMLERİNE (env, shadow, depth)
-// bağlıdır. Pencere yeniden boyutlandırılıp hedefler yeniden kurulduğunda bu
-// görünümler yok edilir; eski bind group'u kullanmak sürücüde
-// "Destroyed texture ... used in a submit" hatası verir ve ekran SİYAH kalır.
-// Bu yüzden her bind group R.gen (nesil) numarasıyla birlikte saklanır.
+// bind group de iluminação (grupo 3) compartilhado pelas famílias diretas
 function fwdBindGroup(fam) {
   const V = R.view;
   const bg = G.dev.createBindGroup({ layout: fam.bgls[3], entries: [{ binding: 0, resource: V.env }, { binding: 1, resource: V.shadow }, { binding: 2, resource: V.shadowS }, { binding: 3, resource: R.sCmp }, { binding: 4, resource: V.depth }] });
   bg.gen = R.gen || 0;
   return bg;
 }
-// Saklanan bind group hâlâ geçerli mi? (hedefler yeniden kurulduysa hayır)
 function fwdBindGroupStale(bg) { return !bg || bg.gen !== (R.gen || 0); }
 // Conjunto de vidros: cada malha é desenhada duas vezes (multiplica, depois soma).
 class GlassSet {
@@ -41,11 +35,9 @@ class GlassSet {
     if (!this.mul.pipe || !this.add.pipe) return;
     if (fwdBindGroupStale(this.bg)) this.bg = fwdBindGroup(this.mul);
     pass.setBindGroup(3, this.bg);
-    // Çok oyunculu: partnerin camları kendi gövde nesnesini burada bildirir.
-    const slotOverride = this.bind ? (this.bind() | 0) : -1;
     for (let k = 0; k < 2; k++) {
       pass.setPipeline(k ? this.add.pipe : this.mul.pipe);
-      for (let i = 0; i < this.items.length; i++) { const it = this.items[i]; R.dyn2[0] = (slotOverride >= 0 ? slotOverride : it.slot) * 256; pass.setBindGroup(2, R.objBG, R.dyn2, 0, 1); pass.setVertexBuffer(0, it.vb); pass.setIndexBuffer(it.ib, 'uint32'); pass.drawIndexed(it.count); }
+      for (let i = 0; i < this.items.length; i++) { const it = this.items[i]; R.dyn2[0] = it.slot * 256; pass.setBindGroup(2, R.objBG, R.dyn2, 0, 1); pass.setVertexBuffer(0, it.vb); pass.setIndexBuffer(it.ib, 'uint32'); pass.drawIndexed(it.count); }
     }
   }
 }

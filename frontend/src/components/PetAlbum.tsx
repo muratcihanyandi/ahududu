@@ -3,10 +3,11 @@ import {
   Plus, Heart, Camera, X, Trash2, Star, Pencil, PawPrint,
   Film, ChevronLeft, ChevronRight, Image as ImageIcon, Sparkles,
 } from 'lucide-react';
-import { Pet, PetWithPhotos, PetPhoto, UserId, USERS, partnerOf, nameOf } from '../types';
+import { Pet, PetWithPhotos, PetPhoto, UserId, partnerOf, nameOf, emojiOf } from '../types';
 import { api, mediaUrl } from '../services/api';
 import { wsClient } from '../services/websocket';
 import { playHaptic, soundEngine } from '../services/haptics';
+import { registerBackHandler } from '../services/backButton';
 
 interface PetAlbumProps {
   currentUserId: UserId;
@@ -39,14 +40,50 @@ export const PetAlbum: React.FC<PetAlbumProps> = ({ currentUserId }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingPet, setEditingPet] = useState<Pet | null>(null);
-  const [detailPet, setDetailPet] = useState<PetWithPhotos | null>(null);
+  const [detailPetId, setDetailPetId] = useState<number | null>(null);
   const [lightbox, setLightbox] = useState<{ photos: PetPhoto[]; index: number; petName: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const ownCreatedPetIdsRef = useRef<Set<number>>(new Set());
+
+  const detailPet = useMemo(
+    () => (detailPetId !== null ? pets.find((p) => p.pet.id === detailPetId) || null : null),
+    [pets, detailPetId]
+  );
 
   const showToast = useCallback((text: string) => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     setToast(text);
-    window.setTimeout(() => setToast(null), 2500);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(null);
+    }, 2500);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (lightbox) {
+        setLightbox(null);
+        return true;
+      }
+      if (composerOpen) {
+        setComposerOpen(false);
+        setEditingPet(null);
+        return true;
+      }
+      if (detailPetId !== null) {
+        setDetailPetId(null);
+        return true;
+      }
+      return false;
+    });
+  }, [lightbox, composerOpen, detailPetId]);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -66,6 +103,11 @@ export const PetAlbum: React.FC<PetAlbumProps> = ({ currentUserId }) => {
     const reload = () => load();
     const unsubNew = wsClient.on('new_pet', (data: any) => {
       if (data?.pet) {
+        if (ownCreatedPetIdsRef.current.has(data.pet.id)) {
+          ownCreatedPetIdsRef.current.delete(data.pet.id);
+          load();
+          return;
+        }
         soundEngine.playLoveChime();
         playHaptic(60);
         showToast(`${nameOf(partnerId)} yeni bir dost ekledi: ${data.pet.name}! 🐾`);
@@ -81,8 +123,10 @@ export const PetAlbum: React.FC<PetAlbumProps> = ({ currentUserId }) => {
             p.pet.id === data.pet_id
               ? {
                   ...p,
-                  photos: [data.photo, ...p.photos],
-                  photo_count: p.photo_count + 1,
+                  photos: [data.photo, ...p.photos.filter((x) => x.id !== data.photo.id)],
+                  photo_count: p.photos.some((x) => x.id === data.photo.id)
+                    ? p.photo_count
+                    : p.photo_count + 1,
                 }
               : p
           )
@@ -129,7 +173,7 @@ export const PetAlbum: React.FC<PetAlbumProps> = ({ currentUserId }) => {
     try {
       await api.deletePet(pet.id);
       setPets((prev) => prev.filter((p) => p.pet.id !== pet.id));
-      setDetailPet(null);
+      setDetailPetId(null);
       playHaptic(35);
     } catch (err) {
       console.error(err);
@@ -243,7 +287,7 @@ export const PetAlbum: React.FC<PetAlbumProps> = ({ currentUserId }) => {
               <button
                 key={pet.id}
                 onClick={() => {
-                  setDetailPet({ pet, photos, photo_count });
+                  setDetailPetId(pet.id);
                   playHaptic(20);
                 }}
                 className="group relative text-left rounded-3xl overflow-hidden bg-white border border-teal-100 shadow-xs hover:shadow-lg transition-all active:scale-[0.97]"
@@ -318,7 +362,8 @@ export const PetAlbum: React.FC<PetAlbumProps> = ({ currentUserId }) => {
             setComposerOpen(false);
             setEditingPet(null);
           }}
-          onSaved={() => {
+          onSaved={(createdId) => {
+            if (createdId) ownCreatedPetIdsRef.current.add(createdId);
             setComposerOpen(false);
             setEditingPet(null);
             load();
@@ -331,9 +376,9 @@ export const PetAlbum: React.FC<PetAlbumProps> = ({ currentUserId }) => {
         <PetDetail
           currentUserId={currentUserId}
           data={detailPet}
-          onClose={() => setDetailPet(null)}
+          onClose={() => setDetailPetId(null)}
           onEdit={(pet) => {
-            setDetailPet(null);
+            setDetailPetId(null);
             setEditingPet(pet);
             setComposerOpen(true);
           }}
@@ -370,11 +415,19 @@ const PetDetail: React.FC<{
   const { pet } = data;
   const [photos, setPhotos] = useState<PetPhoto[]>(data.photos);
   const [isUploading, setIsUploading] = useState(false);
-  const [hearts, setHearts] = useState<number[]>([]);
+  const [hearts, setHearts] = useState<{ key: number; lefts: number[] }[]>([]);
+  const heartTimersRef = useRef<number[]>([]);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const cat = categoryOf(pet.category);
 
   useEffect(() => setPhotos(data.photos), [data]);
+
+  useEffect(() => {
+    return () => {
+      heartTimersRef.current.forEach((id) => window.clearTimeout(id));
+      heartTimersRef.current = [];
+    };
+  }, []);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -389,8 +442,8 @@ const PetDetail: React.FC<{
         media_url: upload.url,
         media_type: isVideo ? 'video' : 'image',
       });
-      setPhotos((prev) => [photo, ...prev]);
-      if (!pet.photo_url) onRefresh();
+      setPhotos((prev) => [photo, ...prev.filter((p) => p.id !== photo.id)]);
+      onRefresh();
       soundEngine.playLoveChime();
     } catch (err) {
       console.error(err);
@@ -415,7 +468,14 @@ const PetDetail: React.FC<{
 
   const sendLove = () => {
     playHaptic([80, 60, 80, 60, 160]);
-    setHearts((prev) => [...prev, Date.now()]);
+    const burstKey = Date.now() + Math.random();
+    const lefts = Array.from({ length: 10 }, () => 15 + Math.random() * 70);
+    setHearts((prev) => [...prev, { key: burstKey, lefts }]);
+    const timer = window.setTimeout(() => {
+      heartTimersRef.current = heartTimersRef.current.filter((id) => id !== timer);
+      setHearts((prev) => prev.filter((h) => h.key !== burstKey));
+    }, 1900);
+    heartTimersRef.current.push(timer);
   };
 
   return (
@@ -467,13 +527,13 @@ const PetDetail: React.FC<{
             </div>
 
             {/* uçan kalpler */}
-            {hearts.map((key) => (
-              <div key={key} className="pointer-events-none absolute inset-0 overflow-hidden">
-                {Array.from({ length: 10 }).map((_, i) => (
+            {hearts.map((burst) => (
+              <div key={burst.key} className="pointer-events-none absolute inset-0 overflow-hidden">
+                {burst.lefts.map((left, i) => (
                   <span
                     key={i}
                     className="absolute bottom-8 text-2xl animate-[floatUp_1.8s_ease-out_forwards]"
-                    style={{ left: `${15 + Math.random() * 70}%`, animationDelay: `${i * 70}ms` }}
+                    style={{ left: `${left}%`, animationDelay: `${i * 70}ms` }}
                   >
                     ❤️
                   </span>
@@ -567,7 +627,7 @@ const PetDetail: React.FC<{
                       )}
                       <button
                         onClick={(e) => deletePhoto(photo, e)}
-                        className="absolute top-1 right-1 p-1 rounded-full bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="absolute top-1 right-1 p-1 rounded-full bg-black/50 text-white opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                       >
                         <X className="w-3 h-3" />
                       </button>
@@ -644,7 +704,7 @@ const PetLightbox: React.FC<{
       <div className="px-4 pb-4 text-center">
         {photo.caption && <p className="text-white/90 text-sm">{photo.caption}</p>}
         <p className="text-white/40 text-[10px] mt-1">
-          {index + 1} / {photos.length} · {USERS[photo.uploader]?.emoji}
+          {index + 1} / {photos.length} · {emojiOf(photo.uploader)}
         </p>
       </div>
     </div>
@@ -658,7 +718,7 @@ const PetLightbox: React.FC<{
 const PetComposer: React.FC<{
   editing: Pet | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (createdPetId?: number) => void;
 }> = ({ editing, onClose, onSaved }) => {
   const isNew = !editing;
   const [name, setName] = useState(editing?.name ?? '');
@@ -676,6 +736,16 @@ const PetComposer: React.FC<{
   const [isFavorite, setIsFavorite] = useState(editing?.is_favorite ?? false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const blobUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+    };
+  }, []);
 
   const selectCategory = (id: string) => {
     setCategory(id);
@@ -687,8 +757,11 @@ const PetComposer: React.FC<{
   const handlePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
+    if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+    const blob = URL.createObjectURL(f);
+    blobUrlRef.current = blob;
     setPhotoFile(f);
-    setPhotoPreview(URL.createObjectURL(f));
+    setPhotoPreview(blob);
     e.target.value = '';
   };
 
@@ -722,13 +795,15 @@ const PetComposer: React.FC<{
         is_favorite: isFavorite,
       };
 
+      let createdId: number | undefined;
       if (editing) {
         await api.updatePet(editing.id, payload as Partial<Pet>);
       } else {
-        await api.createPet(payload as any);
+        const created = await api.createPet(payload as any);
+        createdId = created?.id;
       }
       soundEngine.playLoveChime();
-      onSaved();
+      onSaved(createdId);
     } catch (err) {
       console.error(err);
       setError('Kaydedilemedi, tekrar dener misin?');

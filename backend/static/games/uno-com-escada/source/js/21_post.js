@@ -1,52 +1,39 @@
 // Passes de tela cheia: meia resolução (AO + névoa), iluminação, transparentes, TAA, desfoque de movimento, bloom, saída.
-const MB_TILE = 20, BLOOM_N = 6;
+const MB_TILE = 20, BLOOM_N = (typeof G !== 'undefined' && G.mobile) ? 4 : 6;
 function postInit() {
   const dev = G.dev, T = R.tex, V = R.view, W = G.W, H = G.H, D = R.pd, P = R.post = {};
   const HDR = 'rgba16float';
+  R.mbOn = !G.mobile;
   P.half = mkPost('half', {}, [HDR]); P.halfBG = bgOf(P.half, 0, [R.frameBuf, V.depth, V.gB, V.shadow, V.shadowS, R.sCmp]);
   P.blurH = mkPost('bilat', { DIR: '1,0' }, [HDR]); P.blurV = mkPost('bilat', { DIR: '0,1' }, [HDR]);
   P.blurHBG = bgOf(P.blurH, 0, [V.half[0]]); P.blurVBG = bgOf(P.blurV, 0, [V.half[1]]);
   D.half = mkPassDesc(1, null, false, 'half'); D.half.colorAttachments[0].view = V.half[0];
   D.blurH = mkPassDesc(1, null, false, 'blurH'); D.blurH.colorAttachments[0].view = V.half[1];
   D.blurV = mkPassDesc(1, null, false, 'blurV'); D.blurV.colorAttachments[0].view = V.half[2];
-  P.light = mkPost('light', { SSR: '' }, [HDR]);
+  P.light = mkPost('light', G.mobile ? {} : { SSR: '' }, [HDR]);
   P.lightBG = [0, 1].map(i => bgOf(P.light, 0, [R.frameBuf, V.gA, V.gB, V.gC, V.depth, V.shadow, V.shadowS, R.sCmp, V.half[2], V.env, V.sky, R.sClamp, R.sSky, V.hist[i]]));
-  P.taa = mkPost('taa', {}, R.mbOn ? [HDR, 'rg16float'] : [HDR]);
+  P.taa = mkPost('taa', {}, [HDR, 'rg16float']);
   P.taaBG = [0, 1].map(i => bgOf(P.taa, 0, [R.frameBuf, V.hdr, V.hist[i], V.gV, V.depth, R.sClamp]));
-  D.taa = [0, 1].map(i => { const d = mkPassDesc(2, null, false, 'taa'); d.colorAttachments[0].view = V.hist[i]; if (R.mbOn) d.colorAttachments[1].view = V.vel; else { d.colorAttachments.pop(); } return d; });
+  D.taa = [0, 1].map(i => { const d = mkPassDesc(2, null, false, 'taa'); d.colorAttachments[0].view = V.hist[i]; d.colorAttachments[1].view = V.vel; return d; });
   // desfoque de movimento
-  // MOBİL: hareket bulanıklığı kapalı başlar (telefonda en pahalı tek tam ekran
-  // geçişi) → çini (tile) hedefleri ve boru hatları da hiç kurulmaz.
   const tw = Math.ceil(W / MB_TILE), th = Math.ceil(H / MB_TILE);
-  if (R.mbOn) {
-    T.tile = [mkTex(tw, th, 'rg16float'), mkTex(tw, th, 'rg16float')]; V.tile = T.tile.map(t => t.createView());
-    P.mbTile = mkPost('mbtile', { TILE: MB_TILE }, ['rg16float']); P.mbNeigh = mkPost('mbtile', { NEIGH: '', TILE: MB_TILE }, ['rg16float']);
-    P.mbTileBG = bgOf(P.mbTile, 0, [V.vel]); P.mbNeighBG = bgOf(P.mbNeigh, 0, [V.tile[0]]);
-    D.mbTile = mkPassDesc(1, null, false, 'mbTile'); D.mbTile.colorAttachments[0].view = V.tile[0];
-    D.mbNeigh = mkPassDesc(1, null, false, 'mbNeigh'); D.mbNeigh.colorAttachments[0].view = V.tile[1];
-    P.mb = mkPost('mblur', { TILE: MB_TILE }, [HDR]);
-    P.mbBG = [0, 1].map(i => bgOf(P.mb, 0, [R.frameBuf, V.hist[i], V.vel, V.tile[1], V.depth, R.sClamp]));
-    D.mb = mkPassDesc(1, null, false, 'mblur'); D.mb.colorAttachments[0].view = V.mb;
-  } else {
-    // Hareket bulanıklığı yokken: TAA çıktısı (hist) 1:1 kopya geçişine gider,
-    // bloom ve final oradan devam eder. Aradaki 24 örnekli bulanıklık geçişi
-    // ile iki çini geçişi atlanır (telefonda büyük kazanç).
-    T.pass = mkTex(W, H, HDR); V.pass = T.pass.createView();
-    P.mb = mkPost('blit', {}, [HDR]);
-    P.mbBG = [0, 1].map(i => bgOf(P.mb, 0, [V.hist[i], R.sClamp]));
-    D.mb = mkPassDesc(1, null, false, 'pass'); D.mb.colorAttachments[0].view = V.pass;
-  }
+  T.tile = [mkTex(tw, th, 'rg16float'), mkTex(tw, th, 'rg16float')]; V.tile = T.tile.map(t => t.createView());
+  P.mbTile = mkPost('mbtile', { TILE: MB_TILE }, ['rg16float']); P.mbNeigh = mkPost('mbtile', { NEIGH: '', TILE: MB_TILE }, ['rg16float']);
+  P.mbTileBG = bgOf(P.mbTile, 0, [V.vel]); P.mbNeighBG = bgOf(P.mbNeigh, 0, [V.tile[0]]);
+  D.mbTile = mkPassDesc(1, null, false, 'mbTile'); D.mbTile.colorAttachments[0].view = V.tile[0];
+  D.mbNeigh = mkPassDesc(1, null, false, 'mbNeigh'); D.mbNeigh.colorAttachments[0].view = V.tile[1];
+  P.mb = mkPost('mblur', { TILE: MB_TILE }, [HDR]);
+  P.mbBG = [0, 1].map(i => bgOf(P.mb, 0, [R.frameBuf, V.hist[i], V.vel, V.tile[1], V.depth, R.sClamp]));
+  D.mb = mkPassDesc(1, null, false, 'mblur'); D.mb.colorAttachments[0].view = V.mb;
   // bloom
   T.bl = []; V.bl = []; D.blDown = []; D.blUp = []; P.blDownBG = []; P.blUpBG = [];
   for (let i = 0; i < BLOOM_N; i++) { T.bl[i] = mkTex(Math.max(2, W >> (i + 1)), Math.max(2, H >> (i + 1)), HDR); V.bl[i] = T.bl[i].createView(); }
   P.blFirst = mkPost('bloom', { FIRST: '' }, [HDR]); P.blDown = mkPost('bloom', {}, [HDR]);
   P.blUp = mkPost('bloom', { UP: '', UPW: '1.0' }, [{ format: HDR, blend: { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } } }]);
-  // ilk bloom küçültmesi bulanıklık çıktısından (V.mb) ya da kopyadan (V.pass)
-  // okur.
-  const mbSrc = R.mbOn ? V.mb : V.pass;
   for (let i = 0; i < BLOOM_N; i++) {
     const d = mkPassDesc(1, null, false, 'blDown' + i); d.colorAttachments[0].view = V.bl[i]; D.blDown.push(d);
-    P.blDownBG.push(bgOf(i ? P.blDown : P.blFirst, 0, [i ? V.bl[i - 1] : mbSrc, R.sClamp]));
+    if (R.mbOn) P.blDownBG.push(bgOf(i ? P.blDown : P.blFirst, 0, [i ? V.bl[i - 1] : V.mb, R.sClamp]));
+    else P.blDownBG.push(i ? bgOf(P.blDown, 0, [V.bl[i - 1], R.sClamp]) : [0, 1].map(c => bgOf(P.blFirst, 0, [V.hist[c], R.sClamp])));
   }
   for (let i = BLOOM_N - 2; i >= 0; i--) {
     const d = mkPassDesc(1, null, false, 'blUp' + i); d.colorAttachments[0].view = V.bl[i]; d.colorAttachments[0].loadOp = 'load'; D.blUp.push(d);
@@ -58,8 +45,7 @@ function postInit() {
   P.expoBG = [0, 1].map(i => bgOf(P.expo, 0, [R.frameBuf, V.bl[BLOOM_N - 1], V.ex[i], R.sClamp]));
   D.expo = [0, 1].map(i => { const d = mkPassDesc(1, null, false, 'expo'); d.colorAttachments[0].view = V.ex[i]; return d; });
   P.final = mkPost('final', {}, [G.fmt]);
-  // Hareket bulanıklığı kapalıyken final geçişi kopya çıktıyı (V.pass) okur.
-  P.finalBG = [0, 1].map(i => bgOf(P.final, 0, [R.frameBuf, R.mbOn ? V.mb : V.pass, V.bl[0], V.ex[i], R.sClamp, V.depth]));
+  P.finalBG = [0, 1].map(i => bgOf(P.final, 0, [R.frameBuf, R.mbOn ? V.mb : V.hist[i], V.bl[0], V.ex[i], R.sClamp, V.depth]));
   D.final = mkPassDesc(1, null, false, 'final');
   // cubemap: céu + pré-filtro
   P.cubeSky = mkPost('cubesky', {}, [HDR], { depthStencil: { format: 'depth32float', depthWriteEnabled: false, depthCompare: 'always' } });
@@ -96,20 +82,18 @@ function postFrame(enc) {
   const P = R.post, D = R.pd, cur = R.frameIdx & 1, prev = cur ^ 1;
   // decalques (marcas de pneu) sobre o G-buffer
   if (R.decals.length) { const p = apiPass(enc, D.decal); p.setBindGroup(0, R.globBG); R.dyn1[0] = 0; p.setBindGroup(1, R.passBG, R.dyn1, 0, 1); for (let i = 0; i < R.decals.length; i++) R.decals[i].draw(p); p.end(); }
-  fsPass(enc, D.half, P.half, P.halfBG); fsPass(enc, D.blurH, P.blurH, P.blurHBG); fsPass(enc, D.blurV, P.blurV, P.blurVBG);
+  if (!G.mobile) { fsPass(enc, D.half, P.half, P.halfBG); fsPass(enc, D.blurH, P.blurH, P.blurHBG); fsPass(enc, D.blurV, P.blurV, P.blurVBG); }
   fsPass(enc, D.light, P.light, P.lightBG[prev]);
   if (R.transparents.length) {
     const p = apiPass(enc, D.trans); p.setBindGroup(0, R.globBG); R.dyn1[0] = 0; p.setBindGroup(1, R.passBG, R.dyn1, 0, 1); R.dyn2[0] = 0; p.setBindGroup(2, R.objBG, R.dyn2, 0, 1);
     for (let i = 0; i < R.transparents.length; i++) R.transparents[i].draw(p); p.end();
   }
   { const p = apiPass(enc, D.taa[cur]); p.setPipeline(P.taa); p.setBindGroup(0, P.taaBG[prev]); p.draw(3); p.end(); }
-  // Hareket bulanıklığı telefonda KAPALI başlar (R.mbOn): postInit bu durumda
-  // doğrudan 'blit' boru hattını ve D.mb'yi kurdu; burada yalnızca histogram →
-  // kopya → bloom zinciri çalışır. Açıksa iki çini geçişi + 24 örnekli
-  // bulanıklık geçişi de çalışır.
-  if (R.mbOn) { fsPass(enc, D.mbTile, P.mbTile, P.mbTileBG); fsPass(enc, D.mbNeigh, P.mbNeigh, P.mbNeighBG); }
-  fsPass(enc, D.mb, P.mb, P.mbBG[cur]);
-  for (let i = 0; i < BLOOM_N; i++) fsPass(enc, D.blDown[i], i ? P.blDown : P.blFirst, P.blDownBG[i]);
+  if (R.mbOn) {
+    fsPass(enc, D.mbTile, P.mbTile, P.mbTileBG); fsPass(enc, D.mbNeigh, P.mbNeigh, P.mbNeighBG);
+    fsPass(enc, D.mb, P.mb, P.mbBG[cur]);
+  }
+  for (let i = 0; i < BLOOM_N; i++) fsPass(enc, D.blDown[i], i ? P.blDown : P.blFirst, i ? P.blDownBG[i] : (R.mbOn ? P.blDownBG[0] : P.blDownBG[0][cur]));
   for (let i = 0; i < BLOOM_N - 1; i++) fsPass(enc, D.blUp[i], P.blUp, P.blUpBG[i]);
   fsPass(enc, D.expo[cur], P.expo, P.expoBG[prev]);
   D.final.colorAttachments[0].view = apiCanvasView();

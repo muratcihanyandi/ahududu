@@ -13,13 +13,13 @@ temizlik işlemi yanlış tabloya dokunursa, mektuplar geri dönüşü olmayan
 Böylece kullanıcı ne yaparsa yapsın mektup geri getirilebilir.
 """
 
+import asyncio
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
-
-from sqlalchemy import inspect, text
 
 from backend.app.config import settings
 
@@ -35,15 +35,20 @@ def backup_dir() -> str:
 
 
 def backup_letter(letter: dict, reason: str = "delete") -> Optional[str]:
-    """Bir mektubu diske JSON olarak yazar. Dosya yolu döner (hata olursa None)."""
+    """Bir mektubu diske atomik olarak JSON yazar. Dosya yolu döner (hata olursa None)."""
     try:
         folder = backup_dir()
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%f")
+        suffix = uuid.uuid4().hex[:6]
         letter_id = letter.get("id", "x")
-        filename = f"letter-{letter_id}-{stamp}-{reason}.json"
+        filename = f"letter-{letter_id}-{stamp}-{suffix}-{reason}.json"
         path = os.path.join(folder, filename)
-        with open(path, "w", encoding="utf-8") as f:
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(letter, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
         logger.info("Mektup yedeklendi: %s", filename)
         return path
     except Exception as exc:  # noqa: BLE001 - yedek hatası ana işlemi bozmasın
@@ -71,49 +76,33 @@ def letter_to_dict(letter) -> dict:
     }
 
 
-async def ensure_archive_columns(engine) -> None:
-    """`love_letters` tablosuna arşiv kolonlarını ekler (mevcut kurulum için).
-
-    `create_all` var olan tablolara yeni kolon eklemez; bu yüzden burada
-    idempotent bir "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" uyguluyoruz.
-    """
-    statements = [
-        "ALTER TABLE love_letters ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE",
-        "ALTER TABLE love_letters ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE",
-    ]
-    try:
-        async with engine.begin() as conn:
-            columns = await conn.run_sync(
-                lambda sync_conn: {
-                    col["name"] for col in inspect(sync_conn).get_columns("love_letters")
-                }
-            )
-            for statement in statements:
-                column = statement.split("ADD COLUMN IF NOT EXISTS ")[1].split()[0]
-                if column in columns:
-                    continue
-                await conn.execute(text(statement))
-                logger.info("love_letters.%s kolonu eklendi.", column)
-    except Exception as exc:  # noqa: BLE001 - arşiv kolonu yoksa da uygulama çalışsın
-        logger.warning("Mektup arşiv kolonları hazırlanamadı: %s", exc)
-
-
-async def backfill_letter_backups(letters) -> int:
-    """Daha önce yedeği alınmamış mektuplar için bir kez yedek üretir."""
+def _backfill_sync(items: list[dict]) -> int:
     folder = backup_dir()
-    existing = set()
     try:
-        existing = set(os.listdir(folder))
+        existing_ids: set[str] = set()
+        for name in os.listdir(folder):
+            if name.startswith("letter-"):
+                parts = name.split("-", 2)
+                if len(parts) >= 2:
+                    existing_ids.add(parts[1])
     except OSError:
         return 0
 
     created = 0
-    for letter in letters:
-        prefix = f"letter-{getattr(letter, 'id', None)}-"
-        if any(name.startswith(prefix) for name in existing):
+    for item in items:
+        lid = str(item.get("id"))
+        if lid in existing_ids:
             continue
-        if backup_letter(letter_to_dict(letter), reason="archive"):
+        if backup_letter(item, reason="archive"):
+            existing_ids.add(lid)
             created += 1
+    return created
+
+
+async def backfill_letter_backups(letters) -> int:
+    """Daha önce yedeği alınmamış mektuplar için bir kez yedek üretir."""
+    items = [letter_to_dict(letter) for letter in letters]
+    created = await asyncio.to_thread(_backfill_sync, items)
     if created:
         logger.info("Mektup arşivi kuruldu: %d mektup yedeklendi.", created)
     return created

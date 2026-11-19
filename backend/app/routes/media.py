@@ -2,13 +2,23 @@ import mimetypes
 import os
 import uuid
 import aiofiles
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from backend.app.config import settings
 
 router = APIRouter(prefix="/api/media", tags=["media"])
 
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+MAX_UPLOAD_BYTES = 150 * 1024 * 1024  # 150 MB
+
+SAFE_INLINE_IMAGE_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+}
 
 ALLOWED_EXTENSIONS = {
     # Images
@@ -63,16 +73,24 @@ def _guess_extension(file: UploadFile) -> str:
     }
     if content_type in mimetypes_map:
         return mimetypes_map[content_type]
-    if ext:
-        # Tanımadığımız ama dosya adı olan bir uzantı: yine de sakla.
-        return "".join(ch for ch in ext if ch.isalnum())[:10] or "bin"
-    if "image" in content_type:
+    if "image" in content_type and "svg" not in content_type and "xml" not in content_type:
         return "png"
     if "audio" in content_type:
         return "webm"
     if "video" in content_type:
         return "mp4"
     return "bin"
+
+
+def _safe_upload_path(filename: str) -> tuple[str, str]:
+    """Validate and resolve a file inside UPLOAD_DIR; reject directories and traversal."""
+    if not filename or filename in (".", "..") or os.path.basename(filename) != filename:
+        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+    upload_root = os.path.realpath(settings.UPLOAD_DIR)
+    real_path = os.path.realpath(os.path.join(upload_root, filename))
+    if not real_path.startswith(upload_root + os.sep) or not os.path.isfile(real_path):
+        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+    return filename, real_path
 
 
 @router.post("/upload")
@@ -85,10 +103,22 @@ async def upload_file(
 
     unique_filename = f"{uuid.uuid4().hex}_{safe_category}.{ext}"
     dest_path = os.path.join(settings.UPLOAD_DIR, unique_filename)
-    
-    async with aiofiles.open(dest_path, "wb") as buffer:
-        while content := await file.read(1024 * 1024): # 1MB chunks
-            await buffer.write(content)
+
+    written = 0
+    try:
+        async with aiofiles.open(dest_path, "wb") as buffer:
+            while content := await file.read(1024 * 1024): # 1MB chunks
+                written += len(content)
+                if written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Dosya çok büyük")
+                await buffer.write(content)
+    except Exception:
+        if os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+        raise
             
     media_url = f"/api/media/file/{unique_filename}"
     return {
@@ -100,16 +130,19 @@ async def upload_file(
     }
 
 @router.get("/file/{filename}", response_model=None)
-async def get_file(filename: str, request: Request):
-    # Sanitize filename
-    safe_filename = os.path.basename(filename)
-    file_path = os.path.join(settings.UPLOAD_DIR, safe_filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+async def get_file(filename: str):
+    safe_filename, file_path = _safe_upload_path(filename)
 
     media_type, _ = mimetypes.guess_type(safe_filename)
     if not media_type:
         media_type = "application/octet-stream"
+
+    # Never serve active web payloads (HTML/SVG/JS/XML) inline on our origin
+    low_type = media_type.lower()
+    is_active_payload = any(tok in low_type for tok in ("html", "svg", "xml", "javascript", "ecmascript"))
+    if is_active_payload:
+        media_type = "application/octet-stream"
+        low_type = media_type
 
     headers = {
         "Accept-Ranges": "bytes",
@@ -118,17 +151,13 @@ async def get_file(filename: str, request: Request):
         "Access-Control-Allow-Origin": "*",
         "X-Content-Type-Options": "nosniff",
     }
-    # Sohbette gönderilen BELGE (pdf, docx, zip...) tarayıcıda sayfa olarak
-    # AÇILMAZ; indirilir. Aksi hâlde HTML içeren bir dosya uygulama içinde
-    # çalışabilirdi.
-    if not (
-        media_type.startswith("image/")
-        or media_type.startswith("video/")
-        or media_type.startswith("audio/")
-        or media_type == "application/pdf"
-        or media_type.startswith("text/")
-        or media_type in ("application/json", "application/epub+zip")
-    ):
+    allow_inline = (
+        low_type in SAFE_INLINE_IMAGE_TYPES
+        or low_type.startswith("video/")
+        or low_type.startswith("audio/")
+        or low_type == "application/pdf"
+    )
+    if not allow_inline:
         headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
 
     # Sinema Salonu ve Android WebView videoyu PARÇA PARÇA (Range) ister.
@@ -143,10 +172,7 @@ async def get_file(filename: str, request: Request):
 @router.head("/file/{filename}")
 async def head_file(filename: str):
     """Bazı oynatıcılar (Android/ExoPlayer) önce HEAD ile süre ve boyut sorar."""
-    safe_filename = os.path.basename(filename)
-    file_path = os.path.join(settings.UPLOAD_DIR, safe_filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Dosya bulunamadı")
+    safe_filename, file_path = _safe_upload_path(filename)
 
     media_type, _ = mimetypes.guess_type(safe_filename)
     return FileResponse(

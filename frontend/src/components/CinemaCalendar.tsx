@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Calendar, ChevronLeft, ChevronRight, Ticket, Clock, MapPin, Film,
   Plus, X, Trash2, Pencil, Popcorn, Sparkles, Star, Users, Play,
@@ -41,13 +41,21 @@ const shortDate = (iso: string): string => {
   return `${d} ${MONTHS_TR[(m || 1) - 1].slice(0, 3)}`;
 };
 
+const hasTicket = (bookedBy: string | undefined | null, uid: string): boolean =>
+  (bookedBy || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .includes(uid);
+
 /** Türkçe'ye uygun kısa süre metni */
 const showtimeLabel = (s: Showtime): string => {
   // Geçmiş bir günün seansı için "başladı" demek yanıltıcı olur.
   const today = todayIso();
   if (s.show_date < today) return `${s.show_time} · geçti`;
   if (s.show_date > today) return `${s.show_time}`;
-  if (!s.starts_in_minutes) return `${s.show_time}`;
+  if (s.starts_in_minutes == null) return `${s.show_time}`;
+  if (s.starts_in_minutes === 0) return `${s.show_time} · Şimdi başlıyor`;
   if (s.starts_in_minutes < 0) return `${s.show_time} · başladı`;
   if (s.starts_in_minutes < 60) return `${s.show_time} · ${s.starts_in_minutes} dk sonra`;
   const h = Math.floor(s.starts_in_minutes / 60);
@@ -65,12 +73,32 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
   const [composerOpen, setComposerOpen] = useState(false);
   const [editing, setEditing] = useState<Showtime | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [detail, setDetail] = useState<Showtime | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const [detailId, setDetailId] = useState<number | null>(null);
   const [isQuickStarting, setIsQuickStarting] = useState(false);
 
+  const detail = useMemo(
+    () => (detailId !== null ? showtimes.find((s) => s.id === detailId) || null : null),
+    [showtimes, detailId]
+  );
+
   const showToast = useCallback((text: string) => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
     setToast(text);
-    window.setTimeout(() => setToast(null), 2800);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(null);
+    }, 2800);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
   }, []);
 
   const currentMonth = monthKey(year, month);
@@ -99,14 +127,14 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
         setEditing(null);
         return true;
       }
-      if (detail) {
-        setDetail(null);
+      if (detailId !== null) {
+        setDetailId(null);
         return true;
       }
       return false;
     });
     return unregister;
-  }, [composerOpen, detail]);
+  }, [composerOpen, detailId]);
 
   // Canlı güncellemeler
   useEffect(() => {
@@ -121,7 +149,13 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
     const unsubUpdated = wsClient.on('cinema_showtime_updated', reload);
     const unsubDeleted = wsClient.on('cinema_showtime_deleted', reload);
     const unsubImport = wsClient.on('cinema_calendar_updated', (d: any) => {
-      showToast(`Takvim güncellendi · ${d?.count ?? 0} seans eklendi`);
+      if (typeof d?.count === 'number' && d.count > 0) {
+        showToast(`Takvim güncellendi · ${d.count} seans eklendi`);
+      } else if (d?.showtime?.title) {
+        showToast(`Takvim güncellendi: ${d.showtime.title} 🎬`);
+      } else {
+        showToast('Takvim güncellendi 🎬');
+      }
       load();
     });
     const unsubTicket = wsClient.on('cinema_ticket_booked', (d: any) => {
@@ -197,13 +231,15 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
     setIsQuickStarting(true);
     playHaptic(40);
     try {
+      const nowLocal = new Date();
+      const daysInViewedMonth = new Date(year, month + 1, 0).getDate();
+      const isCurrentMonth = year === nowLocal.getFullYear() && month === nowLocal.getMonth();
+      const baseDay = isCurrentMonth ? nowLocal.getDate() : 0;
       const mk = (offset: number) => {
-        // Geçmiş bir güne düşmesin: bugünün tarihi baz alınır.
-        const now = new Date();
-        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const dayNum = Math.min(daysInViewedMonth, Math.max(1, baseDay + offset));
+        return `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
       };
-      // Bu hafta içinde yaklaşan dört akşam (1, 3, 5, 7 gün sonra)
+      // Seçili ay içinde yaklaşan dört akşam
       await api.importCalendar({
         month: currentMonth,
         replace_existing: false,
@@ -249,7 +285,8 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
     }
   };
 
-  const handleBook = async (show: Showtime) => {playHaptic(30);
+  const handleBook = async (show: Showtime) => {
+    playHaptic(30);
     try {
       const isCancelling = show.my_ticket;
       const updated = isCancelling
@@ -257,7 +294,7 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
         : await api.bookTicket(show.id, currentUserId);
 
       setShowtimes((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-      setDetail(updated);
+      if (detailId === updated.id) setDetailId(updated.id);
       if (!isCancelling) {
         soundEngine.playLoveChime();
         showToast(updated.partner_ticket
@@ -278,11 +315,11 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
     }
     playHaptic(40);
     try {
-      await api.openShowtime(show.id, currentUserId);
+      const opened = await api.openShowtime(show.id, currentUserId);
       // Detay penceresini kapat ki salon tam ekran açılabilsin. (Açık kalırsa
       // salonun üstünde kalır ve kullanıcı perdeyi göremez.)
-      setDetail(null);
-      onWatch(show);
+      setDetailId(null);
+      onWatch(opened);
     } catch (e: any) {
       showToast(e?.message || 'Salon açılamadı');
     }
@@ -293,7 +330,7 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
     try {
       await api.deleteShowtime(show.id);
       setShowtimes((prev) => prev.filter((s) => s.id !== show.id));
-      setDetail(null);
+      setDetailId(null);
       playHaptic(30);
       showToast('Seans kaldırıldı');
     } catch (e) {
@@ -511,7 +548,7 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
                 show={show}
                 currentUserId={currentUserId}
                 partnerId={partnerId}
-                onOpen={() => setDetail(show)}
+                onOpen={() => setDetailId(show.id)}
                 onBook={() => handleBook(show)}
                 onWatch={() => handleWatch(show)}
               />
@@ -531,12 +568,12 @@ export const CinemaCalendar: React.FC<CinemaCalendarProps> = ({ currentUserId, o
         <ShowtimeDetail
           show={detail}
           currentUserId={currentUserId}
-          onClose={() => setDetail(null)}
+          onClose={() => setDetailId(null)}
           onBook={() => handleBook(detail)}
           onWatch={() => handleWatch(detail)}
           onEdit={() => {
             setEditing(detail);
-            setDetail(null);
+            setDetailId(null);
             setComposerOpen(true);
           }}
           onDelete={() => handleDelete(detail)}
@@ -578,7 +615,7 @@ const ShowtimeCard: React.FC<{
   onWatch: () => void;
 }> = ({ show, currentUserId, partnerId, onOpen, onBook, onWatch }) => {
   const poster = mediaUrl(show.poster_url);
-  const bothTickets = show.booked_by.includes(currentUserId) && show.booked_by.includes(partnerId);
+  const bothTickets = hasTicket(show.booked_by, currentUserId) && hasTicket(show.booked_by, partnerId);
 
   return (
     <div
@@ -744,7 +781,7 @@ const ShowtimeDetail: React.FC<{
               <div className="flex items-center gap-2 mt-2">
                 {[USERS[currentUserId], USERS[partnerId]].map((u, i) => {
                   const id = i === 0 ? currentUserId : partnerId;
-                  const has = show.booked_by.split(',').includes(id);
+                  const has = hasTicket(show.booked_by, id);
                   return (
                     <div
                       key={id}

@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Heart, Battery, BatteryCharging, MapPin, Clock, Sparkles, Coffee } from 'lucide-react';
+import { Heart, Battery, BatteryCharging, MapPin, Clock, Coffee } from 'lucide-react';
 import { UserProfile } from '../types';
 
 interface LiveStatusWidgetProps {
@@ -8,6 +8,7 @@ interface LiveStatusWidgetProps {
   distanceKm?: number;
   partnerName: string;
   isPartnerOnline?: boolean;
+  partnerLastSeen?: string | null;
   /** Birlikte olunan gün sayısı (ilişki başlangıcından) */
   daysTogether?: number;
   /** Partnerle son etkileşimden bu yana geçen dakika */
@@ -58,12 +59,13 @@ export const LiveStatusWidget: React.FC<LiveStatusWidgetProps> = ({
   distanceKm,
   partnerName,
   isPartnerOnline = false,
+  partnerLastSeen,
   daysTogether,
   mineBatteryLevel,
 }) => {
   const phoneBattery = partnerProfile?.battery_level ?? 100;
   const isPhoneCharging = partnerProfile?.is_charging ?? false;
-  const lastSeen = formatLastSeen(partnerProfile?.last_seen);
+  const lastSeen = formatLastSeen(partnerProfile?.last_seen || partnerLastSeen || undefined);
   const place = partnerProfile?.place_name?.trim();
   const statusText = partnerProfile?.status_text?.trim();
   const myLevel = mineBatteryLevel ?? myBattery?.level ?? 100;
@@ -99,7 +101,13 @@ export const LiveStatusWidget: React.FC<LiveStatusWidgetProps> = ({
               <p className="font-serif text-sm font-bold text-berry-950 leading-tight truncate">
                 {partnerName}
               </p>
-              <p className="text-[10px] text-stone-500">{lastSeen} görüldü</p>
+              <p className="text-[10px] text-stone-500">
+                {isPartnerOnline
+                  ? 'çevrimiçi'
+                  : lastSeen === 'Bilinmiyor'
+                    ? 'son görülme bilinmiyor'
+                    : `${lastSeen} görüldü`}
+              </p>
             </div>
           </div>
 
@@ -124,7 +132,7 @@ export const LiveStatusWidget: React.FC<LiveStatusWidgetProps> = ({
 
         {/* Alt bilgi şeridi: mesafe / konum / gün sayısı */}
         <div className="mt-3 flex items-center gap-2 flex-wrap">
-          {distanceKm != null && distanceKm > 0 && (
+          {distanceKm != null && distanceKm >= 0 && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-berry-50 text-[10px] font-semibold text-berry-700">
               <MapPin className="w-3 h-3" />
               {distanceKm < 1

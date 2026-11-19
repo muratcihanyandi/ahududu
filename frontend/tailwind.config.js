@@ -18,6 +18,11 @@ export default {
           700: '#831843',
           800: '#500724',
           900: '#311425',
+          950: '#2a0713',
+        },
+        cinema: {
+          900: '#1c0611',
+          950: '#12030a',
         },
         parchment: {
           light: '#fffdf9',
@@ -54,7 +59,13 @@ export default {
         heartbeat: 'heartbeat 1.4s ease-in-out infinite',
         float: 'float 3s ease-in-out infinite',
         pulseGlow: 'pulseGlow 2s ease-in-out infinite',
-      }
+      },
+      boxShadow: {
+        xs: '0 1px 2px 0 rgb(0 0 0 / 0.05)',
+      },
+      backdropBlur: {
+        xs: '2px',
+      },
     },
   },
   plugins: [],

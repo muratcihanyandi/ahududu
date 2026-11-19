@@ -61,13 +61,10 @@ async function main() {
       // Cadência: a 120 Hz só sobram 8,3 ms por quadro. Se a vista mais pesada não cabe com folga, os quadros se enfileiram
       // na GPU e o tempo de quadro oscila; nesse caso o jogo roda estável a 60 quadros por segundo (um quadro a cada dois
       // do monitor de 120 Hz). ?hz=120 ou ?hz=60 força a escolha.
-      GAME.gpuWorstMs = worst; GAME.minFrameMs = Q.get('hz') === '120' ? 0 : (Q.get('hz') === '60' || worst > 6.2) ? 14.6 : 0;
+      GAME.gpuWorstMs = worst; GAME.minFrameMs = Q.get('hz') === '120' ? 0 : (G.mobile || Q.get('hz') === '60' || worst > 6.2) ? 14.6 : 0;
     }
     for (let i = 0; i < 8; i++) renderFrame();
     R.cam.first = true;
-    // Mobilde çizim çözünürlüğü ilk ölçümden sonra kare süresine göre
-    // ayarlanır (58_perf_auto.js). Masaüstünde hiçbir şey değişmez.
-    if (typeof autopInit === 'function') { try { autopInit(); } catch (e) { console.warn('[autop]', e); } }
     setMsg(''); const hint = document.getElementById('hint'); if (hint) setTimeout(() => { hint.style.opacity = 0; }, 9000);
     if (GAME.ui) uiInit();
     GAME.ready = true;
@@ -75,16 +72,23 @@ async function main() {
   } catch (e) { setMsg('hata: ' + e.message); console.error(e); GAME.error = e.message; }
 }
 let _lastT = 0;
+let _mobDt = null, _mobN = 0;
+function mobResCheck(ms) {
+  if (!G.mobile || G.resScale <= 0.85 || R.resizing || GS.frozen) return;
+  if (typeof Q !== 'undefined' && (Q.has('res') || Q.has('sabit'))) return;
+  if (!_mobDt) _mobDt = new Float32Array(60);
+  _mobDt[_mobN++] = ms;
+  if (_mobN < 60) return;
+  const s = _mobDt.slice().sort(); _mobN = 0;
+  if (s[30] > 21) { G.resScale = 0.83; rendererResize(); }
+}
 function rafLoop(t) {
-  // Uyarlanabilir çözünürlük: gerçek kare süresini izle (menüde/hatalı karede
-  // sayılmaz). Ölçüm menü kararından ÖNCE yapılır.
-  if (typeof autopFrame === 'function' && !R.resizing && R.tex) { try { autopFrame(t); } catch (e) { /* yok say */ } }
-  // Yeniden boyutlandırma sürüyor: eski dokular silinmeden önce GPU kuyruğu
-  // boşalana kadar çizme (yoksa "destroyed texture used in submit" → siyah ekran).
   if (R.resizing || !R.tex) { _lastT = 0; requestAnimationFrame(rafLoop); return; }
   if (GAME.minFrameMs > 0 && _lastT && t - _lastT < GAME.minFrameMs) { requestAnimationFrame(rafLoop); return; }   // cadência de 60 Hz em monitor mais rápido
   if (GAME.ui && uiFrame()) { _lastT = 0; requestAnimationFrame(rafLoop); return; }   // menu aberto: o jogo e o som ficam parados e nada é renderizado
-  let dt = _lastT ? (t - _lastT) / 1000 : 1 / 60; RT[3] = dt * 1000; if (dt > 0.05) dt = 0.05; _lastT = t;
+  const hadLast = _lastT > 0;
+  let dt = hadLast ? (t - _lastT) / 1000 : 1 / 60; RT[3] = dt * 1000; if (dt > 0.05) dt = 0.05; _lastT = t;
+  if (hadLast) mobResCheck(RT[3]);
   if (PERF.rec) perfFrameTimes(t);
   RT[2] = dt;
   if (GAME.tick) GAME.tick(false); else { RT[1] = dt; RT[0] += dt; }
@@ -97,8 +101,6 @@ function rafLoop(t) {
 let _cap2d = null;
 window.__cap = {
   ready: () => GAME.ready, error: () => GAME.error || G.lastErr || null,
-  /** Testler için cihaz kancası (gpuInit doldurur) */
-  G: null, dev: null, hasF32Filter: () => !!G.hasF32Filter, get Ctx() { return G; },
   cam(ex, ey, ez, tx, ty, tz, fov) { if (typeof GS !== 'undefined') { GS.freeCam = true; GS.cut = true; } setCamera(ex, ey, ez, tx, ty, tz, fov); },
   // avança n quadros com passo fixo e renderiza cada um
   frames(n, dt) {

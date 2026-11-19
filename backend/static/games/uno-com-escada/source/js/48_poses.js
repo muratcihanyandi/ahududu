@@ -1,14 +1,13 @@
 // Poses fixas para verificação visual (usadas só pelos scripts de captura via __cap.pose(i)).
 // tipo 'carro': carro parado em (s, d, direção), câmera livre em coordenadas do carro [x frente, y cima, z direita].
 // tipo 'volta': reproduz os comandos gravados até o instante t (s) e captura o quadro em movimento, com a câmera cam.
-// (Adları Türkçeleştirildi; kalan tüm kod aynı.)
 const POSES = [
-  { nome: 'önden', tipo: 'carro', s: 160, d: -1.0, yaw: 3.75, olho: [4.9, 1.35, -3.3], alvo: [0.1, 0.72, 0], fov: 0.5 },
-  { nome: 'arkadan', tipo: 'carro', s: 160, d: -1.0, yaw: 0.61, olho: [-5.0, 1.75, 3.4], alvo: [-0.1, 0.8, 0], fov: 0.5 },
-  { nome: 'yan-alçak', tipo: 'carro', s: 160, d: -1.0, yaw: 2.1, olho: [0.9, 0.62, -5.2], alvo: [0.05, 0.8, 0], fov: 0.6 },
+  { nome: 'araba-on-34', tipo: 'carro', s: 160, d: -1.0, yaw: 3.75, olho: [4.9, 1.35, -3.3], alvo: [0.1, 0.72, 0], fov: 0.5 },
+  { nome: 'araba-arka-34', tipo: 'carro', s: 160, d: -1.0, yaw: 0.61, olho: [-5.0, 1.75, 3.4], alvo: [-0.1, 0.8, 0], fov: 0.5 },
+  { nome: 'araba-yan-alcak', tipo: 'carro', s: 160, d: -1.0, yaw: 2.1, olho: [0.9, 0.62, -5.2], alvo: [0.05, 0.8, 0], fov: 0.6 },
   { nome: 'viraj-takip', tipo: 'volta', t: 11.8, cam: 0 },
-  { nome: 'tv-drift', tipo: 'volta', t: 21.55, cam: 2 },
-  { nome: 'kaput-düz', tipo: 'volta', t: 30.4, cam: 1 },
+  { nome: 'tv-viraj-drift', tipo: 'volta', t: 21.55, cam: 2 },
+  { nome: 'kaput-arka-duzluk', tipo: 'volta', t: 30.4, cam: 1 },
 ];
 function poseApply(i) {
   const P = POSES[i];

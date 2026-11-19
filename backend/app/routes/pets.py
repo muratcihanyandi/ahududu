@@ -6,7 +6,7 @@ fotoğraf albümüne ve sevimli notlarına sahip.
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,8 +26,8 @@ from backend.app.websocket_manager import ws_manager
 router = APIRouter(prefix="/api/pets", tags=["pets"])
 
 def normalize_category(raw: str) -> str:
-    """Kategorileri tek biçime indirger: 'köpek' / 'kopek' / 'Köpek' hepsi 'köpek'."""
-    value = (raw or "").strip().lower()
+    """Kategorileri tek biçime indirger: 'köpek' / 'kopek' / 'KEDİ' hepsi kurallı ada."""
+    value = (raw or "").strip().replace("İ", "i").replace("I", "ı").lower().replace("\u0307", "")
     ascii_key = value.translate(TR_ASCII)
     canonical = CATEGORY_CANONICAL.get(ascii_key)
     if canonical:
@@ -98,9 +98,14 @@ async def list_pets(
     )
     result = await db.execute(query)
     pets = result.scalars().all()
+    if not pets:
+        return []
 
+    pet_ids = [pet.id for pet in pets]
     photos_result = await db.execute(
-        select(PetPhoto).order_by(desc(PetPhoto.created_at))
+        select(PetPhoto)
+        .where(PetPhoto.pet_id.in_(pet_ids))
+        .order_by(desc(PetPhoto.created_at))
     )
     photos = photos_result.scalars().all()
 
@@ -145,12 +150,15 @@ async def list_categories(db: AsyncSession = Depends(get_db)):
 
 @router.post("", response_model=PetResponse)
 async def create_pet(payload: PetCreate, db: AsyncSession = Depends(get_db)):
+    pet_name = (payload.name or "").strip()
+    if not pet_name:
+        raise HTTPException(status_code=400, detail="Hayvan adı boş olamaz")
     category = normalize_category(payload.category or "kedi")
     requested_emoji = (payload.emoji or "").strip()
     # İstemci varsayılan "🐾" gönderirse kategoriye uygun emojiyi biz seçelim.
     emoji = requested_emoji if requested_emoji and requested_emoji != "🐾" else DEFAULT_EMOJI.get(category, "🐾")
     pet = PetProfile(
-        name=payload.name.strip(),
+        name=pet_name,
         category=category,
         emoji=emoji,
         photo_url=payload.photo_url,
@@ -183,8 +191,16 @@ async def update_pet(pet_id: int, payload: PetUpdate, db: AsyncSession = Depends
     data = payload.model_dump(exclude_unset=True)
     if data.get("category"):
         data["category"] = normalize_category(data["category"])
+    if "name" in data:
+        if data["name"] is None or not str(data["name"]).strip():
+            raise HTTPException(status_code=400, detail="Hayvan adı boş olamaz")
+        data["name"] = str(data["name"]).strip()
+
+    nullable_fields = {"photo_url", "age", "breed", "bio", "love_notes"}
     for key, value in data.items():
-        if value is not None:
+        if key in nullable_fields:
+            setattr(pet, key, None if value == "" else value)
+        elif value is not None:
             setattr(pet, key, value)
     if data.get("category") and not payload.emoji:
         pet.emoji = DEFAULT_EMOJI.get(pet.category, pet.emoji or "🐾")
@@ -256,7 +272,21 @@ async def delete_pet_photo(pet_id: int, photo_id: int, db: AsyncSession = Depend
     photo = await db.get(PetPhoto, photo_id)
     if not photo or photo.pet_id != pet_id:
         raise HTTPException(status_code=404, detail="Fotoğraf bulunamadı")
+    deleted_url = photo.media_url
     await db.delete(photo)
+    await db.flush()
+
+    pet = await db.get(PetProfile, pet_id)
+    if pet and pet.photo_url == deleted_url:
+        next_res = await db.execute(
+            select(PetPhoto)
+            .where(PetPhoto.pet_id == pet_id)
+            .order_by(desc(PetPhoto.created_at))
+            .limit(1)
+        )
+        next_photo = next_res.scalars().first()
+        pet.photo_url = next_photo.media_url if next_photo else None
+
     await db.commit()
     await ws_manager.broadcast({"type": "pet_photo_deleted", "pet_id": pet_id, "photo_id": photo_id})
     return {"success": True}

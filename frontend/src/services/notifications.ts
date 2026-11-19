@@ -128,7 +128,6 @@ export async function notifyMessage(opts: {
           title,
           body,
           channelId: CHANNEL_ID,
-          smallIcon: 'ic_stat_icon_config_sample',
           iconColor: '#e11d6b',
           group: opts.groupKey,
           groupSummary: false,
@@ -161,8 +160,16 @@ export function onNotificationTap(handler: (extra: any) => void): () => void {
     LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
       if (!removed) handler(action?.notification?.extra ?? {});
     }).then((s) => {
-      sub = s;
-    });
+      if (removed) {
+        try {
+          s?.remove?.();
+        } catch {
+          /* yok say */
+        }
+      } else {
+        sub = s;
+      }
+    }).catch(() => {});
   } catch {
     /* yok say */
   }

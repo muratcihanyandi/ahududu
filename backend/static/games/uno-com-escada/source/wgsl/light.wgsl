@@ -93,10 +93,12 @@ struct LOut { @location(0) col: vec4f }
   var o: LOut;
   if (d <= 0.0) {
     var c = skyColor(-V);
+#ifndef MOB_FAST
     // raios de luz na névoa também sobre o céu
     let hs = textureSampleLevel(tHalf, sClamp, in.uv, 0.0);
     let Tn = exp(-fogOD(F.camPos.xyz, -V, VOL_DIST));
     c = c * mix(1.0, Tn, 0.0) - fogSunCol(-V) * (1.0 - Tn) * (1.0 - hs.g) * 0.85;
+#endif
     o.col = vec4f(max(c, vec3f(0.0)), 1.0); return o;
   }
   let a = textureLoad(gA, px, 0); let b = textureLoad(gB, px, 0); let m = textureLoad(gC, px, 0);
@@ -132,7 +134,11 @@ struct LOut { @location(0) col: vec4f }
     col += sun * diffC * sss * (back * 0.75 + sat(nl * 0.5 + 0.5) * 0.12) / PI * 2.0;
   }
   // ambiente
+#ifdef MOB_FAST
+  var hv = vec2f(1.0, 1.0);
+#else
   var hv = halfSample(in.uv, dist * dot(-V, F.camFwd.xyz)); hv.g = mix(1.0, hv.g, 0.7);
+#endif
   let aoS = hv.r;
   let ao = min(a.a, aoS) * cao;
   // luz do céu nas sombras: um pouco dessaturada e reforçada (rebote difuso do cenário que o SH não capta)

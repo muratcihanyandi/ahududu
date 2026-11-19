@@ -53,7 +53,7 @@ export function installFrameBridge(
     open: () => isOpen(),
     send: (payload: unknown) => {
       const ok = send(payload);
-      if (!ok) post({ kind: 'closed' });
+      if (!ok) post({ kind: 'state', id: -1, open: false });
       return ok;
     },
     requestFullscreen: () => requestFullscreen(),
@@ -72,7 +72,8 @@ export function installFrameBridge(
     switch (d.kind) {
       case 'hello':
       case 'ping':
-        post({ kind: 'ready' });
+        post({ kind: 'state', id: -1, open: bus.open() });
+        if (bus.open()) post({ kind: 'ready' });
         break;
       case 'send':
         bus.send(d.payload);

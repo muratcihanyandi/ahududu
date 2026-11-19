@@ -1,5 +1,6 @@
-from pydantic import BaseModel, ConfigDict
-from typing import Optional, List, Any, Dict
+import math
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Optional, List, Dict
 from datetime import datetime
 
 class UserProfileSchema(BaseModel):
@@ -139,12 +140,19 @@ class SharedNoteResponse(BaseModel):
 
 class LocationUpdate(BaseModel):
     user_id: str
-    latitude: float
-    longitude: float
+    latitude: float = Field(ge=-90.0, le=90.0)
+    longitude: float = Field(ge=-180.0, le=180.0)
     accuracy: Optional[float] = 10.0
-    place_name: Optional[str] = "Konum"
-    battery: Optional[int] = 100
+    place_name: Optional[str] = None
+    battery: Optional[int] = None
     speed: Optional[float] = 0.0
+
+    @field_validator("latitude", "longitude")
+    @classmethod
+    def _must_be_finite(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("Koordinat sonlu bir sayı olmalıdır")
+        return v
 
 class NudgeRequest(BaseModel):
     sender: str

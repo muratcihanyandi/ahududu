@@ -3,7 +3,6 @@
 //             10 alumínio | 11 cinta | 12 decalque do atlas | 13 fundo | 14 refletor do farol | 15 espelho | 16 palhetas da grade
 //             17 pintura lisa brilhante (capacete; a=1 preto vítreo)
 // O.p0 da carroceria: x = luz de freio, y = luz de ré, z = faróis. O.p0.x das rodas = |velocidade angular|.
-// O.p1: cor da pintura (r, g, b > 0 = pintura do parceiro no jogo a dois; zero = azul de fábrica).
 #include mesh_vert
 @group(3) @binding(0) var tAtlas: texture_2d<f32>;
 const PAINT_COL = vec3f(0.168, 0.275, 0.425);   // azul-claro metálico de estúdio: mais escuro e acinzentado (o sol do jogo é forte)

@@ -8,6 +8,7 @@ import {
 } from '../services/backButton';
 import { installFrameBridge } from '../services/gameBridge';
 import { wsClient } from '../services/websocket';
+import { updates } from '../services/updates';
 
 /** Oyun kataloğu: birden fazla oyun eklemek için buraya bir satır eklemek yeter. */
 export interface GameEntry {
@@ -146,12 +147,23 @@ export const GamePlayer: React.FC<GamePlayerProps> = ({ game, currentUserId, onC
     [game.folder, currentUserId]
   );
 
+  // ---- 0) Oyun açıkken OTA yenilemesini durdur ----
+  React.useEffect(() => {
+    updates.setBusy(true);
+    return () => updates.setBusy(false);
+  }, []);
+
   // ---- 1) Açılış: native immersive + yatay kilit ----
   React.useEffect(() => {
+    let cancelled = false;
     const enterNative = async () => {
       if (!isNative) return;
       try {
         await StatusBar.hide();
+        if (cancelled) {
+          void StatusBar.show().catch(() => undefined);
+          return;
+        }
         nativeRef.current.immersive = true;
       } catch {
         /* eski kabuk: sessizce geç */
@@ -160,6 +172,10 @@ export const GamePlayer: React.FC<GamePlayerProps> = ({ game, currentUserId, onC
         const so = screen.orientation as any;
         if (so && typeof so.lock === 'function') {
           await so.lock('landscape');
+          if (cancelled) {
+            if (typeof so.unlock === 'function') so.unlock();
+            return;
+          }
           nativeRef.current.orientation = 'locked';
         }
       } catch {
@@ -168,6 +184,7 @@ export const GamePlayer: React.FC<GamePlayerProps> = ({ game, currentUserId, onC
     };
     void enterNative();
     return () => {
+      cancelled = true;
       // ---- Çıkış: her şeyi geri al ----
       if (nativeRef.current.immersive) {
         void StatusBar.show().catch(() => undefined);
@@ -193,6 +210,8 @@ export const GamePlayer: React.FC<GamePlayerProps> = ({ game, currentUserId, onC
   // ---- 2) Oyun mesajları: çık / geri ----
   React.useEffect(() => {
     const onMsg = (ev: MessageEvent) => {
+      const frameWin = frameRef.current?.contentWindow;
+      if (frameWin && ev.source !== frameWin) return;
       const d = ev.data as { type?: string } | null;
       if (d && (d.type === 'ahududu:game-quit' || d.type === 'ahududu:game-back')) onCloseRef.current();
     };

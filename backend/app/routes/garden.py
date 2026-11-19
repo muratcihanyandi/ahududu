@@ -11,8 +11,10 @@ fakat ileride geliştirilebilir olarak işaretlenmiştir.
   • Duygu Havası                : Bugünkü gökyüzün (☀️ ⛅ 🌧 ⛈ 🌙) + ısı haritası.
 """
 
+import json
 from datetime import date, datetime, timedelta
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, desc
@@ -21,8 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.config import settings
 from backend.app.database import get_db
 from backend.app.models import (
-    CoupleDailyQuestion, CoupleTimeCapsule, CoupleSong, CoupleMoodWeather, now_utc,
+    CoupleDailyQuestion, CoupleTimeCapsule, CoupleSong, CoupleMoodWeather,
 )
+from backend.app.time_utils import now_tr, today_tr, to_tr_aware
 from backend.app.websocket_manager import ws_manager
 
 router = APIRouter(prefix="/api/garden", tags=["garden"])
@@ -45,7 +48,27 @@ QUESTION_BANK = [
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    return today_tr().isoformat()
+
+
+async def _get_or_create_daily_question(day: str, db: AsyncSession) -> CoupleDailyQuestion:
+    result = await db.execute(
+        select(CoupleDailyQuestion)
+        .where(CoupleDailyQuestion.question_date == day)
+        .order_by(CoupleDailyQuestion.id.asc())
+        .limit(1)
+    )
+    existing = result.scalars().first()
+    if not existing:
+        existing = CoupleDailyQuestion(
+            question_date=day,
+            prompt=QUESTION_BANK[today_tr().toordinal() % len(QUESTION_BANK)],
+            answers="{}",
+        )
+        db.add(existing)
+        await db.commit()
+        await db.refresh(existing)
+    return existing
 
 
 # ---------------------------------------------------------------------------
@@ -55,23 +78,7 @@ def _today() -> str:
 @router.get("/question")
 async def get_daily_question(viewer: str = Query(...), db: AsyncSession = Depends(get_db)):
     day = _today()
-    result = await db.execute(
-        select(CoupleDailyQuestion)
-        .where(CoupleDailyQuestion.question_date == day)
-        .order_by(desc(CoupleDailyQuestion.id))
-        .limit(1)
-    )
-    existing = result.scalars().first()
-
-    if not existing:
-        existing = CoupleDailyQuestion(
-            question_date=day,
-            prompt=QUESTION_BANK[date.today().toordinal() % len(QUESTION_BANK)],
-            answers="",
-        )
-        db.add(existing)
-        await db.commit()
-        await db.refresh(existing)
+    existing = await _get_or_create_daily_question(day, db)
 
     answers = _parse_answers(existing.answers)
     partner = settings.partner_of(viewer)
@@ -92,21 +99,16 @@ async def get_daily_question(viewer: str = Query(...), db: AsyncSession = Depend
 
 @router.post("/question/answer")
 async def answer_daily_question(payload: dict, db: AsyncSession = Depends(get_db)):
-    viewer = payload.get("user_id")
-    answer = (payload.get("answer") or "").strip()
+    viewer = payload.get("user_id") if isinstance(payload.get("user_id"), str) else ""
+    raw_answer = payload.get("answer")
+    if not isinstance(raw_answer, str):
+        raise HTTPException(status_code=400, detail="Geçersiz cevap")
+    answer = raw_answer.strip()
     if not viewer or not answer:
         raise HTTPException(status_code=400, detail="Cevap boş olamaz")
 
     day = _today()
-    result = await db.execute(
-        select(CoupleDailyQuestion)
-        .where(CoupleDailyQuestion.question_date == day)
-        .order_by(desc(CoupleDailyQuestion.id))
-        .limit(1)
-    )
-    entry = result.scalars().first()
-    if not entry:
-        raise HTTPException(status_code=404, detail="Soru bulunamadı")
+    entry = await _get_or_create_daily_question(day, db)
 
     answers = _parse_answers(entry.answers)
     answers[viewer] = answer[:1000]
@@ -125,16 +127,26 @@ async def answer_daily_question(payload: dict, db: AsyncSession = Depends(get_db
 
 
 def _parse_answers(raw: Optional[str]) -> dict:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return {str(k): str(v) for k, v in parsed.items() if isinstance(v, str)}
+        except Exception:
+            pass
     result = {}
-    for line in (raw or "").split("\n"):
+    for line in text.split("\n"):
         if "|||" in line:
-            who, text = line.split("|||", 1)
-            result[who.strip()] = text.strip()
+            who, body = line.split("|||", 1)
+            result[who.strip()] = body.strip()
     return result
 
 
 def _dump_answers(answers: dict) -> str:
-    return "\n".join(f"{who}|||{text}" for who, text in answers.items())
+    return json.dumps(answers, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +157,7 @@ def _dump_answers(answers: dict) -> str:
 async def list_capsules(viewer: str = Query(...), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(CoupleTimeCapsule).order_by(desc(CoupleTimeCapsule.open_date)))
     capsules = result.scalars().all()
-    now = datetime.now()
+    now = now_tr()
     output = []
     for capsule in capsules:
         can_open = _can_open(capsule, now)
@@ -167,23 +179,30 @@ async def list_capsules(viewer: str = Query(...), db: AsyncSession = Depends(get
 
 @router.post("/capsules")
 async def create_capsule(payload: dict, db: AsyncSession = Depends(get_db)):
-    sender = payload.get("sender")
-    title = (payload.get("title") or "").strip()
-    content = (payload.get("content") or "").strip()
-    open_date = (payload.get("open_date") or "").strip()
+    sender = payload.get("sender") if isinstance(payload.get("sender"), str) else ""
+    raw_title = payload.get("title")
+    raw_content = payload.get("content")
+    raw_open_date = payload.get("open_date")
+    if not all(isinstance(v, str) for v in (raw_title, raw_content, raw_open_date)):
+        raise HTTPException(status_code=400, detail="Başlık, mesaj ve tarih geçerli metin olmalı")
+
+    title = raw_title.strip()
+    content = raw_content.strip()
+    open_date_str = raw_open_date.strip()
 
     if not sender or not title or not content:
         raise HTTPException(status_code=400, detail="Başlık ve mesaj gerekli")
     try:
-        datetime.fromisoformat(open_date)
-    except ValueError as exc:
+        parsed_dt = to_tr_aware(datetime.fromisoformat(open_date_str))
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail="Açılış tarihi geçersiz") from exc
 
+    normalized_open_date = parsed_dt.strftime("%Y-%m-%dT%H:%M:%S")
     capsule = CoupleTimeCapsule(
         sender=sender,
         title=title[:200],
         content=content[:5000],
-        open_date=open_date,
+        open_date=normalized_open_date,
     )
     db.add(capsule)
     await db.commit()
@@ -211,14 +230,30 @@ async def delete_capsule(capsule_id: int, user_id: str = Query(...), db: AsyncSe
 
 def _can_open(capsule: CoupleTimeCapsule, now: datetime) -> bool:
     try:
-        return datetime.fromisoformat(capsule.open_date) <= now
-    except ValueError:
+        target = to_tr_aware(datetime.fromisoformat(capsule.open_date))
+        return target <= to_tr_aware(now)
+    except (ValueError, TypeError):
         return False
 
 
 # ---------------------------------------------------------------------------
 # Bizim Şarkılarımız
 # ---------------------------------------------------------------------------
+
+def _validate_song_url(raw: str) -> str:
+    url = raw.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Şarkı bağlantısı gerekli")
+    low = url.lower()
+    if low.startswith(("javascript:", "data:", "vbscript:", "file:")):
+        raise HTTPException(status_code=400, detail="Geçersiz şarkı bağlantısı")
+    if "://" not in url and "." in url.split("/")[0]:
+        url = "https://" + url
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Geçerli bir http(s) bağlantısı gir")
+    return url[:1000]
+
 
 @router.get("/songs")
 async def list_songs(db: AsyncSession = Depends(get_db)):
@@ -241,18 +276,24 @@ async def list_songs(db: AsyncSession = Depends(get_db)):
 
 @router.post("/songs")
 async def add_song(payload: dict, db: AsyncSession = Depends(get_db)):
-    added_by = payload.get("added_by")
-    title = (payload.get("title") or "").strip()
-    url = (payload.get("url") or "").strip()
-    if not added_by or not title or not url:
+    added_by = payload.get("added_by") if isinstance(payload.get("added_by"), str) else ""
+    raw_title = payload.get("title")
+    raw_url = payload.get("url")
+    if not isinstance(raw_title, str) or not isinstance(raw_url, str):
+        raise HTTPException(status_code=400, detail="Şarkı adı ve bağlantı gerekli")
+    title = raw_title.strip()
+    url = _validate_song_url(raw_url)
+    if not added_by or not title:
         raise HTTPException(status_code=400, detail="Şarkı adı ve bağlantı gerekli")
 
+    artist_val = payload.get("artist")
+    note_val = payload.get("note")
     song = CoupleSong(
         added_by=added_by,
         title=title[:200],
-        artist=(payload.get("artist") or "").strip()[:200] or None,
-        url=url[:1000],
-        note=(payload.get("note") or "").strip()[:1000] or None,
+        artist=(artist_val.strip()[:200] or None) if isinstance(artist_val, str) else None,
+        url=url,
+        note=(note_val.strip()[:1000] or None) if isinstance(note_val, str) else None,
     )
     db.add(song)
     await db.commit()
@@ -285,47 +326,72 @@ async def on_this_day(db: AsyncSession = Depends(get_db)):
     """Geçmiş yılların aynı günündeki anılar, günlükler ve mektuplar."""
     from backend.app.models import DiaryEntry, GalleryItem, LoveLetter
 
-    today = date.today()
+    today = today_tr()
     month_day = today.strftime("%m-%d")
     items: List[dict] = []
 
     diary_result = await db.execute(
-        select(DiaryEntry).where(DiaryEntry.entry_date.like(f"%-{month_day}"))
+        select(DiaryEntry)
+        .where(DiaryEntry.entry_date.like(f"%-{month_day}"))
+        .where(DiaryEntry.is_locked.is_(False))
     )
     for entry in diary_result.scalars().all():
-        year = entry.entry_date[:4]
-        if int(year) < today.year:
+        try:
+            year_int = int(entry.entry_date[:4])
+        except (ValueError, TypeError):
+            continue
+        if year_int < today.year:
             items.append({
                 "type": "diary",
-                "year": int(year),
+                "year": year_int,
                 "title": entry.title,
                 "content": (entry.content or "")[:300],
                 "date": entry.entry_date,
             })
 
-    letter_result = await db.execute(select(LoveLetter))
-    for letter in letter_result.scalars().all():
-        if letter.created_at and letter.created_at.strftime("%m-%d") == month_day:
-            if letter.created_at.year < today.year:
-                items.append({
-                    "type": "letter",
-                    "year": letter.created_at.year,
-                    "title": letter.title,
-                    "content": (letter.content_text or "")[:300],
-                    "date": letter.created_at.date().isoformat(),
-                })
+    letter_result = await db.execute(
+        select(
+            LoveLetter.id,
+            LoveLetter.title,
+            LoveLetter.content_text,
+            LoveLetter.created_at,
+        )
+        .where(LoveLetter.is_deleted.is_not(True))
+        .where(LoveLetter.is_opened.is_(True))
+    )
+    for _, title, content_text, created_at in letter_result.all():
+        if not created_at:
+            continue
+        local_dt = to_tr_aware(created_at)
+        if local_dt.strftime("%m-%d") == month_day and local_dt.year < today.year:
+            items.append({
+                "type": "letter",
+                "year": local_dt.year,
+                "title": title,
+                "content": (content_text or "")[:300],
+                "date": local_dt.date().isoformat(),
+            })
 
-    gallery_result = await db.execute(select(GalleryItem))
-    for item in gallery_result.scalars().all():
-        if item.created_at and item.created_at.strftime("%m-%d") == month_day:
-            if item.created_at.year < today.year:
-                items.append({
-                    "type": "photo",
-                    "year": item.created_at.year,
-                    "title": item.title or item.caption or "Bir anımız",
-                    "url": item.media_url,
-                    "date": item.created_at.date().isoformat(),
-                })
+    gallery_result = await db.execute(
+        select(
+            GalleryItem.title,
+            GalleryItem.caption,
+            GalleryItem.media_url,
+            GalleryItem.created_at,
+        )
+    )
+    for title, caption, media_url, created_at in gallery_result.all():
+        if not created_at:
+            continue
+        local_dt = to_tr_aware(created_at)
+        if local_dt.strftime("%m-%d") == month_day and local_dt.year < today.year:
+            items.append({
+                "type": "photo",
+                "year": local_dt.year,
+                "title": title or caption or "Bir anımız",
+                "url": media_url,
+                "date": local_dt.date().isoformat(),
+            })
 
     items.sort(key=lambda x: -x["year"])
     return {"date": today.isoformat(), "count": len(items), "items": items[:20], "demo": True}
@@ -347,7 +413,7 @@ MOODS = {
 @router.get("/mood")
 async def get_mood(
     user_id: str = Query(...),
-    days: int = Query(30, le=120),
+    days: int = Query(30, ge=1, le=120),
     db: AsyncSession = Depends(get_db),
 ):
     today = _today()
@@ -358,7 +424,7 @@ async def get_mood(
     )
     today_entry = today_result.scalars().first()
 
-    since = (date.today() - timedelta(days=days)).isoformat()
+    since = (today_tr() - timedelta(days=days)).isoformat()
     history_result = await db.execute(
         select(CoupleMoodWeather)
         .where(CoupleMoodWeather.user_id == user_id)
@@ -390,8 +456,8 @@ async def get_mood(
 
 @router.post("/mood")
 async def set_mood(payload: dict, db: AsyncSession = Depends(get_db)):
-    user_id = payload.get("user_id")
-    mood = payload.get("mood")
+    user_id = payload.get("user_id") if isinstance(payload.get("user_id"), str) else ""
+    mood = payload.get("mood") if isinstance(payload.get("mood"), str) else ""
     if not user_id or mood not in MOODS:
         raise HTTPException(status_code=400, detail="Geçerli bir hava seç")
 
@@ -400,6 +466,7 @@ async def set_mood(payload: dict, db: AsyncSession = Depends(get_db)):
         select(CoupleMoodWeather)
         .where(CoupleMoodWeather.user_id == user_id)
         .where(CoupleMoodWeather.mood_date == today)
+        .order_by(CoupleMoodWeather.id.asc())
     )
     entry = result.scalars().first()
     if entry:
@@ -428,7 +495,7 @@ async def garden_summary(viewer: str = Query(...), db: AsyncSession = Depends(ge
 
     capsule_result = await db.execute(select(CoupleTimeCapsule))
     capsules = capsule_result.scalars().all()
-    now = datetime.now()
+    now = now_tr()
     ready_capsules = sum(1 for c in capsules if _can_open(c, now))
     waiting_capsules = len(capsules) - ready_capsules
 

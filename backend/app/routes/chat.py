@@ -3,7 +3,7 @@ from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from typing import Dict, Iterable, List, Optional
 from backend.app.database import get_db
 from backend.app.models import ChatMessage, ChatPollVote, UserProfile
@@ -33,14 +33,21 @@ def build_poll_state(
     """Oyları arayüzün isteyeceği biçime çevirir."""
     option_count = poll_option_count(content)
     votes = [0] * option_count
-    voters: Dict[str, int] = {}
+    latest_by_voter: Dict[str, ChatPollVote] = {}
     for row in rows:
+        voter_key = str(row.voter)
+        prev = latest_by_voter.get(voter_key)
+        if prev is None or (row.id or 0) >= (prev.id or 0):
+            latest_by_voter[voter_key] = row
+
+    voters: Dict[str, int] = {}
+    for voter_key, row in latest_by_voter.items():
         if not isinstance(row.option_index, int):
             continue
         if 0 <= row.option_index < option_count:
             votes[row.option_index] += 1
         # Oy veren kişi her zaman görünsün (seçenek silinmiş olsa bile).
-        voters[str(row.voter)] = int(row.option_index)
+        voters[voter_key] = int(row.option_index)
     return {"votes": votes, "voters": voters}
 
 
@@ -80,16 +87,17 @@ def message_payload(msg: ChatMessage, poll_state: Optional[dict] = None) -> dict
 
 @router.get("/messages", response_model=List[ChatMessageResponse])
 async def get_messages(
-    limit: int = Query(50, le=200),
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    before_id: Optional[int] = Query(None, gt=0),
     db: AsyncSession = Depends(get_db)
 ):
-    result = await db.execute(
-        select(ChatMessage)
-        .order_by(desc(ChatMessage.created_at))
-        .offset(offset)
-        .limit(limit)
-    )
+    query = select(ChatMessage)
+    if before_id is not None:
+        query = query.where(ChatMessage.id < before_id).order_by(desc(ChatMessage.id)).limit(limit)
+    else:
+        query = query.order_by(desc(ChatMessage.id)).offset(offset).limit(limit)
+    result = await db.execute(query)
     messages = list(reversed(result.scalars().all()))
 
     # Anket mesajları oylarıyla birlikte gelsin: uygulama açıldığında oyların
@@ -108,6 +116,13 @@ async def get_messages(
     return response
 
 
+@router.get("/count")
+async def get_message_count(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(func.count(ChatMessage.id)))
+    total = int(result.scalar_one() or 0)
+    return {"total": total}
+
+
 @router.post("/messages", response_model=ChatMessageResponse)
 async def send_message(payload: ChatMessageCreate, db: AsyncSession = Depends(get_db)):
     msg = ChatMessage(
@@ -123,6 +138,16 @@ async def send_message(payload: ChatMessageCreate, db: AsyncSession = Depends(ge
     db.add(msg)
     await db.commit()
     await db.refresh(msg)
+
+    poll_state = None
+    if msg.message_type == "anket":
+        poll_state = build_poll_state(msg.content, [])
+
+    response = ChatMessageResponse.model_validate(msg)
+    if poll_state is not None:
+        response.votes = poll_state["votes"]  # type: ignore[assignment]
+        response.voters = poll_state["voters"]  # type: ignore[assignment]
+    ws_payload = message_payload(msg, poll_state)
 
     # Konum mesajıysa partner'in "Neredeyiz?" bilgisi de güncellenir:
     # biri haritada açıkça konum paylaştıysa bu, en son bilinen konumdur.
@@ -143,17 +168,13 @@ async def send_message(payload: ChatMessageCreate, db: AsyncSession = Depends(ge
             logger.warning("Konum profili güncellenemedi: %s", e)
             await db.rollback()
 
-    poll_state = None
-    if msg.message_type == "anket":
-        poll_state = build_poll_state(msg.content, [])
-
     # Broadcast to partner
     recipient = settings.partner_of(payload.sender)
     await ws_manager.send_to_user(recipient, {
         "type": "new_chat_message",
-        "message": message_payload(msg, poll_state),
+        "message": ws_payload,
     })
-    return msg
+    return response
 
 
 @router.post("/messages/{message_id}/vote")

@@ -499,12 +499,14 @@ async def resolve_stream(page_url: str, client: "httpx.AsyncClient", depth: int 
             kind="hls" if _is_hls(direct[0]) else "file", trail=trail,
         )
 
+    visited = {page_url}
+
     # 2) scx: sitenin şifreli oynatıcı adresleri (ASIL YOL)
     scx_sources = extract_scx_sources(html, base)
     trail.append(f"scx kaynak: {len(scx_sources)}")
     for embed_url in scx_sources[:3]:
         trail.append(f"  -> {embed_url[:90]}")
-        embed = await _fetch_embed(embed_url, page_url, client)
+        embed = await _fetch_embed(embed_url, page_url, client, depth=0, visited=visited)
         if embed.ok:
             embed.title = embed.title or title
             embed.trail = trail + embed.trail
@@ -518,7 +520,7 @@ async def resolve_stream(page_url: str, client: "httpx.AsyncClient", depth: int 
         if any(n in iframe.lower() for n in ("google", "doubleclick", "adsystem")):
             continue
         trail.append(f"  -> {iframe[:90]}")
-        embed = await _fetch_embed(iframe, page_url, client)
+        embed = await _fetch_embed(iframe, page_url, client, depth=0, visited=visited)
         if embed.ok:
             embed.title = embed.title or title
             embed.trail = trail + embed.trail
@@ -528,8 +530,19 @@ async def resolve_stream(page_url: str, client: "httpx.AsyncClient", depth: int 
     return StreamSource(ok=False, reason="Oynatılabilir akış bulunamadı", title=title, trail=trail)
 
 
-async def _fetch_embed(embed_url: str, page_url: str, client: "httpx.AsyncClient") -> StreamSource:
+async def _fetch_embed(
+    embed_url: str,
+    page_url: str,
+    client: "httpx.AsyncClient",
+    depth: int = 0,
+    visited: Optional[set[str]] = None,
+) -> StreamSource:
     """Embed oynatıcı sayfasını iframe başlıklarıyla aç ve akışı çıkar."""
+    visited = visited if visited is not None else set()
+    if depth >= MAX_DEPTH or embed_url in visited:
+        return StreamSource(ok=False, reason="İç içe oynatıcı sınırı aşıldı")
+    visited.add(embed_url)
+
     trail: list[str] = []
     response = await fetch_page(embed_url, _headers_for(embed_url, page_url), client)
 
@@ -548,7 +561,7 @@ async def _fetch_embed(embed_url: str, page_url: str, client: "httpx.AsyncClient
     candidates = _extract_stream_urls(html, base)
     if not candidates:
         for inner in _iframe_candidates(html, base)[:2]:
-            sub = await _fetch_embed(inner, embed_url, client)
+            sub = await _fetch_embed(inner, embed_url, client, depth=depth + 1, visited=visited)
             if sub.ok:
                 sub.trail = trail + sub.trail
                 return sub

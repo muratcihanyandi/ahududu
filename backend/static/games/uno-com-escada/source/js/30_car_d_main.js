@@ -13,37 +13,22 @@ const CAR = {
     carBuildBody(mb, gl);
     if (typeof carBuildParts === 'function') carBuildParts(mb, gl);
     CAR.tris = mb.ni / 3 + gl.ni / 3;
-    set.add(mb.upload(), CAR.slotBody, 3); glass.add_(gl.upload(), CAR.slotBody);
+    const bodyMesh = mb.upload(), glassMesh = gl.upload();
+    set.add(bodyMesh, CAR.slotBody, 3); glass.add_(glassMesh, CAR.slotBody);
+    let wheelMesh = null, wheelBlurMesh = null, steerMesh = null;
     if (typeof carBuildWheel === 'function') {
-      const w = new MeshBuilder(1 << 15), wb = new MeshBuilder(1 << 11); carBuildWheel(w, wb); const wm = w.upload(), wbm = wb.upload(); CAR.tris += 4 * (w.ni + wb.ni) / 3;
+      const w = new MeshBuilder(1 << 15), wb = new MeshBuilder(1 << 11); carBuildWheel(w, wb); const wm = wheelMesh = w.upload(), wbm = wheelBlurMesh = wb.upload(); CAR.tris += 4 * (w.ni + wb.ni) / 3;
       for (let i = 0; i < 4; i++) { set.add(wm, CAR.slotWheel[i], 3); set.add(wbm, CAR.slotWheel[i], 1); }   // disco de borrão: só no passe principal
     }
-    if (typeof carBuildSteer === 'function') { const s = new MeshBuilder(1 << 12); carBuildSteer(s); CAR.tris += s.ni / 3; set.add(s.upload(), CAR.slotSteer, 3); }
-    // Ortak (paylaşılan) meshler: kendi araba ve partner arabası AYNI buffer'ları
-    // kullanır; biri bufersa diğeri de kaybeder (bkz. 55_multiplayer.js).
-    CAR.shared = { body: set.items[0], wheels: set.items[1] ? set.items.slice(1, 5) : [], steer: set.items[5] || null };
+    if (typeof carBuildSteer === 'function') { const s = new MeshBuilder(1 << 12); carBuildSteer(s); CAR.tris += s.ni / 3; steerMesh = s.upload(); set.add(steerMesh, CAR.slotSteer, 3); }
+    CAR.shared = { body: bodyMesh, glass: glassMesh, wheel: wheelMesh, wheelBlur: wheelBlurMesh, steer: steerMesh };
     const tex = typeof carAtlas === 'function' ? carAtlas() : mkTex(4, 4, 'rgba8unorm-srgb');
-    // desenhável: liga o atlas (grupo 3) ve não entra no mapa de sombras estático do mundo
-    const drawable = { draw(pass, ctx) {
-      // Çok oyunculu partner arabası (55_multiplayer.js) ÇOK ÖNEMLİ:
-      // partner arabası için kendi nesneleri kullanılır. Bu yüzden burada
-      // partnerin meshleri CAR.set'ten ÇIKARILIR. Eski sürüm aynı MeshSet'i
-      // iki kez tarıyordu: aynı meshler kendi arabanın matrisiyle ikinci kez
-      // (üst üste) çiziliyor, gölge geçişinde ise bind grubu kurulmadan çizim
-      // yapıldığı için "No bind group set at group index 3" hatası alınıyor ve
-      // KOMUT TAMPONU GEÇERSİZ oluyordu → ekranda eski kare donuyordu.
+    // desenhável: liga o atlas (grupo 3) e não entra no mapa de sombras estático do mundo
+    R.drawables.push({ draw(pass, ctx) {
       if (ctx.kind === KIND.SHADOW && ctx.cascade === 3) return;
       if (!CAR.atlasBG) { if (!fam.bgl3) return; CAR.atlasBG = G.dev.createBindGroup({ layout: fam.bgl3, entries: [{ binding: 0, resource: tex.createView() }] }); }
-      glass.bind = null;                    // vidros: sempre o carro local (a cópia do parceiro define o próprio)
       pass.setBindGroup(3, CAR.atlasBG); set.draw(pass, ctx);
-    } };
-    // Origem do mundo: o mapa de sombras ESTÁTICO (renderStaticShadow) percorre
-    // R.drawables. Mundo çizilsin, ama bu (araba) çizilmesin: o mapa estático
-    // kameranın ilk durumuna göre çizilir ve araba sonradan taşınır; arabayı
-    // oraya çizmek onu yanlış yerde donmuş gölgeyle bırakıyordu. Ayrıca atlas
-    // bağı olmadan çizim, bazı GPU'larda tüm komut tamponunu geçersiz kılıyordu.
-    drawable.worldOnly = true;
-    R.drawables.push(drawable);
+    } });
     R.transparents.push(glass);
     m4ident(CAR._t); CAR.place(CAR._t, CAR._z4, CAR._z4); CAR.place(CAR._t, CAR._z4, CAR._z4);
   },

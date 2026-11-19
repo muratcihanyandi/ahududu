@@ -1,38 +1,22 @@
-// Mapas do mundo na GPU (em volta do circuito): altura e zonas (rgba8, 0,5 m/texel).
-// Altura em 'rgba16float' (R = altura + H_OFF, em metros), e NÃO 'r32float': a
-// maioria das GPUs móveis não tem o recurso float32-filterable, e sem ele r32float
-// não pode ser filtrado (nem convive com o amostrador filtrante do grupo 0), o que
-// impedia o jogo de abrir no celular. rgba16float é filtrável em todo lugar.
+// Mapas do mundo na GPU (em volta do circuito): altura (r32float, 1 m/texel) e zonas (rgba8, 0,5 m/texel).
+// zona: R = distância à borda do asfalto ([-8,+24] m → 0..1) | G = brita (distância assinada à borda, ±8 m; >0.5 = dentro)
+//       B = grama alta/rústica 0..1 (0 = aparada junto à pista) | A = piso de concreto/boxes (distância assinada ±8 m; >0.5 = dentro)
 const WM = { height: null, zone: null, x0: 0, z0: 0, sx: 1, sz: 1, zw: 0, zh: 0, zdata: null };
-const H_OFF = 512;   // deslocamento para manter as alturas positivas (m)
-// float32 → half (IEEE 754 binary16), arredondamento ao mais próximo
-const _f2hBuf = new Float32Array(1), _f2hU32 = new Uint32Array(_f2hBuf.buffer);
-function floatToHalf(v) {
-  _f2hBuf[0] = v;
-  const x = _f2hU32[0], sign = (x >>> 16) & 0x8000;
-  let exp = (x >>> 23) & 0xff, man = x & 0x7fffff;
-  if (exp === 0xff) return sign | 0x7c00 | (man ? 0x200 : 0);      // Inf / NaN
-  let e = exp - 127 + 15;
-  if (e >= 0x1f) return sign | 0x7c00;                             // taşma → Inf
-  if (e <= 0) {                                                    // normal altı / sıfır
-    if (e < -10) return sign;
-    man |= 0x800000;
-    const shift = 14 - e;
-    let h = (man + (1 << (shift - 1))) >>> shift;
-    return sign | h;
-  }
-  man = (man + 0x1000) >>> 13;                                     // yuvarla (11 bit mantis)
-  if (man === 0x400) { man = 0; e++; if (e >= 0x1f) return sign | 0x7c00; }
-  return sign | (e << 10) | man;
-}
 function worldMapBuild() {
   const dev = G.dev;
   WM.x0 = HF.x0; WM.z0 = HF.z0; WM.sx = HF.w - 1; WM.sz = HF.h - 1;
-  // RGBA16F: mevcut veriyi yarı duyarlıklı float'a çevir (R = yükseklik, G/B/A = 0)
-  const n = HF.w * HF.h, half = new Uint16Array(n * 4);
-  for (let i = 0; i < n; i++) half[i * 4] = floatToHalf(HF.d[i] + H_OFF);
-  WM.height = mkTex(HF.w, HF.h, 'rgba16float', TU.TB | TU.CD);
-  dev.queue.writeTexture({ texture: WM.height }, half, { bytesPerRow: HF.w * 8 }, [HF.w, HF.h]);
+  if (G.hasF32Filter !== false) {
+    WM.height = mkTex(HF.w, HF.h, 'r32float', TU.TB | TU.CD);
+    dev.queue.writeTexture({ texture: WM.height }, HF.d, { bytesPerRow: HF.w * 4 }, [HF.w, HF.h]);
+  } else {
+    const n = HF.w * HF.h, f16 = new Uint16Array(n * 4), b32 = new Float32Array(1), u32 = new Uint32Array(b32.buffer);
+    for (let i = 0; i < n; i++) {
+      b32[0] = HF.d[i]; const x = u32[0], s = (x >>> 16) & 0x8000; let e = ((x >>> 23) & 0xff) - 112, m = (x & 0x7fffff) + 0x1000;
+      f16[i * 4] = e <= 0 ? s : e >= 31 ? (s | 0x7c00) : (s | (e << 10) | (m >>> 13));
+    }
+    WM.height = mkTex(HF.w, HF.h, 'rgba16float', TU.TB | TU.CD);
+    dev.queue.writeTexture({ texture: WM.height }, f16, { bytesPerRow: HF.w * 8 }, [HF.w, HF.h]);
+  }
   const zw = WM.zw = (HF.w - 1) * 2 + 1, zh = WM.zh = (HF.h - 1) * 2 + 1, z = WM.zdata = new Uint8Array(zw * zh * 4), loc = new Float64Array(4);
   const enc = (v, lo, hi) => Math.round(sat((v - lo) / (hi - lo)) * 255);
   for (let j = 0; j < zh; j++) for (let i = 0; i < zw; i++) {

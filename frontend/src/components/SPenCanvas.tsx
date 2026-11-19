@@ -79,21 +79,35 @@ export const SPenCanvas: React.FC<SPenCanvasProps> = ({
 
     strokeList.forEach((st) => {
       if (st.points.length < 2) return;
-      ctx.beginPath();
       ctx.strokeStyle = st.isEraser ? '#fffdf7' : st.color;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
       for (let i = 0; i < st.points.length - 1; i++) {
+        const p0 = i > 0 ? st.points[i - 1] : st.points[0];
         const p1 = st.points[i];
         const p2 = st.points[i + 1];
         const avgPressure = (p1.pressure + p2.pressure) / 2 || 0.5;
         ctx.lineWidth = st.size * (0.6 + avgPressure * 0.8);
 
+        const startX = i === 0 ? p1.x : (p0.x + p1.x) / 2;
+        const startY = i === 0 ? p1.y : (p0.y + p1.y) / 2;
         const midX = (p1.x + p2.x) / 2;
         const midY = (p1.y + p2.y) / 2;
+
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
         ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
+        ctx.stroke();
       }
+
+      const prev = st.points[st.points.length - 2];
+      const last = st.points[st.points.length - 1];
+      const tailPressure = (prev.pressure + last.pressure) / 2 || 0.5;
+      ctx.lineWidth = st.size * (0.6 + tailPressure * 0.8);
+      ctx.beginPath();
+      ctx.moveTo((prev.x + last.x) / 2, (prev.y + last.y) / 2);
+      ctx.lineTo(last.x, last.y);
       ctx.stroke();
     });
   };
@@ -134,19 +148,22 @@ export const SPenCanvas: React.FC<SPenCanvasProps> = ({
 
     const points = currentStrokeRef.current;
     if (points.length > 1) {
+      const prev = points.length > 2 ? points[points.length - 3] : points[0];
       const p1 = points[points.length - 2];
       const p2 = points[points.length - 1];
       const avgPressure = (p1.pressure + p2.pressure) / 2 || 0.5;
+
+      const startX = points.length === 2 ? p1.x : (prev.x + p1.x) / 2;
+      const startY = points.length === 2 ? p1.y : (prev.y + p1.y) / 2;
+      const midX = (p1.x + p2.x) / 2;
+      const midY = (p1.y + p2.y) / 2;
 
       ctx.beginPath();
       ctx.strokeStyle = isEraser ? '#fffdf7' : color;
       ctx.lineWidth = brushSize * (0.6 + avgPressure * 0.8);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-
-      const midX = (p1.x + p2.x) / 2;
-      const midY = (p1.y + p2.y) / 2;
-      ctx.moveTo(p1.x, p1.y);
+      ctx.moveTo(startX, startY);
       ctx.quadraticCurveTo(p1.x, p1.y, midX, midY);
       ctx.stroke();
     }
@@ -159,7 +176,26 @@ export const SPenCanvas: React.FC<SPenCanvasProps> = ({
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch (err) {}
 
-    if (currentStrokeRef.current.length > 0) {
+    const pts = currentStrokeRef.current;
+    if (pts.length >= 2) {
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (ctx) {
+        const prev = pts[pts.length - 2];
+        const last = pts[pts.length - 1];
+        const tailPressure = (prev.pressure + last.pressure) / 2 || 0.5;
+        ctx.beginPath();
+        ctx.strokeStyle = isEraser ? '#fffdf7' : color;
+        ctx.lineWidth = brushSize * (0.6 + tailPressure * 0.8);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.moveTo((prev.x + last.x) / 2, (prev.y + last.y) / 2);
+        ctx.lineTo(last.x, last.y);
+        ctx.stroke();
+      }
+    }
+
+    if (pts.length > 0) {
       const newStroke: Stroke = {
         points: [...currentStrokeRef.current],
         color,

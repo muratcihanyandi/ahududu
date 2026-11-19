@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, Feather, Sparkles, Plus, ChevronRight, UserCheck, Archive } from 'lucide-react';
-import { UserId, UserProfile, LoveLetter, CoupleStatus, USERS, partnerOf, nameOf, SnapFeed, Showtime } from './types';
+import { Feather, Sparkles, ChevronRight, Archive } from 'lucide-react';
+import { UserId, UserProfile, LoveLetter, partnerOf, nameOf, emojiOf, SnapFeed, Showtime } from './types';
 import { api } from './services/api';
 import { wsClient } from './services/websocket';
 import {
@@ -69,7 +69,11 @@ export const App: React.FC = () => {
     watching: boolean;
     title?: string;
   }>({ watching: false });
-  const [snapToast, setSnapToast] = useState<string | null>(null);
+  const [snapToast, setSnapToast] = useState<{
+    text: string;
+    target?: TabType | 'cinema';
+  } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const [tonightCinema, setTonightCinema] = useState<Showtime | null>(null);
   /** Sunucu arşivi: silinmiş olsa da mektuplar burada tutulur (kaybolmaz). */
   const [archivedLetters, setArchivedLetters] = useState<LoveLetter[]>([]);
@@ -82,35 +86,15 @@ export const App: React.FC = () => {
     return Math.max(0, Math.floor(diff / 86400000));
   })();
 
-  /** Bu cihazda arşive alınan mektup kimlikleri (localStorage'da kalıcı). */
-  const readHiddenLetters = (owner: UserId): number[] => {
-    try {
-      const raw = localStorage.getItem(`ahududu_hidden_letters_${owner}`);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter((n) => typeof n === 'number') : [];
-    } catch {
-      return [];
+  const showToast = (text: string, target?: TabType | 'cinema', durationMs = 4000) => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
     }
-  };
-
-  const [letterHideList, setLetterHideList] = useState<number[]>(() =>
-    readHiddenLetters((localStorage.getItem('ahududu_user') as UserId) || 'murat')
-  );
-
-  // Telefon el değiştirdiyse (kullanıcı değiştiyse) o kişinin listesine geç.
-  useEffect(() => {
-    if (!currentUser) return;
-    setLetterHideList(readHiddenLetters(currentUser));
-  }, [currentUser]);
-
-  const saveLetterHideList = (list: number[]) => {
-    if (!currentUser) return;
-    setLetterHideList(list);
-    try {
-      localStorage.setItem(`ahududu_hidden_letters_${currentUser}`, JSON.stringify(list));
-    } catch {
-      /* yok say */
-    }
+    setSnapToast({ text, target });
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setSnapToast(null);
+    }, durationMs);
   };
 
   /** Arşivde ne kadar mektup var? (arşiv bölümü her zaman görünür) */
@@ -125,6 +109,34 @@ export const App: React.FC = () => {
   const chatVisibleRef = useRef(false);
   chatVisibleRef.current =
     activeTab === 'chat' && !isCinemaOpen && !selectedLetter && !isEditorOpen;
+
+  const navStateRef = useRef({
+    activeGame: null as GameEntry | null,
+    isEditorOpen: false,
+    selectedLetter: null as LoveLetter | null,
+    isCinemaOpen: false,
+    showRadar: false,
+    activeTab: 'home' as TabType,
+  });
+  navStateRef.current = {
+    activeGame,
+    isEditorOpen,
+    selectedLetter,
+    isCinemaOpen,
+    showRadar,
+    activeTab,
+  };
+
+  /** Oyun açıkken arka plan kaydırılamasın (tam ekran deneyimi). */
+  const isGameOpen = Boolean(activeGame);
+  useEffect(() => {
+    if (!isGameOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [isGameOpen]);
 
   // Sync real hardware battery with server
   const syncBattery = async (userId: UserId) => {
@@ -214,6 +226,34 @@ export const App: React.FC = () => {
 
     // WS Listeners
     const unsubLetter = wsClient.on('new_letter', () => loadLetters());
+    const unsubLettersUpdated = wsClient.on('letters_updated', () => {
+      void loadLetters();
+    });
+    const unsubLetterOpened = wsClient.on('letter_opened_by_partner', (d: any) => {
+      const openedId = d?.letter_id;
+      if (typeof openedId === 'number') {
+        setLetters((prev) =>
+          prev.map((l) => (l.id === openedId ? { ...l, is_opened: true, is_sealed: false } : l))
+        );
+        setArchivedLetters((prev) =>
+          prev.map((l) => (l.id === openedId ? { ...l, is_opened: true, is_sealed: false } : l))
+        );
+      } else {
+        void loadLetters();
+      }
+    });
+    const unsubNudge = wsClient.on('nudge', (d: any) => {
+      if (d?.sender && d.sender !== currentUser) {
+        playHaptic([120, 80, 120]);
+        showToast(
+          d.message
+            ? `${emojiOf(d.sender)} ${nameOf(d.sender)}: ${d.message}`
+            : `${emojiOf(d.sender)} ${nameOf(d.sender)} seni dürttü 💗`,
+          'home',
+          4500
+        );
+      }
+    });
     const unsubStatus = wsClient.on('partner_location_update', (d: any) => {
       setDistanceKm(d.distance_km);
     });
@@ -230,24 +270,28 @@ export const App: React.FC = () => {
         const online = Boolean(d.is_online);
         setIsPartnerOnline(online);
         // Sunucu ayrılırken son görülme zamanını da gönderir; ek istek gerekmez.
-        if (!online && d.last_seen) setPartnerLastSeen(d.last_seen);
+        if (!online && d.last_seen) {
+          setPartnerLastSeen(d.last_seen);
+          setPartnerProfile((prev) => (prev ? { ...prev, last_seen: d.last_seen } : prev));
+        }
       }
     });
 
     // Yeni an / sinema daveti gibi olayları ana ekranda da yakala
     const unsubSnap = wsClient.on('new_snap', (d: any) => {
       if (d?.snap?.sender === partnerId) {
-        setSnapToast(`${nameOf(partnerId)} yeni bir an paylaştı! 📸 "Anlar" sekmesinden bak`);
-        window.setTimeout(() => setSnapToast(null), 4000);
+        showToast(`${nameOf(partnerId)} yeni bir an paylaştı! 📸 "Anlar" sekmesinden bak`, 'memories', 4000);
         loadSnapFeed();
       }
     });
     const unsubCinema = wsClient.on('cinema_started', (d: any) => {
       if (d?.started_by && d.started_by !== (currentUser as UserId)) {
         // Partner filmi başlattı: ZORLA salona sokmuyoruz, sadece haber veriyoruz.
-        // Senkronizasyon "izinli" çalışır: kullanıcı isterse dokunup girer.
-        setSnapToast(`${nameOf(d.started_by)} ${d.title ? `"${d.title}"` : 'bir film'} başlattı 🍿`);
-        window.setTimeout(() => setSnapToast(null), 5000);
+        const who =
+          d.started_by === 'calendar'
+            ? '🎬 Takvim seansı'
+            : `${emojiOf(d.started_by)} ${nameOf(d.started_by)}`;
+        showToast(`${who} ${d.title ? `"${d.title}"` : 'bir film'} başlattı 🍿`, 'cinema', 5000);
       }
     });
 
@@ -255,10 +299,11 @@ export const App: React.FC = () => {
     const unsubPartnerJoined = wsClient.on('cinema_partner_joined', (d: any) => {
       if (!d?.user_id || d.user_id === currentUser) return;
       playHaptic([120, 100, 180, 800, 120, 100, 180]);
-      setSnapToast(
-        `${nameOf(d.user_id)} sinema salonuna girdi! 🍿${d.title ? ` · ${d.title}` : ''}`
+      showToast(
+        `${nameOf(d.user_id)} sinema salonuna girdi! 🍿${d.title ? ` · ${d.title}` : ''}`,
+        'cinema',
+        7000
       );
-      window.setTimeout(() => setSnapToast(null), 7000);
       setCinemaPartnerStatus({ watching: true, title: d.title });
     });
 
@@ -277,16 +322,22 @@ export const App: React.FC = () => {
 
       // Sohbet sekmesi açık değilken sayacı artır.
       if (!chatVisibleRef.current) setUnreadChat((prev) => prev + 1);
-      setSnapToast(`${nameOf(msg.sender)}: ${previewOfMessage(msg)}`);
-      window.setTimeout(() => setSnapToast(null), 3500);
+      showToast(`${nameOf(msg.sender)}: ${previewOfMessage(msg)}`, 'chat', 3500);
     });
 
     loadSnapFeed();
 
     return () => {
       clearInterval(batteryInterval);
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
       unsubBattery();
       unsubLetter();
+      unsubLettersUpdated();
+      unsubLetterOpened();
+      unsubNudge();
       unsubStatus();
       unsubProfile();
       unsubPartnerStatus();
@@ -311,23 +362,28 @@ export const App: React.FC = () => {
     if (!currentUser) return;
 
     const closeTopmost = (): boolean => {
-      if (activeGame) {
+      const st = navStateRef.current;
+      if (st.activeGame) {
         setActiveGame(null);
         return true;
       }
-      if (isEditorOpen) {
+      if (st.isEditorOpen) {
         setIsEditorOpen(false);
         return true;
       }
-      if (selectedLetter) {
+      if (st.selectedLetter) {
         setSelectedLetter(null);
         return true;
       }
-      if (isCinemaOpen) {
+      if (st.isCinemaOpen) {
         // Sinema ekranı açıksa kapat; salon içindeyse CinemaSalon kendi
         // handler'ıyla önce salondan çıkar (aşağıdaki kayda bakın).
         if (cinemaInnerBackRef.current && cinemaInnerBackRef.current()) return true;
         setIsCinemaOpen(false);
+        return true;
+      }
+      if (st.showRadar) {
+        setShowRadar(false);
         return true;
       }
       return false;
@@ -335,11 +391,12 @@ export const App: React.FC = () => {
 
     const unregister = registerBackHandler(closeTopmost);
     const uninstall = installBackNavigation(() => {
-      // Açık pencere yok:
-      // - Alt sekmedeysek ana ekrana dön (işlenmiş sayılır)
-      // - Ana ekrandaysak false döndür → native taraf uygulamayı arkaya alır
-      if (isEditorOpen || selectedLetter || isCinemaOpen || activeGame) return true;
-      if (activeTab !== 'home') {
+      const st = navStateRef.current;
+      // Açık pencere varsa buradaki navigation handler tüketmesin (back handler kapatır).
+      if (st.isEditorOpen || st.selectedLetter || st.isCinemaOpen || st.activeGame || st.showRadar) {
+        return true;
+      }
+      if (st.activeTab !== 'home') {
         setActiveTab('home');
         return true;
       }
@@ -350,7 +407,7 @@ export const App: React.FC = () => {
       unregister();
       uninstall();
     };
-  }, [currentUser, isEditorOpen, selectedLetter, isCinemaOpen, activeTab, activeGame]);
+  }, [currentUser]);
 
   const loadSnapFeed = async () => {
     if (!currentUser) return;
@@ -375,20 +432,30 @@ export const App: React.FC = () => {
   const loadInitialData = async () => {
     if (!currentUser) return;
     try {
-      const [partnerProf, coupleStat] = await Promise.all([
+      const [partnerProf, coupleStat, gardenSummary] = await Promise.all([
         api.getProfile(partnerId),
         api.getCoupleStatus(),
+        api.getGardenSummary(currentUser).catch(() => null),
       ]);
 
       setPartnerProfile(partnerProf);
       // Sohbet başlığındaki "son görülme" ilk açılışta doğru görünsün.
       if (partnerProf?.last_seen) setPartnerLastSeen(partnerProf.last_seen);
       setDistanceKm(coupleStat.distance_km);
+      if (gardenSummary) {
+        setGardenNews(
+          Boolean(
+            gardenSummary.question_pending ||
+              gardenSummary.ready_capsules > 0 ||
+              gardenSummary.on_this_day_count > 0
+          )
+        );
+      }
     } catch (e) {
       console.error(e);
     }
-    // Mektuplar ayrı yüklenir: bu adım patlasa bile mektuplar kaybolmasın.
-    await loadLetters();
+    // Mektuplar ve bu akşamki seans ayrı yüklenir: biri patlasa bile uygulama açılsın.
+    await Promise.all([loadLetters(), loadTonightCinema(currentUser)]);
   };
 
   /**
@@ -498,16 +565,6 @@ export const App: React.FC = () => {
    * navigasyon barına yapışır. Diğer sekmeler kaydırılabilir sayfa olarak kalır.
    */
   const isChatTab = activeTab === 'chat';
-  /** Oyun açıkken arka plan kaydırılamasın (tam ekran deneyimi). */
-  const isGameOpen = Boolean(activeGame);
-  React.useEffect(() => {
-    if (!isGameOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [isGameOpen]);
 
   return (
     <div
@@ -566,6 +623,7 @@ export const App: React.FC = () => {
               distanceKm={distanceKm}
               partnerName={partnerName}
               isPartnerOnline={isPartnerOnline}
+              partnerLastSeen={partnerLastSeen}
               daysTogether={daysTogether}
             />
 
@@ -905,48 +963,7 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Memories & Notes Tab */}
-        {activeTab === 'memories' && (
-          <div className="flex flex-col space-y-4">
-            {/* Sub-tab switch */}
-            <div className="flex items-center bg-rose-100/70 p-1 rounded-2xl">
-              <button
-                onClick={() => {
-                  setMemorySubTab('gallery');
-                  playHaptic(15);
-                }}
-                className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${
-                  memorySubTab === 'gallery'
-                    ? 'bg-white text-berry-900 shadow-xs'
-                    : 'text-stone-600 hover:text-berry-900'
-                }`}
-              >
-                📸 Ortak Fotoğraf Galerimiz
-              </button>
-              <button
-                onClick={() => {
-                  setMemorySubTab('notes');
-                  playHaptic(15);
-                }}
-                className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${
-                  memorySubTab === 'notes'
-                    ? 'bg-white text-berry-900 shadow-xs'
-                    : 'text-stone-600 hover:text-berry-900'
-                }`}
-              >
-                📝 Notlarımız & İsteklerimiz
-              </button>
-            </div>
-
-            {memorySubTab === 'gallery' ? (
-              <MemoryGallery currentUserId={currentUser} />
-            ) : (
-              <SharedNotes currentUserId={currentUser} />
-            )}
-          </div>
-        )}
-
-        {/* Bahçe: Günün sorusu · Zaman kapsülleri · Şarkılarımız · Duygu havası (demo) */}
+        {/* Bahçe: Günün sorusu · Zaman kapsülleri · Şarkılarımız · Duygu havası */}
         {activeTab === 'garden' && <GardenView currentUserId={currentUser} />}
 
         {/* Oyunlar: eklediğimiz oyunların listesi (tıklayınca tam ekran açılır) */}
@@ -960,9 +977,9 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Anılar: Anlık · Günlük · Hayvanlar · Sinema · Radar */}
+        {/* Anılar: Sinema · Anlık · Günlük · Hayvanlar · Radar · Galeri · Notlar */}
         {activeTab === 'memories' && (
-          <div className="flex flex-col space-y-4">
+          <div className="flex flex-col space-y-6">
             <MoreHub
               currentUserId={currentUser}
               onOpenCinema={() => setIsCinemaOpen(true)}
@@ -982,12 +999,49 @@ export const App: React.FC = () => {
                 <CoupleRadar currentUserId={currentUser} partnerName={partnerName} />
               </div>
             )}
+
+            {/* Sub-tab switch: Galeri & Notlar */}
+            <div className="flex flex-col space-y-4">
+              <div className="flex items-center bg-rose-100/70 p-1 rounded-2xl">
+                <button
+                  onClick={() => {
+                    setMemorySubTab('gallery');
+                    playHaptic(15);
+                  }}
+                  className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${
+                    memorySubTab === 'gallery'
+                      ? 'bg-white text-berry-900 shadow-xs'
+                      : 'text-stone-600 hover:text-berry-900'
+                  }`}
+                >
+                  📸 Ortak Fotoğraf Galerimiz
+                </button>
+                <button
+                  onClick={() => {
+                    setMemorySubTab('notes');
+                    playHaptic(15);
+                  }}
+                  className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-all ${
+                    memorySubTab === 'notes'
+                      ? 'bg-white text-berry-900 shadow-xs'
+                      : 'text-stone-600 hover:text-berry-900'
+                  }`}
+                >
+                  📝 Notlarımız & İsteklerimiz
+                </button>
+              </div>
+
+              {memorySubTab === 'gallery' ? (
+                <MemoryGallery currentUserId={currentUser} />
+              ) : (
+                <SharedNotes currentUserId={currentUser} />
+              )}
+            </div>
           </div>
         )}
       </main>
 
-      {/* Bottom Navigation Bar — her zaman 5 tuş.
-          Sohbette mesaj yazma alanının altına YAPIŞIK, diğer sekmelerde yüzen bar. */}
+      {/* Bottom Navigation Bar */}
       <Navigation
         activeTab={activeTab}
         variant={isChatTab ? 'attached' : 'floating'}
@@ -1017,9 +1071,13 @@ export const App: React.FC = () => {
       {selectedLetter && (
         <LetterViewer
           letter={selectedLetter}
+          currentUserId={currentUser}
           onClose={() => setSelectedLetter(null)}
           onLetterOpened={(updated) => {
             setLetters((prev) =>
+              prev.map((l) => (l.id === updated.id ? updated : l))
+            );
+            setArchivedLetters((prev) =>
               prev.map((l) => (l.id === updated.id ? updated : l))
             );
           }}
@@ -1064,17 +1122,23 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Yeni an / sinema bildirimi */}
+      {/* Yeni an / sinema / sohbet bildirimi */}
       {snapToast && (
         <div
           onClick={() => {
-            setActiveTab('memories');
+            const target = snapToast.target;
             setSnapToast(null);
+            if (target === 'cinema') {
+              setIsCinemaOpen(true);
+            } else if (target) {
+              setActiveTab(target);
+              if (target === 'chat') setUnreadChat(0);
+            }
           }}
           className="fixed left-1/2 -translate-x-1/2 top-16 z-[95] max-w-[92%] px-4 py-2.5 rounded-2xl bg-berry-900/95 text-white text-xs font-semibold shadow-2xl flex items-center gap-2 animate-[fadeIn_0.3s_ease-out] cursor-pointer"
         >
           <Sparkles className="w-4 h-4 text-amber-300 shrink-0" />
-          <span>{snapToast}</span>
+          <span>{snapToast.text}</span>
         </div>
       )}
     </div>

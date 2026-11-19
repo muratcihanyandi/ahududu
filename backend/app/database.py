@@ -1,4 +1,3 @@
-import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import declarative_base
@@ -11,13 +10,15 @@ if db_url.startswith("postgres://"):
 elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+asyncpg://"):
     db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-engine = create_async_engine(
-    db_url,
-    echo=False,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20
-)
+engine_kwargs = {
+    "echo": False,
+    "pool_pre_ping": True,
+}
+if not db_url.startswith("sqlite"):
+    engine_kwargs["pool_size"] = 10
+    engine_kwargs["max_overflow"] = 20
+
+engine = create_async_engine(db_url, **engine_kwargs)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

@@ -8,6 +8,7 @@ class WebSocketClient {
   private currentUserId: UserId | null = null;
   private handlers: Map<string, Set<MessageHandler>> = new Map();
   private reconnectTimer: any = null;
+  private pingTimer: any = null;
   private isExplicitlyClosed = false;
   private openListeners: Set<(open: boolean) => void> = new Set();
 
@@ -21,12 +22,50 @@ class WebSocketClient {
     });
   }
 
+  private clearPing() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+  }
+
+  private startPing(socket: WebSocket) {
+    this.clearPing();
+    this.pingTimer = setInterval(() => {
+      if (this.ws !== socket || socket.readyState !== WebSocket.OPEN) return;
+      try {
+        socket.send(JSON.stringify({ type: 'ping' }));
+      } catch {
+        /* yok say */
+      }
+    }, 25000);
+  }
+
   connect(userId: UserId) {
-    if (this.ws && this.currentUserId === userId && this.ws.readyState === WebSocket.OPEN) {
+    if (
+      this.ws &&
+      this.currentUserId === userId &&
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
+    ) {
       return;
     }
     this.currentUserId = userId;
     this.isExplicitlyClosed = false;
+
+    if (this.ws) {
+      const old = this.ws;
+      this.ws = null;
+      this.clearPing();
+      old.onopen = null;
+      old.onmessage = null;
+      old.onclose = null;
+      old.onerror = null;
+      try {
+        old.close();
+      } catch {
+        /* yok say */
+      }
+    }
 
     // Determine WS URL
     let wsHost = window.location.host;
@@ -34,7 +73,7 @@ class WebSocketClient {
 
     // If running in Capacitor Android Native App (where host is localhost)
     if (window.location.hostname === 'localhost' && window.location.port !== '33470' && window.location.port !== '5173') {
-      const serverUrl = localStorage.getItem('ahududu_server_url') || 'https://ahududu.fakeyol.com';
+      const serverUrl = (localStorage.getItem('ahududu_server_url') || 'https://ahududu.fakeyol.com').replace(/\/+$/, '');
       const cleanHost = serverUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
       const isHttps = serverUrl.startsWith('https');
       wsProtocol = isHttps ? 'wss:' : 'ws:';
@@ -44,19 +83,23 @@ class WebSocketClient {
     const wsUrl = `${wsProtocol}//${wsHost}/ws/${userId}`;
 
     try {
-      this.ws = new WebSocket(wsUrl);
+      const socket = new WebSocket(wsUrl);
+      this.ws = socket;
 
-      this.ws.onopen = () => {
+      socket.onopen = () => {
+        if (this.ws !== socket) return;
         console.log(`[Ahududu WS] Connected as ${userId}`);
         this.emit('connection_status', { connected: true });
         this.notifyOpen(true);
+        this.startPing(socket);
         if (this.reconnectTimer) {
           clearTimeout(this.reconnectTimer);
           this.reconnectTimer = null;
         }
       };
 
-      this.ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (this.ws !== socket) return;
         try {
           const data = JSON.parse(event.data);
           this.handleIncoming(data);
@@ -65,8 +108,10 @@ class WebSocketClient {
         }
       };
 
-      this.ws.onclose = () => {
+      socket.onclose = () => {
+        if (this.ws !== socket) return;
         console.warn(`[Ahududu WS] Closed for ${userId}`);
+        this.clearPing();
         this.emit('connection_status', { connected: false });
         this.notifyOpen(false);
         if (!this.isExplicitlyClosed) {
@@ -74,7 +119,8 @@ class WebSocketClient {
         }
       };
 
-      this.ws.onerror = (err) => {
+      socket.onerror = (err) => {
+        if (this.ws !== socket) return;
         console.warn('[Ahududu WS] Error:', err);
       };
     } catch (e) {
@@ -106,7 +152,7 @@ class WebSocketClient {
       playHaptic(pattern);
     } else if (type === 'walkie_talkie_play') {
       soundEngine.playWalkieBeep();
-    } else if (type === 'new_letter') {
+    } else if (type === 'new_letter' && data.letter) {
       playHaptic(HAPTIC_PATTERNS.hug);
       soundEngine.playLoveChime();
     }
@@ -171,13 +217,19 @@ class WebSocketClient {
 
   disconnect() {
     this.isExplicitlyClosed = true;
+    this.clearPing();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     if (this.ws) {
-      this.ws.close();
+      const old = this.ws;
       this.ws = null;
+      old.onopen = null;
+      old.onmessage = null;
+      old.onclose = null;
+      old.onerror = null;
+      old.close();
     }
   }
 }

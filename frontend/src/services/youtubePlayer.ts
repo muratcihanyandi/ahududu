@@ -458,6 +458,8 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
   private nudgeSupported = true;
   private muted = false;
   private autoplayCheckTimer: number | null = null;
+  private verifyTimer: number | null = null;
+  private userWantsPlay = false;
   private destroyed = false;
   /** Oynat komutu işe yaramazsa kaç kez yeniden denendi (sonsuz döngü olmasın). */
   private playRetries = 0;
@@ -479,8 +481,8 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
     this.player = new YT.Player(this.options.container, {
       videoId: this.options.videoId,
       playerVars: {
-        autoplay: 1,
-        controls: 1,
+        autoplay: 0,
+        controls: 0,
         enablejsapi: 1,
         playsinline: 1,
         rel: 0,
@@ -496,7 +498,7 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
     });
   }
 
-  private handleReady(event: any): void {
+  private handleReady(_event: any): void {
     this.ready = true;
     this.suppress(600);
     try {
@@ -506,13 +508,16 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
     }
     this.events.onDuration?.(this.duration);
     this.events.onReady?.(this.duration);
-    this.scheduleAutoplayCheck();
+    if (this.userWantsPlay) {
+      this.scheduleAutoplayCheck();
+    }
   }
 
   /** Autoplay engellendiyse sessize alıp yeniden dene ve sesi açmayı öner. */
   private scheduleAutoplayCheck(): void {
     if (this.autoplayCheckTimer) window.clearTimeout(this.autoplayCheckTimer);
     this.autoplayCheckTimer = window.setTimeout(() => {
+      if (!this.userWantsPlay || this.destroyed) return;
       try {
         const state = this.player?.getPlayerState?.();
         const playing = state === 1 || state === 3;
@@ -538,7 +543,7 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
    * kez dokunuşun içinde çağrıldığı için bu denemeler genellikle başarılıdır.
    */
   private verifyPlaying(): void {
-    if (this.destroyed) return;
+    if (this.destroyed || !this.userWantsPlay) return;
     const state = this.stateValue();
     if (state === 1 || state === 3) {
       this.playRetries = 0;
@@ -557,7 +562,8 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
     } catch {
       /* yok say */
     }
-    window.setTimeout(() => this.verifyPlaying(), 700);
+    if (this.verifyTimer) window.clearTimeout(this.verifyTimer);
+    this.verifyTimer = window.setTimeout(() => this.verifyPlaying(), 700);
   }
 
   private handleStateChange(event: any): void {
@@ -657,6 +663,7 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
 
   play(): void {
     if (!this.player) return;
+    this.userWantsPlay = true;
     this.suppress();
     this.playRetries = 0;
     try {
@@ -666,7 +673,8 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
         this.player.seekTo(0, true);
       }
       this.player.playVideo();
-      window.setTimeout(() => this.verifyPlaying(), 800);
+      if (this.verifyTimer) window.clearTimeout(this.verifyTimer);
+      this.verifyTimer = window.setTimeout(() => this.verifyPlaying(), 800);
     } catch {
       /* yok say */
     }
@@ -674,6 +682,15 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
 
   pause(): void {
     if (!this.player) return;
+    this.userWantsPlay = false;
+    if (this.autoplayCheckTimer) {
+      window.clearTimeout(this.autoplayCheckTimer);
+      this.autoplayCheckTimer = null;
+    }
+    if (this.verifyTimer) {
+      window.clearTimeout(this.verifyTimer);
+      this.verifyTimer = null;
+    }
     this.suppress();
     try {
       this.player.pauseVideo();
@@ -760,7 +777,9 @@ export class YouTubePlayerAdapter extends BaseAdapter implements PlayerAdapter {
 
   destroy(): void {
     this.destroyed = true;
+    this.userWantsPlay = false;
     if (this.autoplayCheckTimer) window.clearTimeout(this.autoplayCheckTimer);
+    if (this.verifyTimer) window.clearTimeout(this.verifyTimer);
     try {
       this.player?.destroy?.();
     } catch {
@@ -797,6 +816,12 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
   private resumeAttempts = 0;
   /** Yeniden kurulum sonrası başlanacak saniye (>=0 ise uygulanır). */
   private pendingStartTime = -1;
+  private pollTimer: number | null = null;
+  private resumeTimer: number | null = null;
+  private onPendingEvent: (() => void) | null = null;
+  private onVideoSeeked: (() => void) | null = null;
+  private networkRetries = 0;
+  private mediaRetries = 0;
   /** Olay köprüsü (yeniden kurulumda da gerekli). */
   private readonly adapterEvents: AdapterEvents;
 
@@ -810,7 +835,30 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
     void this.attachSource(events);
   }
 
+  private cleanupSourceListeners(): void {
+    if (this.pollTimer) {
+      window.clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    if (this.resumeTimer) {
+      window.clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
+    if (this.onPendingEvent) {
+      this.videoEl.removeEventListener('loadedmetadata', this.onPendingEvent);
+      this.videoEl.removeEventListener('canplay', this.onPendingEvent);
+      this.onPendingEvent = null;
+    }
+    if (this.onVideoSeeked) {
+      this.videoEl.removeEventListener('seeked', this.onVideoSeeked);
+      this.onVideoSeeked = null;
+    }
+  }
+
   private async attachSource(events: AdapterEvents): Promise<void> {
+    this.cleanupSourceListeners();
+    this.networkRetries = 0;
+    this.mediaRetries = 0;
     const video = this.videoEl;
 
     // 1) Yerleşik HLS (iOS/Safari): doğrudan kaynak yeterli.
@@ -836,10 +884,6 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
         // (currentTime ataması MediaSource tarafından yutulabiliyor).
         startPosition: this.pendingStartTime > 0 ? this.pendingStartTime : -1,
         // ---- Tampon: MOBİL İÇİN DAYANIKLI ----
-        // Eski ayar (30/60) yavaş ağda tamponu hiç dolduramıyordu: video
-        // "başlıyor sonra duruyor" durumuna düşüyordu. Sarma sonrası da
-        // yeni bölüm indirilirken aynı sorun yaşanıyordu.
-        // Küçük ama SÜREKLİ bir tampon tutmak, mobil hatta takılmayı önler.
         maxBufferLength: 12,
         maxMaxBufferLength: 24,
         maxBufferSize: 24 * 1000 * 1000,
@@ -855,20 +899,27 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
         manifestLoadingMaxRetry: 4,
         levelLoadingMaxRetry: 4,
         fragLoadingMaxRetry: 6,
-        // Segment yüklemesi takılırsa hızla yeniden dene (timeout kısa).
+        // Segment yüklemesi takılırsa hızla yeniden dene.
         fragLoadingTimeOut: 20_000,
         manifestLoadingTimeOut: 15_000,
         levelLoadingTimeOut: 15_000,
       });
       this.hls = hls;
 
+      hls.on(Hls.Events.FRAG_LOADED, () => {
+        this.networkRetries = 0;
+        this.mediaRetries = 0;
+      });
+
       hls.on(Hls.Events.ERROR, (_evt: unknown, data: any) => {
         if (!data) return;
         if (data.fatal) {
-          // Ölümcül hata: kurtarmayı dene, olmuyorsa kullanıcıya söyle.
-          if (data.type === 'networkError') {
+          // Ölümcül hata: sınırlı sayıda kurtarmayı dene, olmuyorsa kullanıcıya söyle.
+          if (data.type === 'networkError' && this.networkRetries < 3) {
+            this.networkRetries += 1;
             try { hls.startLoad(); return; } catch { /* yok say */ }
-          } else if (data.type === 'mediaError') {
+          } else if (data.type === 'mediaError' && this.mediaRetries < 2) {
+            this.mediaRetries += 1;
             try { hls.recoverMediaError(); return; } catch { /* yok say */ }
           }
           events.onError?.('Film akışı yüklenemedi. Bağlantıyı kontrol edip tekrar dene 🎬');
@@ -882,8 +933,6 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
       });
 
       // Yeniden kurulum sonrası hedef saniyeye atla (sarma takılması kurtarma).
-      // SADECE loadedmetadata: o anda duration ve seekable hazır olur.
-      // (MANIFEST_PARSED çok erken; currentTime atanamıyor ve hedef kayboluyor.)
       const applyPendingStart = () => {
         if (this.pendingStartTime < 0) return;
         if (this.videoEl.readyState < 1) return;
@@ -897,39 +946,37 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
           /* yok say */
         }
       };
+      this.onPendingEvent = applyPendingStart;
       video.addEventListener('loadedmetadata', applyPendingStart);
       video.addEventListener('canplay', applyPendingStart);
       // Emniyet: olaylar kaçarsa kısa aralıklarla dene (en fazla 10 sn).
       let tries = 0;
-      const poll = window.setInterval(() => {
+      this.pollTimer = window.setInterval(() => {
         tries += 1;
         applyPendingStart();
         if (this.pendingStartTime < 0 || tries > 40 || this.disposed) {
-          window.clearInterval(poll);
+          if (this.pollTimer) {
+            window.clearInterval(this.pollTimer);
+            this.pollTimer = null;
+          }
         }
       }, 250);
 
       // ---- Sarma sonrası oynatma güvencesi ----
-      // HLS'te sarma yeni bölüm indirir. Tarayıcı bu sırada verilen `play()`
-      // komutunu bazen sessizce yutuyor: video "başlıyor sonra duruyor"
-      // şikayetinin kaynağı buydu. Bölüm hazır olunca (FRAG_CHANGED) hâlâ
-      // duruyorsa ve oynatmak istiyorsak kendiliğinden devam ettir.
       hls.on(Hls.Events.FRAG_CHANGED, () => {
         if (this.resumeWanted && video.paused && !video.ended) {
           this.tryResume();
         }
       });
-      // 'seeked' de aynı işi görsün (yerleşik HLS yolunda FRAG_CHANGED yok).
-      video.addEventListener('seeked', () => {
+      this.onVideoSeeked = () => {
         if (this.resumeWanted && video.paused && !video.ended) {
           this.tryResume();
         }
-      });
+      };
+      video.addEventListener('seeked', this.onVideoSeeked);
 
       hls.loadSource(this.src);
       hls.attachMedia(video);
-      // Yeniden kurulumda hedef saniye varsa yüklemeyi oradan başlat:
-      // bu, videonun 0'dan başlamasını önler.
       if (this.pendingStartTime > 0) {
         try {
           hls.startLoad(this.pendingStartTime);
@@ -937,9 +984,6 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
           /* yok say */
         }
       }
-      // ---- Hedef saniyeyi hls.js'e de bildir ----
-      // `currentTime` ataması MediaSource'da sessizce yutulabildiği için
-      // hls.js'in kendi başlangıç konumunu da kullanıyoruz (çift güvence).
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         if (this.pendingStartTime > 0) {
           try {
@@ -966,10 +1010,11 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
       if (p && typeof p.catch === 'function') {
         p.catch((err: any) => {
           // Durdurulmuşsa veya pause ile kesildiyse asla sessize alıp oynatma!
-          if (!this.resumeWanted) return;
+          if (!this.resumeWanted || this.disposed) return;
           if (err && (err.name === 'AbortError' || String(err).includes('interrupted'))) return;
           try {
             video.muted = true;
+            this.adapterEvents.onAutoplayBlocked?.();
             video.play().catch(() => {});
           } catch {
             /* yok say */
@@ -979,8 +1024,8 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
     } catch {
       /* yok say */
     }
-    // Kısa aralıklarla tekrar kontrol et (bölüm geçişi uzun sürebilir).
-    window.setTimeout(() => {
+    if (this.resumeTimer) window.clearTimeout(this.resumeTimer);
+    this.resumeTimer = window.setTimeout(() => {
       if (this.disposed) return;
       if (this.resumeWanted && video.paused && !video.ended) this.tryResume();
     }, 900);
@@ -994,16 +1039,12 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
 
   /**
    * Oynatıcıyı verilen saniyeden TAMAMEN yeniden kur.
-   *
-   * Sarma takıldığında (`seeking` hiç bitmiyor, `readyState=1`) yumuşak
-   * kurtarma (startLoad / recoverMediaError) yetmiyor: MediaSource bozulmuş
-   * oluyor. Bu durumda hls.js örneğini kapatıp sıfırdan kurmak tek güvenilir
-   * çözüm — video o saniyeden oynamaya başlar.
    */
   restartAt(seconds: number): void {
     const video = this.videoEl;
     const resume = this.resumeWanted;
     console.warn('[cinema] oynatıcı yeniden kuruluyor:', seconds);
+    this.cleanupSourceListeners();
     try {
       this.hls?.destroy?.();
     } catch {
@@ -1018,7 +1059,6 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
     }
     this.resumeWanted = resume;
     this.resumeAttempts = 0;
-    // Yeniden kurulum: hedef saniyeyi hatırla, hazır olunca oraya sar.
     this.pendingStartTime = Math.max(0, seconds);
     void this.attachSource(this.adapterEvents);
   }
@@ -1031,6 +1071,10 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
   pause(): void {
     this.setResumeWanted(false);
     this.resumeAttempts = 999;
+    if (this.resumeTimer) {
+      window.clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
     super.pause();
   }
 
@@ -1054,6 +1098,7 @@ export class HLSPlayerAdapter extends HTML5PlayerAdapter {
 
   destroy(): void {
     this.disposed = true;
+    this.cleanupSourceListeners();
     try {
       this.hls?.destroy?.();
     } catch {
@@ -1091,6 +1136,7 @@ export class VimeoPlayerAdapter extends BaseAdapter implements PlayerAdapter {
   private rate = 1;
   private pollTimer: number | null = null;
   private readyTimer: number | null = null;
+  private onIframeLoad: (() => void) | null = null;
 
   constructor(
     private iframe: HTMLIFrameElement,
@@ -1118,6 +1164,7 @@ export class VimeoPlayerAdapter extends BaseAdapter implements PlayerAdapter {
       this.events.onReady?.(this.duration);
       this.startPolling();
     };
+    this.onIframeLoad = markReady;
     if (this.iframe.contentDocument?.readyState === 'complete') markReady();
     this.iframe.addEventListener('load', markReady);
     this.readyTimer = window.setTimeout(() => {
@@ -1285,6 +1332,10 @@ export class VimeoPlayerAdapter extends BaseAdapter implements PlayerAdapter {
 
   destroy(): void {
     window.removeEventListener('message', this.onMessage);
+    if (this.onIframeLoad) {
+      this.iframe.removeEventListener('load', this.onIframeLoad);
+      this.onIframeLoad = null;
+    }
     if (this.pollTimer) window.clearInterval(this.pollTimer);
     if (this.readyTimer) window.clearTimeout(this.readyTimer);
   }
@@ -1329,9 +1380,10 @@ export const detectPlayerSource = (room: RoomSource): PlayerSourceKind => {
   const stream = (room.stream_url || '').trim();
   const source = (room.source || '').toLowerCase();
 
-  // 0) Film sitesinden çözülen gerçek akış: perde kendi oynatıcısında açar.
-  //    Bu, "kara ekran" hatasının düzeltmesidir — site sayfası değil, video.
+  // 0) Film sitesinden çözülen gerçek akış veya doğrudan m3u8 adresi: hls.js ile aç.
   if (stream) return 'hls';
+  const cleanPath = videoUrl.trim().split('#')[0].split('?')[0].toLowerCase();
+  if (cleanPath.endsWith('.m3u8')) return 'hls';
 
   const isFileUrl =
     looksLikePlayableFile(videoUrl) || room.kind === 'file';

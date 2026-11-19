@@ -18,8 +18,13 @@ fn asphaltSurf(in: V2F) -> Surface {
   let n2 = textureSample(tNoise, sLin, vec2f(xz.x * 0.8 - xz.y * 0.6, xz.x * 0.6 + xz.y * 0.8) * 0.33);
   // agregado: duas escalas, cada uma com duas amostras giradas (sem grade periódica). Não há corte por distância:
   // os mips levam o grão à média sozinhos, então o tom de perto e de longe é o mesmo.
+#ifdef MOB_FAST
+  let n3 = textureSample(tNoise, sLin, xz * 0.93);
+  let n4 = textureSample(tNoise, sLin, vec2f(xz.x * 0.6 + xz.y * 0.8, -xz.x * 0.8 + xz.y * 0.6) * 3.1);
+#else
   let n3 = (textureSample(tNoise, sLin, xz * 0.93) + textureSample(tNoise, sLin, vec2f(xz.x * 0.342 - xz.y * 0.94, xz.x * 0.94 + xz.y * 0.342) * 0.71 + 0.41)) * 0.5;
   let n4 = (textureSample(tNoise, sLin, vec2f(xz.x * 0.6 + xz.y * 0.8, -xz.x * 0.8 + xz.y * 0.6) * 3.1) + textureSample(tNoise, sLin, vec2f(xz.x * 0.966 + xz.y * 0.259, -xz.x * 0.259 + xz.y * 0.966) * 2.37 + 0.23)) * 0.5;
+#endif
   // ---- recapeamentos: trechos com tons diferentes, emenda transversal entre eles ----
   let secLen = 52.0; let sqv = (s + (n1.r - 0.5) * 1.6 + (n2.r - 0.5) * 0.35) / secLen; let sec = floor(sqv);   // emenda sinuosa, não uma reta
   let h1 = hash11(sec * 1.37 + 3.1); let h0 = hash11((sec - 1.0) * 1.37 + 3.1);
@@ -47,7 +52,11 @@ fn asphaltSurf(in: V2F) -> Surface {
   tar *= 1.0 - smoothstep(25.0, 90.0, dist) * 0.7;
   // ---- base: agregado ----
   // base: asfalto cinza-escuro neutro (albedo ≈ 0,055) com manchas de 3–6 m e de 15–20 m; o mesmo tom ao sol e na sombra
+#ifdef MOB_FAST
+  let nM = n1;
+#else
   let nM = textureSample(tNoise, sLin, vec2f(xz.x * 0.8 + xz.y * 0.6, -xz.x * 0.6 + xz.y * 0.8) * 0.0061 + 0.27);
+#endif
   var alb = vec3f(0.083, 0.081, 0.078) * tone * (0.74 + 0.52 * n2.r) * (0.66 + 0.68 * n1.r) * (0.76 + 0.48 * nM.g);
   // manchas de média escala que sobrevivem à distância e à lente longa: óleo/piche (0,5–2 m) e áreas mais gastas e claras
   let stain = smoothstep(0.6, 0.76, n2.b * 0.55 + n3.g * 0.5);
@@ -56,8 +65,13 @@ fn asphaltSurf(in: V2F) -> Surface {
   // ---- micro-detalhe: agregado de 3–8 mm com contraste de albedo BAIXO (±8%). A cara de asfalto vem do relevo fino
   // (normal) com brilho rasante suave e da variação de média escala, não de pintas claras e escuras.
   let stones = smoothstep(0.58, 0.8, n4.b);
+#ifdef MOB_FAST
+  let n5 = n4;
+  let n6 = n3;
+#else
   let n5 = textureSample(tNoise, sLin, xz * 9.7 + 0.13);                                                  // células de ~4 mm
   let n6 = textureSample(tNoise, sLin, vec2f(xz.x * 0.6 + xz.y * 0.8, -xz.x * 0.8 + xz.y * 0.6) * 5.9 + 0.19);   // células de ~7 mm
+#endif
   let grain = (n5.b - 0.55) + (n6.b - 0.55) * 0.8;
   alb *= 1.0 + grain * 0.085 + (n3.b - 0.5) * 0.05;
   let cav = smoothstep(-0.3, 0.2, grain);                                   // cavidades entre os grãos
@@ -70,7 +84,11 @@ fn asphaltSurf(in: V2F) -> Surface {
   let streak = 0.55 + 0.45 * textureSample(tNoise, sLin, vec2f(d * 0.9, s * 0.012)).r;
   // a borracha não é uma faixa de tinta: largura e intensidade variam ao longo da pista (forte nas freadas e saídas de curva —
   // in.col.b —, falhada nas retas), com manchas que somem e voltam
+#ifdef MOB_FAST
+  let along = textureSample(tNoise, sLin, vec2f(s * 0.0043, 0.31)); let along2 = along;
+#else
   let along = textureSample(tNoise, sLin, vec2f(s * 0.0043, 0.31)); let along2 = textureSample(tNoise, sLin, vec2f(s * 0.021, 0.77));
+#endif
   let rsig = 1.35 * (0.6 + 0.7 * along.g);
   let rint = (0.16 + 0.84 * in.col.b) * (0.35 + 0.65 * smoothstep(0.3, 0.62, along.r)) * (0.6 + 0.4 * along2.b);
   let rub = exp(-dl * dl / (2.0 * rsig * rsig)) * rint * streak;
@@ -140,7 +158,11 @@ fn asphaltSurf(in: V2F) -> Surface {
   var wet = 0.0;
   if (in.col.g > 0.001) {
     // "profundidade" da água: depressões de baixa frequência + sulcos das rodas + beira da pista; borda orgânica por ruído fino
+#ifdef MOB_FAST
+    let lo = textureSample(tNoise, sLin, vec2f(s * 0.0125 + 0.37, d * 0.062)).r * 0.8 + n1.g * 0.2;
+#else
     let lo = textureSample(tNoise, sLin, vec2f(s * 0.0125 + 0.37, d * 0.062)).r * 0.56 + textureSample(tNoise, sLin, vec2f(s * 0.031, d * 0.11 + 0.4)).g * 0.24 + textureSample(tNoise, sLin, xz * 0.047 + 0.13).r * 0.2;
+#endif
     let fine = (n2.r - 0.5) * 0.02 + (n3.r - 0.5) * 0.035 + (n4.r - 0.5) * 0.012;    // a borda segue o agregado: nítida e irregular, não uma máscara mole
     let edge = smoothstep(2.4, 5.2, abs(d)) * 0.05 + rutG * 0.085;      // a água junta nos trilhos de roda e na beira
     let lvl = lo + fine + edge - mix(0.78, 0.665, in.col.g);
@@ -153,7 +175,11 @@ fn asphaltSurf(in: V2F) -> Surface {
     alb = mix(alb, alb * 0.55, pud);                                       // água sobre asfalto escuro: fundo mais escuro, nada leitoso
     rough = mix(rough, 0.6, damp * 0.8); rough = mix(rough, 0.36, film); rough = mix(rough, 0.09, pud * pud);
     // normal: o filme ainda segue o agregado; a lâmina é plana, com ondulação leve do vento
+#ifdef MOB_FAST
+    let rp = (textureSampleLevel(tNoise, sLin, xz * 0.31 + 0.17, 1.0).rg - 0.5) * 0.024;
+#else
     let rp = (textureSampleLevel(tNoise, sLin, xz * 0.31 + 0.17, 1.0).rg - 0.5) * 0.016 + (textureSampleLevel(tNoise, sLin, xz * 0.11 + 0.4, 0.0).rg - 0.5) * 0.014;
+#endif
     N = normalize(mix(N, bumpXZ(Ng, grad * 0.35), film));
     N = normalize(mix(N, bumpXZ(Ng, rp), pud));
     // reflexo em espaço de tela entra aos poucos com o filme e fica total na lâmina
@@ -173,7 +199,11 @@ fn kerbSurf(in: V2F) -> Surface {
 #endif
   let near = 1.0 - smoothstep(6.0, 40.0, dist);
   let n1 = textureSample(tNoise, sLin, in.wpos.xz * 0.11);
+#ifdef MOB_FAST
+  let n2 = textureSample(tNoise, sLin, in.wpos.xz * 0.9); let n3 = n2;
+#else
   let n2 = textureSample(tNoise, sLin, in.wpos.xz * 0.9); let n3 = textureSample(tNoise, sLin, in.wpos.xz * 6.1);
+#endif
   let aaS = max(fwidth(s), 0.002);
   let ph = s / 5.0; let f = fract(ph);
   let red = smoothstep(0.5 - aaS / 5.0, 0.5 + aaS / 5.0, abs(f - 0.5) * 2.0);   // 2,5 m vermelho / 2,5 m branco

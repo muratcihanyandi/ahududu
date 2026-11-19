@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from typing import List, Optional
@@ -57,6 +57,8 @@ async def update_note(note_id: int, payload: SharedNoteUpdate, db: AsyncSession 
     
     data = payload.model_dump(exclude_unset=True)
     for key, value in data.items():
+        if value is None and key != "content":
+            continue
         setattr(note, key, value)
     note.updated_at = now_utc()
     await db.commit()

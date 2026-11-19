@@ -36,18 +36,7 @@ function hudStrip(cv, labels, widths, units, At, px, o) {
   return f;
 }
 function hudLayout() {
-  const H = HUD, L = H.L;
-  // hudLayout yön değişiminde ve sahne kurulurken de çağrılıyor; gösterge
-  // tuvali henüz hazır değilse (hudInit'ten önce) sessizce çıkılır: eskiden
-  // "Cannot set properties of null" hatası veriyordu.
-  if (!H.cg || !H.ct || !H.cs) return;
-  const dpr = devicePixelRatio || 1;
-  // Dokunmatik/yatay telefonda gösterge paneli KÜÇÜLTÜLÜR: aksi halde (kısa
-  // yükseklik × 2.26) ekranı kaplıyor ve alttaki sürüş düğmelerinin üstüne
-  // biniyordu.
-  const touch = (typeof MOB !== 'undefined' && MOB.touch) || (navigator.maxTouchPoints || 0) > 0;
-  const k = touch ? (innerHeight > innerWidth ? 0.085 : 0.075) : 0;
-  const r = Math.round(Math.min(Math.max(innerHeight * (touch ? k : 0.105), touch ? 34 : 54), touch ? 78 : 124) * dpr), W = Math.round(r * 4.5), Hh = Math.round(r * 2.26);
+  const H = HUD, L = H.L, dpr = devicePixelRatio || 1, r = Math.round(Math.min(Math.max(innerHeight * 0.105, 54), 124) * dpr), W = Math.round(r * 4.5), Hh = Math.round(r * 2.26);
   const A = H.A = hudAtlas(Math.round(r * 0.33)), B = H.B = hudAtlas(Math.round(r * 0.23)), C = H.C = hudAtlas(Math.round(r * 0.17));
   const c = H.cg; c.width = W; c.height = Hh; c.style.width = W / dpr + 'px'; c.style.height = Hh / dpr + 'px';
   const cx1 = Math.round(r * 1.12), cy = Math.round(r * 1.12), cx2 = W - cx1; L[0] = cx1; L[1] = cy; L[2] = cx2; L[3] = r; L[4] = W; L[5] = Hh;
@@ -72,7 +61,7 @@ function hudLayout() {
   // cronômetro (m:ss.cc) e estatísticas
   const tw = B.w[0] * 5 + B.w[10] + B.w[11];
   H.bgT = hudStrip(H.ct, ['TUR', 'SON', 'EN İYİ'], [tw, tw, tw], ['', '', ''], B, B.h / 1.16, 10);
-  H.bgS = hudStrip(H.cs, ['FPS', 'KARE', 'GPU'], [C.w[0] * 3, C.w[0] * 4 + C.w[12], C.w[0] * 4 + C.w[12]], ['', 'ms', 'ms'], C, C.h / 1.16, 20);
+  H.bgS = hudStrip(H.cs, ['KARE/S', 'SÜRE', 'ÇİZİM'], [C.w[0] * 3, C.w[0] * 4 + C.w[12], C.w[0] * 4 + C.w[12]], ['', 'ms', 'ms'], C, C.h / 1.16, 20);
   H.K.fill(-9);
 }
 // copia o caractere i do atlas para (x, y) em pixels (q = 16 no canvas dos mostradores, 1 nos outros); devolve a largura
@@ -127,5 +116,5 @@ function hudStatsFrame() {
   a[0] = 0; a[1] = 0;
   s.clearRect(0, 0, L[27], L[28]); s.drawImage(H.bgS, 0, 0); hudInt(s, C, fps > 999 ? 999 : fps, 3, L[20], y, 1); hudDec(s, C, ms, L[21], y); hudDec(s, C, gpu, L[22], y);
 }
-function hudShow(on) { HUD.vis = on; if (HUD.cg) HUD.cg.style.display = HUD.ct.style.display = on ? 'block' : 'none'; HUD.K.fill(-9); }
-function hudStats(on) { HUD.stats = on; if (HUD.cs) HUD.cs.style.display = on ? 'block' : 'none'; HUD.acc[0] = 0; HUD.acc[1] = 0; if (on && HUD.s) { const L = HUD.L; HUD.s.clearRect(0, 0, L[27], L[28]); HUD.s.drawImage(HUD.bgS, 0, 0); } }
+function hudShow(on) { HUD.vis = on; HUD.cg.style.display = HUD.ct.style.display = on ? 'block' : 'none'; HUD.K.fill(-9); }
+function hudStats(on) { HUD.stats = on; HUD.cs.style.display = on ? 'block' : 'none'; HUD.acc[0] = 0; HUD.acc[1] = 0; if (on) { const L = HUD.L; HUD.s.clearRect(0, 0, L[27], L[28]); HUD.s.drawImage(HUD.bgS, 0, 0); } }

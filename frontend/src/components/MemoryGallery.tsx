@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Image, Film, Calendar, X, Heart, Sparkles } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Plus, Film, X, Heart } from 'lucide-react';
 import { GalleryItem, UserId } from '../types';
-import { api } from '../services/api';
+import { api, mediaUrl } from '../services/api';
 import { wsClient } from '../services/websocket';
 import { playHaptic } from '../services/haptics';
+import { registerBackHandler } from '../services/backButton';
 
 interface MemoryGalleryProps {
   currentUserId: UserId;
@@ -22,39 +23,69 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const loadGallery = useCallback(async () => {
+    try {
+      const albumFilter = selectedAlbum === 'Tümü' ? undefined : selectedAlbum;
+      const data = await api.listGallery(albumFilter);
+      setItems(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [selectedAlbum]);
+
   useEffect(() => {
     loadGallery();
 
     const unsub = wsClient.on('new_gallery_item', (data: any) => {
-      if (data.item) {
-        setItems((prev) => [data.item, ...prev]);
-      }
+      const item = data?.item as GalleryItem | undefined;
+      if (!item) return;
+      if (selectedAlbum !== 'Tümü' && item.album !== selectedAlbum) return;
+      setItems((prev) => [item, ...prev.filter((i) => i.id !== item.id)]);
     });
 
     return () => unsub();
-  }, [selectedAlbum]);
+  }, [selectedAlbum, loadGallery]);
 
-  const loadGallery = async () => {
-    try {
-      const albumFilter = selectedAlbum === 'Tümü' ? undefined : selectedAlbum;
-      const data = await api.listGallery(albumFilter);
-      setItems(data);
-    } catch (e) {
-      console.error(e);
-    }
-  };
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  const closeUploadModal = useCallback(() => {
+    setShowUploadModal(false);
+    setUploadedFile(null);
+    setPreviewUrl(null);
+    setCaptionInput('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, []);
+
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (selectedItem) {
+        setSelectedItem(null);
+        return true;
+      }
+      if (showUploadModal) {
+        closeUploadModal();
+        return true;
+      }
+      return false;
+    });
+  }, [selectedItem, showUploadModal, closeUploadModal]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     const file = files[0];
+    e.target.value = '';
     setUploadedFile(file);
     setPreviewUrl(URL.createObjectURL(file));
     setShowUploadModal(true);
   };
 
   const handleSaveMemory = async () => {
-    if (!uploadedFile) return;
+    if (!uploadedFile || isUploading) return;
     setIsUploading(true);
     playHaptic(30);
 
@@ -71,11 +102,8 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
         album: selectedAlbum === 'Tümü' ? 'Bizim Anılarımız' : selectedAlbum,
       });
 
-      setItems((prev) => [newItem, ...prev]);
-      setShowUploadModal(false);
-      setUploadedFile(null);
-      setPreviewUrl(null);
-      setCaptionInput('');
+      setItems((prev) => [newItem, ...prev.filter((i) => i.id !== newItem.id)]);
+      closeUploadModal();
     } catch (err) {
       console.error(err);
       alert('Anı yüklenemedi.');
@@ -145,7 +173,7 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
               {item.media_type === 'video' ? (
                 <div className="relative w-full h-full">
                   <video
-                    src={item.media_url}
+                    src={mediaUrl(item.media_url)}
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
@@ -154,7 +182,7 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
                 </div>
               ) : (
                 <img
-                  src={item.media_url}
+                  src={mediaUrl(item.media_url)}
                   alt={item.title || 'Anı'}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
@@ -166,7 +194,7 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
                   {item.title || item.caption || 'Bizim Anımız'}
                 </p>
                 <span className="text-[10px] text-white/80">
-                  {new Date(item.taken_at).toLocaleDateString('tr-TR')}
+                  {new Date(item.taken_at || item.created_at).toLocaleDateString('tr-TR')}
                 </span>
               </div>
             </div>
@@ -181,11 +209,20 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
             <h3 className="font-serif text-base font-bold text-berry-950 mb-3">
               Yeni Anı Paylaş 📸
             </h3>
-            <img
-              src={previewUrl}
-              alt="Önizleme"
-              className="w-full max-h-56 object-cover rounded-2xl mb-3"
-            />
+            {uploadedFile?.type.startsWith('video') ? (
+              <video
+                src={previewUrl}
+                controls
+                playsInline
+                className="w-full max-h-56 rounded-2xl mb-3 bg-black object-contain"
+              />
+            ) : (
+              <img
+                src={previewUrl}
+                alt="Önizleme"
+                className="w-full max-h-56 object-cover rounded-2xl mb-3"
+              />
+            )}
             <input
               type="text"
               placeholder="Bu anıya bir başlık / not yaz..."
@@ -195,7 +232,7 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
             />
             <div className="flex items-center justify-end gap-2">
               <button
-                onClick={() => setShowUploadModal(false)}
+                onClick={closeUploadModal}
                 className="px-4 py-2 rounded-xl text-stone-600 text-xs font-medium hover:bg-stone-100"
               >
                 Vazgeç
@@ -224,14 +261,14 @@ export const MemoryGallery: React.FC<MemoryGalleryProps> = ({ currentUserId }) =
           <div className="max-w-2xl w-full flex flex-col items-center">
             {selectedItem.media_type === 'video' ? (
               <video
-                src={selectedItem.media_url}
+                src={mediaUrl(selectedItem.media_url)}
                 controls
                 autoPlay
                 className="max-h-[75vh] w-full rounded-2xl object-contain"
               />
             ) : (
               <img
-                src={selectedItem.media_url}
+                src={mediaUrl(selectedItem.media_url)}
                 alt="Detay"
                 className="max-h-[75vh] w-full rounded-2xl object-contain shadow-2xl"
               />

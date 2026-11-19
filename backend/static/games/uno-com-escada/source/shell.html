@@ -2,179 +2,91 @@
 <html lang="tr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Uno merdivenli — pist</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Uno Merdivenli — Pist</title>
 <style>
 html,body{margin:0;height:100%;background:#000;overflow:hidden;font:14px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#ddd}
-#c{position:absolute;inset:0;margin:auto;width:100vw;height:100vh;display:block;object-fit:contain;touch-action:none}
-#msg{position:absolute;left:0;right:0;top:45%;text-align:center;letter-spacing:.08em;white-space:pre-wrap;padding:0 6vw}
-#hint{position:absolute;left:14px;bottom:calc(10px + env(safe-area-inset-bottom,0px));opacity:.75;text-shadow:0 1px 2px #000;transition:opacity 1.5s;pointer-events:none;font-size:12px;right:14px}
-/* Telefonda klavye ipucu yok: düğmelerin üstüne biniyordu. Dokunmatik
-   cihazda ekranın altında düğmeler zaten kumandayı gösteriyor. */
-body.has-touch #hint{display:none}
+#c{position:absolute;inset:0;margin:auto;width:100%;height:100%;display:block;object-fit:fill;touch-action:none}
+#msg{position:absolute;left:0;right:0;top:45%;text-align:center;letter-spacing:.08em;white-space:pre-wrap}
+#hint{display:none !important}
 #hg,#ht,#hs,#tag,#ui{display:none;position:absolute;pointer-events:none}
 #hg{right:1.6vh;bottom:1.6vh}
-/* Dokunmatikte gaz/fren sağ altta: gösterge paneli sol kümelerin üstüne,
-   ekranın ORTASINA yakın durur ki düğmelerle çakışmasın. */
-body.has-touch #hg{right:auto;left:50%;bottom:auto;top:1.6vh;transform:translateX(-50%)}
-body.has-touch #ht{display:none !important}
 #ht{left:50%;top:1.6vh;transform:translateX(-50%)}
 #hs{left:1.6vh;top:1.6vh}
 #tag{left:50%;bottom:2.2vh;transform:translateX(-50%);padding:.45em 1.1em;border-radius:1.2em;background:rgba(9,11,14,.62);color:#fff;white-space:nowrap}
-/* #ui ekranın ortasına yerleşir: eskiden display:none ile gizliydi ve
-   uiSet() onu 'flex' yapıyordu; ancak display:none <style> içinde kalınca
-   satır içi 'flex' ekranı gösteremiyordu — MENÜ HİÇ AÇILMIYORDU ("Başla"
-   düğmesi görünmüyordu). Artık varsayılan flex'tir, uiSet tarafından
-   kapatılır/açılır. */
-#ui{inset:0;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:rgba(6,8,10,.62);font-size:clamp(11px,1.72vh,17px);padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);box-sizing:border-box}
+#ui{inset:0;pointer-events:auto;align-items:center;justify-content:center;background:rgba(6,8,10,.62);font-size:clamp(11px,1.72vh,17px)}
 #ui.ini{background:linear-gradient(rgba(6,8,10,.5),rgba(6,8,10,.82))}
-/* Menü kutusu: telefonda taşmasın. max-height ekranın içinde kalır, gerekirse
-   yalnızca kutu kaydırılır (düğmeler ekran dışına çıkmaz). */
-#ui>div{width:min(560px,94vw);max-height:min(92vh,92dvh);overflow-y:auto;overscroll-behavior:contain;padding:1.1em 1.4em;box-sizing:border-box;text-align:center;border-radius:1em;background:rgba(8,11,15,.55)}
-#ui h1{margin:0;font-size:2.2em;line-height:1.1;letter-spacing:.02em;color:#fff}
+#ui>div{max-width:94vw;max-height:96vh;overflow:auto;padding:1.4em 2.2em;box-sizing:border-box;text-align:center}
+#ui h1{margin:0;font-size:3.1em;line-height:1.1;letter-spacing:.02em;color:#fff}
 #ui .sub{margin:.3em 0 1.3em;opacity:.8;letter-spacing:.12em;text-transform:uppercase;font-size:.9em}
-#ui h2{margin:0 0 .5em;font-size:.95em;letter-spacing:.1em;text-transform:uppercase;color:#ff8a6a}
-#ui .cols{display:flex;gap:1.8em;justify-content:center;flex-wrap:wrap;text-align:left;margin-top:.4em}
-#ui table{border-collapse:collapse}
-#ui td,#ui th{padding:.13em .7em .13em 0;font-weight:400;text-align:left}
-#ui td:first-child{color:#fff;font-weight:600;white-space:nowrap;padding-right:1.1em}
+#ui h2{margin:0 0 .5em;font-size:1.05em;letter-spacing:.1em;text-transform:uppercase;color:#ff8a6a}
 #res{display:none;margin:0 0 1.4em;padding:1em 1.4em;border-radius:.8em;background:rgba(255,255,255,.07)}
 #res table{margin:0 auto}#res th,#res td{padding:.2em 1.1em;text-align:right}#res td{color:#fff;font-weight:600;font-variant-numeric:tabular-nums}#res p{margin:.7em 0 0}
-#ui .bt{margin-top:1.1em}
-/* Başla düğmesi ekran genişliğine sığar (eskiden 2.4em dolgusuyla taşıyordu). */
-#ui button{font:inherit;font-size:1.1em;font-weight:600;color:#fff;background:#d8351c;border:0;border-radius:.6em;padding:.7em 2.4em;margin:.35em .3em;max-width:100%;cursor:pointer;touch-action:manipulation}
+#ui .bt{margin-top:1.5em}
+#ui button{font:inherit;font-size:1.15em;font-weight:600;color:#fff;background:#d8351c;border:0;border-radius:.5em;padding:.6em 2em;margin:0 .4em;cursor:pointer}
 #ui button+button{background:rgba(255,255,255,.16)}
 #ui button:focus-visible{outline:2px solid #fff;outline-offset:2px}
-/* ---- çok oyunculu arayüz (Türkçe ek) — kamera arayüzü tamamen kaldırıldı ---- */
-#ol{margin-top:.9em;font-size:.86em;line-height:1.5;color:#cfd6dd;max-width:30em;margin-left:auto;margin-right:auto}
-#ol b{color:#fff}
-#mpStat{margin-top:.5em;font-size:.95em;color:#ffb4c8;font-weight:600}
-#mpSay{
-  display:none;position:absolute;pointer-events:auto;left:50%;transform:translateX(-50%);
-  bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:20;
+#mpStat{margin-top:.8em;font-size:.95em;color:#ffb4c8;font-weight:600}
+#mpHud{display:none;position:fixed;right:14px;top:14px;padding:.4em .9em;border-radius:14px;background:rgba(9,11,14,.7);border:1px solid rgba(255,180,200,.32);color:#ffb4c8;font-size:12px;font-weight:600;line-height:1.35;text-align:right;pointer-events:none;z-index:12}
+#mpTag{display:none;position:fixed;left:0;top:0;transform:translate(-50%,-100%);padding:.22em .65em;border-radius:999px;background:rgba(9,11,14,.72);border:1px solid rgba(255,180,200,.45);color:#fff;font-size:11px;font-weight:700;pointer-events:none;z-index:11;white-space:nowrap}
+#touchui{display:none;position:fixed;inset:0;pointer-events:none;z-index:15}
+body.has-touch:not(.menu-open) #touchui{display:block}
+body.has-touch #hg{right:auto;left:50%;bottom:auto;top:1.4vh;transform:translateX(-50%)}
+body.has-touch #ht{display:none !important}
+.tbtn{position:fixed;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:999px;border:2px solid rgba(255,255,255,.45);color:#fff;font:inherit;font-weight:800;background:rgba(12,16,22,.52);box-shadow:0 4px 14px rgba(0,0,0,.45);cursor:pointer;padding:0;margin:0;box-sizing:border-box}
+.tbtn .ic{line-height:1;font-size:1.1em}
+.tbtn .lb{font-size:.34em;letter-spacing:.03em;opacity:.92;white-space:nowrap;line-height:1.1;margin-top:.12em}
+.tbtn.on{background:rgba(216,53,28,.85);border-color:#fff;transform:scale(.94)}
+#t-left{left:14px;bottom:14px;width:64px;height:64px;font-size:20px}
+#t-right{left:88px;bottom:14px;width:64px;height:64px;font-size:20px}
+#t-gas{right:14px;bottom:14px;width:72px;height:72px;font-size:22px}
+#t-brake{right:96px;bottom:14px;width:60px;height:60px;font-size:18px}
+#t-hand{right:14px;bottom:96px;width:52px;height:52px;font-size:16px}
+#t-cam{left:14px;top:14px;width:44px;height:44px;font-size:14px}
+#t-reset{left:64px;top:14px;width:44px;height:44px;font-size:14px}
+#t-pause{left:114px;top:14px;width:44px;height:44px;font-size:14px}
+#t-horn{left:14px;top:66px;width:44px;height:44px;font-size:14px}
+#t-tp{left:64px;top:66px;width:44px;height:44px;font-size:14px}
+@media (max-height:440px){
+  #ui{font-size:clamp(9px,2.1vh,12px)}
+  #ui>div{padding:.45em .9em}
+  #ui h1{font-size:1.45em}
+  #ui .sub{margin:.1em 0 .35em}
+  #mpStat{margin-top:.35em}
+  #ui .bt{margin-top:.4em}
+  #ui button{padding:.45em 1.5em}
 }
-#mpSay .say{
-  display:block;border:0;border-radius:999px;background:#c2185b;color:#fff;font-size:12px;font-weight:800;
-  padding:9px 16px;cursor:pointer;box-shadow:0 6px 16px rgba(0,0,0,.4);touch-action:none;
-}
-body.has-touch #mpSay{bottom:calc(30vmin + env(safe-area-inset-bottom,0px));left:auto;right:2.6vmin;transform:none}
-body.has-touch #mpSay .say{padding:7px 12px;font-size:11px}
-@media (max-width:640px){
-  #ui>div{padding:.9em 1.1em}
-  #ui .cols{gap:1.4em}
-  #ui h1{font-size:1.9em}
-}
-/* kısa yatay ekranda (telefon yatay) menü yazısı küçülür: düğme hep görünür kalsın */
-@media (max-height:430px){
-  #ui{font-size:clamp(10px,2.6vh,14px)}
-  #ui h1{font-size:1.5em}
-  #ui .cols{gap:1.2em}
-  #ui td,#ui th{padding:.08em .5em .08em 0}
-  #ui .bt{margin-top:.7em}
-}
-/* dokunmatikte klavye tablosu gereksiz: yer kaplamasın */
-body.has-touch #ui .cols > div:first-child{display:none}
-/* DOKUNMATİK KUMANDA: düğmeler vmin ile ölçülüyor; vmin kısa kenardır. Telefon
-   yatayken kısa kenar ~360-420 px olduğu için sağ/sol kümeler + üst sıra
-   ekranın dışına taşıyordu. Artık her küme kendi köşesine sabit: sol alt =
-   direksiyon, sağ alt = gaz/fren, üst sıra = el freni / kamera / piste dön.
-   Menü açıkken (duraklat/başlangıç) kumanda gizlenir. */
-#touchui{display:block;position:fixed;inset:0;pointer-events:none;z-index:15;overflow:hidden;
-  padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
-body:not(.has-touch) #touchui{display:none}
-body.menu-open #touchui{display:none}
-/* Büyük dokunma hedefleri: parmak ucuyla ıskalamadan basılsın diye düğmeler
-   ve yazıları büyütüldü. Konumlar aynı köşelerden hizalıdır, böylece sağ/sol
-   kümeler birbirine ve gösterge paneline değmez. */
-.tbtn{
-  position:absolute;pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;
-  border-radius:999px;border:2.5px solid rgba(255,255,255,.42);color:#fff;font:inherit;font-weight:800;
-  background:rgba(12,16,22,.5);backdrop-filter:blur(3px);box-shadow:0 6px 18px rgba(0,0,0,.42);
-  transition:transform .06s, background .06s;cursor:pointer;
-}
-.tbtn .ic{line-height:1.05;font-size:1.08em;text-shadow:0 1px 3px rgba(0,0,0,.5)}
-.tbtn .lb{font-size:.34em;letter-spacing:.03em;opacity:.95;white-space:nowrap;line-height:1.15;margin-top:.15em}
-.tbtn.on{background:rgba(216,53,28,.82);border-color:#fff;transform:scale(.94)}
-/* Dokunmatikte sürüş düğmeleri başparmağın doğal yerinde: sol alt = direksiyon,
-   sağ alt = gaz/fren; küçük yardımcı düğmeler üst sırada.
-   Eski sürümde sol ok düğmesi "sol kenar + direksiyon genişliği" ile hesaplanıyordu
-   (left:calc(22vmin + 5.2vmin)) ve telefonda sol küme ekranın dışına; üstteki
-   el freni/kamera/piste dön sırası da sağa taşıyordu. Artık her düğme kendi
-   köşesine sabit (sol/sağ + alt/üst), hiçbir hesap birikmiyor. */
-.t-left{left:2.6vmin}
-.t-right{right:2.6vmin}
-.t-gas{right:2.6vmin;bottom:2.6vmin;width:22vmin;height:22vmin;font-size:4.6vmin}
-.t-brake{right:2.6vmin;bottom:calc(2.6vmin + 22vmin + 2.4vmin);width:16vmin;height:16vmin;font-size:3.4vmin}
-/* sol alt: direksiyon — DİKKAT: iki ok düğmesi aynı satırda (2.6 + ş + 2.4 + ş)
-   her zaman ekran içinde kalmalı; vmin = kısa kenar olduğu için telefon
-   yatayında bol bol sığar. */
-.t-mid{left:2.6vmin;bottom:2.6vmin;width:20vmin;height:20vmin;font-size:4.2vmin}
-.t-mid + .t-mid{left:calc(2.6vmin + 20vmin + 2.4vmin)}
-/* küçük yardımcı düğmeler: üst sıra, sol köşeden sağa doğru */
-.t-small{width:12vmin;height:12vmin;font-size:2.7vmin;bottom:auto;top:calc(env(safe-area-inset-top,0px) + 2.6vmin)}
-.t-hand{left:2.6vmin}
-.t-cam{left:calc(2.6vmin + 12vmin + 2.2vmin)}
-.t-reset{left:calc(2.6vmin + 2 * (12vmin + 2.2vmin))}
-/* Çok küçük yatay ekranda (tarayıcı çubuğu açıkken) düğmeler bir tık küçülür. */
-@media (max-height:400px),(max-width:700px){
-  .t-mid{width:17vmin;height:17vmin;font-size:3.6vmin}
-  .t-mid + .t-mid{left:calc(2.6vmin + 17vmin + 2vmin)}
-  .t-gas{width:19vmin;height:19vmin;font-size:4vmin}
-  .t-brake{bottom:calc(2.6vmin + 19vmin + 2vmin);width:14vmin;height:14vmin;font-size:3vmin}
-  .t-small{width:10vmin;height:10vmin;font-size:2.4vmin}
-  .t-cam{left:calc(2.6vmin + 10vmin + 2vmin)}
-  .t-reset{left:calc(2.6vmin + 2 * (10vmin + 2vmin))}
-}
-/* dikey ekranda "telefonu yan çevir" ekranı (CSS ile 90° çevirme yok: HUD ve
-   düğmeleri bozuyordu) */
-#mobrotate{
-  display:none;position:fixed;inset:0;z-index:60;flex-direction:column;align-items:center;justify-content:center;
-  gap:.6em;background:rgba(6,8,10,.94);color:#eee;text-align:center;padding:8vmin;
-}
-#mobrotate .ph{font-size:16vmin;animation:rot 2.4s ease-in-out infinite}
-#mobrotate b{font-size:5vmin;color:#fff}
-#mobrotate span{font-size:3.2vmin;opacity:.75;line-height:1.5}
-#mobrotate .force{
-  margin-top:2vmin;font:inherit;font-size:3vmin;font-weight:700;color:#fff;
-  background:rgba(255,255,255,.16);border:0;border-radius:.6em;padding:.6em 1.4em;
-}
-@keyframes rot{0%,40%{transform:rotate(0)}60%,100%{transform:rotate(-90deg)}}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="msg">yükleniyor…</div>
-<div id="hint">W gaz · S fren/geri · A/D direksiyon · Boşluk el freni · C kamera · R piste dön</div>
-<canvas id="hg"></canvas><canvas id="ht"></canvas><canvas id="hs"></canvas><div id="tag"></div>
+<div id="hint"></div>
+<canvas id="hg"></canvas><canvas id="ht"></canvas><canvas id="hs"></canvas><div id="tag"></div><div id="mpHud"></div><div id="mpTag"></div>
+<div id="mobrotate" style="display:none;position:fixed;inset:0;z-index:60;flex-direction:column;align-items:center;justify-content:center;gap:.6em;background:rgba(6,8,10,.94);color:#eee;text-align:center;padding:8vmin">
+  <div style="font-size:15vmin">📱</div>
+  <b style="font-size:4.8vmin;color:#fff">Telefonu yan çevir</b>
+  <span style="font-size:3.1vmin;opacity:.75;line-height:1.5">Oyun yatay tam ekranda oynanıyor.</span>
+</div>
 <div id="ui"><div>
 <h1>Uno Merdivenli</h1>
+<p class="sub">Fiat Uno Mille EP 1996 · Dağ Pisti</p>
 <div id="res"></div>
-<!-- Sade menü: teknik detay yok, telefonda kaydırmadan sığar. -->
-<div class="cols">
-<div><h2>Klavyede</h2><table>
-<tr><td>Ok tuşları</td><td>sür</td></tr>
-<tr><td>Boşluk</td><td>el freni</td></tr>
-<tr><td>C</td><td>kamera</td></tr>
-<tr><td>R</td><td>piste dön</td></tr>
-<tr><td>Esc</td><td>durakla</td></tr>
-</table></div>
-<div><h2>Telefonda</h2><table>
-<tr><td>Sol</td><td>direksiyon</td></tr>
-<tr><td>Sağ</td><td>gaz / fren</td></tr>
-<tr><td>✋</td><td>el freni</td></tr>
-<tr><td>🎥</td><td>kamera</td></tr>
-<tr><td>↺</td><td>piste dön</td></tr>
-</table></div>
-</div>
-<div id="ol">
-İkiniz de oyunu açın: birlikte aynı pistte sürersiniz.<br>
-Sevgilin oyuna girince arabası pistte belirir; ikiniz de <b>Başla</b>'ya basınca birlikte kalkarsınız.
-<div id="mpStat">tek başına sürüyorsun</div>
-</div>
-<div class="bt"><button id="b0">Başla</button></div>
+<div id="mpStat"></div>
+<div class="bt"><button id="b0">Başla</button><button id="b1">Deneme Turu</button></div>
 </div></div>
-<div id="mpSay"><button class="say" type="button">🎤 Basılı tut: konuş</button></div>
+<div id="touchui">
+  <button id="t-left" class="tbtn" type="button"><span class="ic">◀</span><span class="lb">SOL</span></button>
+  <button id="t-right" class="tbtn" type="button"><span class="ic">▶</span><span class="lb">SAĞ</span></button>
+  <button id="t-brake" class="tbtn" type="button"><span class="ic">▼</span><span class="lb">FREN</span></button>
+  <button id="t-gas" class="tbtn" type="button"><span class="ic">▲</span><span class="lb">GAZ</span></button>
+  <button id="t-hand" class="tbtn" type="button"><span class="ic">✋</span><span class="lb">EL</span></button>
+  <button id="t-cam" class="tbtn" type="button"><span class="ic">🎥</span><span class="lb">KAM</span></button>
+  <button id="t-reset" class="tbtn" type="button"><span class="ic">↺</span><span class="lb">PİST</span></button>
+  <button id="t-pause" class="tbtn" type="button"><span class="ic">⏸</span><span class="lb">MENÜ</span></button>
+  <button id="t-horn" class="tbtn" type="button"><span class="ic">📣</span><span class="lb">KORNA</span></button>
+  <button id="t-tp" class="tbtn" type="button"><span class="ic">⚡</span><span class="lb">YANINA</span></button>
+</div>
 <script>
 /*__CODE__*/
 </script>

@@ -217,4 +217,5 @@ function vehicleCollide() {
       }
     }
   }
+  if (typeof mpCollideCar === 'function') mpCollideCar();
 }

@@ -77,8 +77,8 @@ interface ChatAttachPanelProps {
     details: string;
   }) => Promise<void>;
   /** Panel içinden anlar / sinema gibi ana uygulama ekranları. */
-  onOpenMemories: () => void;
-  onOpenCinema: () => void;
+  onOpenMemories?: () => void;
+  onOpenCinema?: () => void;
   /** Ortak galeriden seçilen fotoğraflar gönderildi (sohbet listesine eklensin). */
   onPhotoSent: (msg: ChatMessage) => void;
   /** Kısa bilgi baloncuğu (hata/başarı). */
@@ -338,16 +338,15 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
     setSheet(sheetSyncRef.current === action ? null : action);
   };
 
-  /** Async işi "meşgul" durumuyla çalıştırır; panel yok olsa bile çökmez. */
-  const run = async (work: () => Promise<void>) => {
+  /** Async işi "meşgul" durumuyla çalıştırır; doğrulama başarısız olursa panel açık kalır. */
+  const run = async (work: () => Promise<boolean | void>) => {
     if (busy) return;
     setBusy(true);
     try {
-      // work() içinde gönderilen satırlar (konum/kişi/anket/etkinlik) listeye
-      // eklenir ama altlık panel sohbeti kapattığı için sonraki adım zorlaşır:
-      // gönderim başarılıysa panel otomatik kapanır.
-      await work();
-      onRequestClose();
+      const completed = await work();
+      if (completed !== false) {
+        onRequestClose();
+      }
     } catch (e) {
       console.error('[Ahududu] Paylaşım hatası', e);
       showToast(
@@ -365,7 +364,7 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
     run(async () => {
       if (typeof navigator === 'undefined' || !navigator.geolocation) {
         showToast('Bu cihazda konum paylaşımı olmuyor.');
-        return;
+        return false;
       }
       const position = await new Promise<GeolocationPosition>((resolve, reject) => {
         try {
@@ -388,6 +387,7 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
       });
       playHaptic(25);
       showToast('Konumun gönderildi 📍');
+      return true;
     });
 
   const handleContact = () =>
@@ -395,7 +395,7 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
       const name = contactName.trim();
       if (!name) {
         showToast('Kişinin adını yazmayı unutma 🙂');
-        return;
+        return false;
       }
       await onShareContact({
         name,
@@ -409,6 +409,7 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
         setContactPhone('');
         setContactNote('');
       }
+      return true;
     });
 
   const handlePoll = () =>
@@ -417,11 +418,11 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
       const options = pollOptions.map((o) => o.trim()).filter(Boolean);
       if (!question) {
         showToast('Önce anket sorusunu yaz 🙂');
-        return;
+        return false;
       }
       if (options.length < 2) {
         showToast('En az iki seçenek gerekiyor.');
-        return;
+        return false;
       }
       await onSharePoll(question, options.slice(0, 6));
       playHaptic(25);
@@ -430,6 +431,7 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
         setPollQuestion('');
         setPollOptions(['', '']);
       }
+      return true;
     });
 
   const handleEvent = () =>
@@ -437,11 +439,11 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
       const title = eventTitle.trim();
       if (!title) {
         showToast('Etkinliğe bir ad ver 🙂');
-        return;
+        return false;
       }
       if (!eventDate) {
         showToast('Tarih seçmeyi unutma.');
-        return;
+        return false;
       }
       await onShareEvent({
         title,
@@ -455,6 +457,7 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
         setEventTitle('');
         setEventDetails('');
       }
+      return true;
     });
 
   /* ------------------------------ Görünüm ------------------------------ */
@@ -584,7 +587,8 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
               type="button"
               onClick={() => {
                 playHaptic(15);
-                onOpenMemories();
+                onRequestClose();
+                onOpenMemories?.();
               }}
               aria-label="Anılar"
               className="flex flex-col items-center justify-center gap-0.5 rounded-2xl border border-stone-200/80 bg-stone-50/70 px-1 py-2 text-stone-500 transition-transform active:scale-95"
@@ -784,7 +788,16 @@ export const ChatAttachPanel: React.FC<ChatAttachPanelProps> = ({
                     <SheetButton busy={busy} onClick={() => void handleEvent()}>
                       Etkinliği gönder
                     </SheetButton>
-                    <SheetGhost onClick={onOpenCinema}>Sinema</SheetGhost>
+                    {onOpenCinema && (
+                      <SheetGhost
+                        onClick={() => {
+                          onRequestClose();
+                          onOpenCinema();
+                        }}
+                      >
+                        Sinema
+                      </SheetGhost>
+                    )}
                   </div>
                 </form>
               )}

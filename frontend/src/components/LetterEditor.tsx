@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Feather, PenTool, Stamp, Send, X, Heart } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { SPenCanvas } from './SPenCanvas';
@@ -6,6 +6,17 @@ import { api } from '../services/api';
 import { updates } from '../services/updates';
 import { UserId } from '../types';
 import { playHaptic, soundEngine, HAPTIC_PATTERNS } from '../services/haptics';
+
+const dataUrlToFile = (dataUrl: string, filename: string): File => {
+  const [header, b64] = dataUrl.split(',');
+  const mime = header?.match(/data:([^;]+)/)?.[1] || 'image/png';
+  const binary = atob(b64 || '');
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new File([bytes], filename, { type: mime });
+};
 
 interface LetterEditorProps {
   currentUserId: UserId;
@@ -81,10 +92,19 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
 
   const hasDraftContent = Boolean(title || content || canvasDataUrl || canvasStrokesJson);
 
-  // Never reload the app while an unsent letter is being written.
+  const sendTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+
   useEffect(() => {
     updates.setBusy(true);
-    return () => updates.setBusy(false);
+    return () => {
+      mountedRef.current = false;
+      updates.setBusy(false);
+      if (sendTimerRef.current !== null) {
+        window.clearTimeout(sendTimerRef.current);
+        sendTimerRef.current = null;
+      }
+    };
   }, []);
 
   // Keep the draft on the device so even a forced reload cannot lose it.
@@ -114,43 +134,60 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
   };
 
   const handleSendLetter = async () => {
-    if (!title && !content && !canvasDataUrl) {
+    const cleanTitle = title.trim();
+    const cleanContent = content.trim();
+    if (!cleanTitle && !cleanContent && !canvasDataUrl) {
       alert('Mektup boş olamaz.');
       return;
     }
 
     setIsSending(true);
-    playHaptic(HAPTIC_PATTERNS.attention);
-    soundEngine.playLoveChime();
-
-    // Wax seal confetti burst
-    confetti({
-      particleCount: 45,
-      spread: 60,
-      origin: { y: 0.7 },
-      colors: ['#be185d', '#e11d48', '#d97706', '#fbcfe8'],
-    });
 
     try {
+      let uploadedCanvasUrl: string | undefined;
+      if (canvasDataUrl) {
+        if (canvasDataUrl.startsWith('data:')) {
+          const uploaded = await api.uploadMedia(
+            dataUrlToFile(canvasDataUrl, `letter-${Date.now()}.png`),
+            'letters'
+          );
+          uploadedCanvasUrl = uploaded.url;
+        } else {
+          uploadedCanvasUrl = canvasDataUrl;
+        }
+      }
+
       await api.createLetter({
         sender: currentUserId,
-        title: title.trim() || 'Kalbimden Sana Mektup 💌',
+        title: cleanTitle || 'Kalbimden Sana Mektup 💌',
         content_text: content,
         canvas_data: canvasStrokesJson || undefined,
-        canvas_image_url: canvasDataUrl || undefined,
+        canvas_image_url: uploadedCanvasUrl,
         stationery_theme: theme,
       });
 
       clearLetterDraft();
+      playHaptic(HAPTIC_PATTERNS.attention);
+      soundEngine.playLoveChime();
+      confetti({
+        particleCount: 45,
+        spread: 60,
+        origin: { y: 0.7 },
+        colors: ['#be185d', '#e11d48', '#d97706', '#fbcfe8'],
+      });
 
-      setTimeout(() => {
+      sendTimerRef.current = window.setTimeout(() => {
+        sendTimerRef.current = null;
+        if (!mountedRef.current) return;
         setIsSending(false);
         onLetterSent();
       }, 1200);
     } catch (e) {
       console.error(e);
-      setIsSending(false);
-      alert('Mektup gönderilemedi, lütfen tekrar dene.');
+      if (mountedRef.current) {
+        setIsSending(false);
+        alert('Mektup gönderilemedi, lütfen tekrar dene.');
+      }
     }
   };
 
@@ -276,7 +313,10 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-semibold opacity-75">Ekli Çizim / El Yazısı:</span>
                     <button
-                      onClick={() => setCanvasDataUrl(null)}
+                      onClick={() => {
+                        setCanvasDataUrl(null);
+                        setCanvasStrokesJson(null);
+                      }}
                       className="text-xs text-rose-500 hover:underline"
                     >
                       Çizimi Kaldır
@@ -292,7 +332,10 @@ export const LetterEditor: React.FC<LetterEditorProps> = ({
             </div>
           ) : (
             <div className="h-[430px]">
-              <SPenCanvas onSave={handleCanvasSave} />
+              <SPenCanvas
+                onSave={handleCanvasSave}
+                initialStrokesJson={canvasStrokesJson || undefined}
+              />
             </div>
           )}
         </div>

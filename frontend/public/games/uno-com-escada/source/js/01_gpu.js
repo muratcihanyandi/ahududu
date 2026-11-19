@@ -5,157 +5,54 @@ const GAME = { ready: false, mode: Q.get('scene') || 'game', capture: Q.has('cap
 // Jogo aberto por uma pessoa (tela de início, painel, som) × ferramenta (captura, poses, teste, medição): as ferramentas de
 // trabalho/ usam ?cap, ?perf, ?replay ou rodam num navegador automatizado, e para elas nada muda — sem menu, sem painel.
 // ?ui=1 força o jogo completo (é como os testes de menu, entrada e som o abrem); ?ui=0 força o modo de ferramenta.
-GAME.ui = Q.has('ui') ? Q.get('ui') !== '0' : !(Q.has('cap') || Q.has('perf') || Q.has('replay') || Q.has('auto') || Q.has('scene') || navigator.webdriver);
+GAME.ui = Q.has('ui') ? Q.get('ui') !== '0' : !(Q.has('cap') || Q.has('perf') || Q.has('replay') || Q.has('auto') || Q.has('scene'));
 // Tempo em vetor tipado (escrita por quadro sem caixa na heap): RT[0] = tempo acumulado (s), RT[1] = dt do quadro renderizado, RT[2] = dt pedido ao jogo
 const RT = new Float64Array([0, 1 / 60, 1 / 60, 0]);   // RT[3] = intervalo real do último quadro (ms), para as estatísticas
 const G = {
-  dev: null, ctx: null, fmt: 'bgra8unorm', W: 0, H: 0, hasTS: false, hasF32Filter: true, canvas: null, memMB: 0,
-  // Mobil algısı BURADA yapılır, gpuInit() içinde değil: 20_renderer.js sabit
-  // dokuların boyutunu (SHADOW_RES, SKY_W...) dosya yüklenirken hesaplıyor ve
-  // gpuInit() daha sonra (main içinde) çalışıyor. Önce false kalıyordu, bu
-  // yüzden telefonda 4096² gölge + 4096×1024 gökyüzü kuruluyordu.
-  mobile: !Q.has('detay') && !Q.has('res') && gpuIsMobile()
+  dev: null, ctx: null, fmt: 'bgra8unorm', W: 0, H: 0, hasTS: false, canvas: null, resScale: 1,
+  mobile: !Q.has('detay') && !Q.has('res') && ((navigator.maxTouchPoints || 0) > 0 || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || ''))
 };
-// Telefonda uyarlanabilir çözünürlük açık (son çare cihaz kaybı hariç).
-if (G.mobile) G.resScale = resScaleSaved();
-
-// ---------------------------------------------------------------------------
-// MOBİL GPU BÜTÇESİ (siyah ekranın asıl sebebi)
-// ---------------------------------------------------------------------------
-// Hedef dokular ekran çözünürlüğündedir. Telefonda (DPR 2, ~2340×1080) bu
-// 4680×2160 demek: yalnızca ara hedefler 5 × 77 MB tutuyor ve toplam GPU
-// dokusu ~1 GB'a çıkıyordu. Mobil GPU'ların belleği bu kadarına yetmediği
-// için cihaz düşüyor (device lost / uncaptured error) ve oyun hiçbir şey
-// çizmiyordu: ekranda yalnızca HTML düğmeleri kalıyordu.
-// Çözüm: çizim çözünürlüğünü uzun kenarla ~1600 pikselde sınırla ve gölge /
-// gökyüzü / ortam haritalarını da küçült. Görüntü bulanıklaşmasın diye
-// yalnızca GPU'su zorlanan (mobil) cihazlarda uygulanır; ?res=WxH ve ?detay=1
-// ile yine tam kaliteye dönülebilir.
-const MOBILE_MAX_LONG = 1600;
-// Uyarlanabilir çözünürlük: telefonda çözünürlük kare süresine göre ölçeklenir
-// (bkz. 58_perf_auto.js). ?res=WxH ile ya da ?detay=1 ile sabitlenir.
-const RES_SCALE_KEY = 'uno-res-scale';
-function resScaleSaved() {
-  try { const v = +localStorage.getItem(RES_SCALE_KEY); return v >= 0.5 && v <= 1.2 ? v : 1; } catch (e) { return 1; }
-}
-function resScaleSet(v) { try { localStorage.setItem(RES_SCALE_KEY, String(v.toFixed(2))); } catch (e) { /* yok say */ } }
-// Mobil mi? UA her zaman güvenilir değil (uygulama içi WebView'de değiştirilen
-// UA, masaüstü testleri). Bu yüzden dokunmatik + ekran boyu da bakılır: bir
-// dokunmatik cihazda 720p'yi aşan DPR-ölçekli ekran, mobil GPU bütçesi isteyen
-// bir cihaz demektir.
-function gpuIsMobile() {
-  try {
-    const ua = navigator.userAgent || '';
-    if (/Android|iPhone|iPad|iPod|Mobile|Tablet|Silk/i.test(ua)) return true;
-    const touch = (navigator.maxTouchPoints || 0) > 0;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const long = Math.max(innerWidth, innerHeight) * dpr;
-    return (touch && long >= 1280) || ((navigator.maxTouchPoints || 0) > 2 && Math.min(innerWidth, innerHeight) < 900);
-  } catch (e) { return false; }
-}
-// yön değişince de doğru çalışsın: kısa kenar sabittir
-function screenSize() {
+const MOBILE_MAX_LONG = 960;
+function calcRenderSize() {
+  const res = (Q.get('res') || '').split('x');
+  if (res.length === 2) return [clamp(+res[0] & ~1, 320, 5120), clamp(+res[1] & ~1, 180, 2880)];
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  let W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  let rawW = Math.round(innerWidth * dpr), rawH = Math.round(innerHeight * dpr);
+  if (rawH > rawW) { const t = rawW; rawW = rawH; rawH = t; }
   if (G.mobile) {
-    const long = Math.max(innerWidth, innerHeight) * dpr;
-    const maxLong = MOBILE_MAX_LONG * (G.resScale || 1);
-    if (long > maxLong) { const k = maxLong / long; W = Math.round(W * k); H = Math.round(H * k); }
+    const maxL = Math.round(MOBILE_MAX_LONG * (G.resScale || 1));
+    if (rawW > maxL) {
+      const k = maxL / rawW;
+      rawW = Math.round(rawW * k);
+      rawH = Math.round(rawH * k);
+    }
   }
-  return [clamp(W & ~1, 320, 5120), clamp(H & ~1, 180, 2880)];
+  return [clamp(rawW & ~1, 320, 5120), clamp(rawH & ~1, 180, 2880)];
 }
 
 async function gpuInit() {
-  if (!navigator.gpu) throw new Error('Bu tarayıcı WebGPU desteklemiyor. Android\'de Chrome 121+ ya da Edge deneyin.');
+  if (!navigator.gpu) throw new Error('Bu tarayıcıda WebGPU desteklenmiyor.');
   const ad = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!ad) throw new Error('WebGPU adaptörü bulunamadı (grafik hızlandırma kapalı olabilir).');
+  if (!ad) throw new Error('WebGPU adaptörü bulunamadı.');
   const feats = [];
   // 'timestamp-query' é pedido na medição de desempenho (?perf) e no jogo aberto por uma pessoa (benchmark e estatísticas
   // mostram o tempo de GPU quando o navegador permite); ?nots desliga. Captura, poses e testes continuam sem o recurso.
   for (const f of ['float32-filterable', 'rg11b10ufloat-renderable'].concat((Q.has('perf') || GAME.ui) && !Q.has('nots') ? ['timestamp-query'] : [])) if (ad.features.has(f)) feats.push(f);
-  // float32-filterable ZORUNLU DEĞİL: mobil GPU'ların çoğunda yok ve bu yüzden
-  // oyun açılmıyordu. Yerine shader'da elle bilineer okuma var (bkz. common.wgsl).
   G.hasF32Filter = ad.features.has('float32-filterable');
   G.hasTS = feats.includes('timestamp-query');
-  // Sınırlar: adaptörün desteklediğinden fazlasını istemek cihazı düşürür
-  // (bazı mobil GPU'larda dokulu bind grubu limiti 16'dır). Desteğin üstüne çıkmıyoruz.
   const lim = ad.limits;
-  const req = { maxColorAttachmentBytesPerSample: Math.min(64, lim.maxColorAttachmentBytesPerSample), maxBufferSize: lim.maxBufferSize };
-  if (lim.maxSampledTexturesPerShaderStage > 24) req.maxSampledTexturesPerShaderStage = 24;
-  if (lim.maxTextureDimension2D > 8192) req.maxTextureDimension2D = 8192;
-  let dev;
-  try {
-    dev = await ad.requestDevice({ requiredFeatures: feats, requiredLimits: req });
-  } catch (e) {
-    // Sınır isteği reddedildiyse varsayılan sınırlarla tekrar dene
-    console.warn('[gpu] istenen sınırlar reddedildi, varsayılanlarla deneniyor:', e.message);
-    dev = await ad.requestDevice({ requiredFeatures: feats });
-  }
-  G.dev = dev;
-  G.limitTex = lim.maxTextureDimension2D;
+  const reqLim = { maxColorAttachmentBytesPerSample: Math.min(64, lim.maxColorAttachmentBytesPerSample), maxBufferSize: lim.maxBufferSize };
+  if (lim.maxSampledTexturesPerShaderStage >= 24) reqLim.maxSampledTexturesPerShaderStage = 24;
+  if (lim.maxTextureDimension2D >= 8192) reqLim.maxTextureDimension2D = 8192;
+  G.dev = await ad.requestDevice({ requiredFeatures: feats, requiredLimits: reqLim });
   G.dev.addEventListener('uncapturederror', e => { console.error('GPU: ' + e.error.message); G.lastErr = e.error.message; });
-  // Cihaz düşerse (bellek taşması, sürücü sıfırlaması, uygulama arkaya
-  // alınması) eskiden hiçbir şey yapılmıyordu: siyah ekran öyle kalıyordu.
-  // Artık önce daha düşük çözünürlükle kurtarılmaya çalışılır, o da olmazsa
-  // ekrana anlaşılır bir mesaj yazılır.
-  G.dev.lost.then(info => gpuLost(info));
   G.canvas = document.getElementById('c');
-  G.scale = 1;
-  const res = (Q.get('res') || '').split('x');
-  if (res.length === 2) { G.W = clamp(+res[0] & ~1, 320, 5120); G.H = clamp(+res[1] & ~1, 180, 2880); }
-  else { const s = screenSize(); G.W = s[0]; G.H = s[1]; }
+  const sz = calcRenderSize();
+  G.W = sz[0]; G.H = sz[1];
   G.canvas.width = G.W; G.canvas.height = G.H;
   G.ctx = G.canvas.getContext('webgpu');
   G.fmt = navigator.gpu.getPreferredCanvasFormat();
   G.ctx.configure({ device: G.dev, format: G.fmt, alphaMode: 'opaque' });
-  gpuMemCheck();
-}
-
-// ---- GPU bellek güvenlik ağı ----------------------------------------------
-// Ekran boyutlu hedeflerin toplam dokusunun kaba tahmini (bayt/piksel).
-// Bütçe aşılırsa çizim çözünürlüğü adım adım düşürülür. Bu kontrol mobil
-// algısından BAĞIMSIZ çalışır: algı yanılsa bile oyun asla ~1 GB'lık hedefler
-// kurmaz (ki bunu mobil GPU kaldıramıyor ve siyah ekran kalıyordu).
-const MEM_BUDGET_MOBILE_MB = 300, MEM_BUDGET_HARD_MB = 500, MEM_MAX_LONG = 2600;
-function gpuMemEstimate(W, H) {
-  // Ekran boyutlu hedefler (21_post.js + 20_renderer.js), piksel başına ~69 B:
-  // gA 4 + gB 8 + gC 4 + gV 4 + depth 4 + hdr 8 + hist×2 16 + vel 4 + mb 8 + yarım 6.
-  const perPx = 69;
-  // Sabit dokular (mobilde ölçüldü ~222 MB): gölge 1024²×3 + statik 2048², gökyüzü
-  // 2048×512, ortam 256²×6, arazi/zona, pano atlası 4096×2048, çim atlası 512²×48.
-  const fixed = G.mobile ? 222 : 400;
-  return W * H * perPx / 1048576 + fixed;
-}
-function gpuMemCheck() {
-  const budget = G.mobile ? MEM_BUDGET_MOBILE_MB : MEM_BUDGET_HARD_MB;
-  const maxLong = G.mobile ? Math.round(MOBILE_MAX_LONG * (G.resScale || 1)) : MEM_MAX_LONG;
-  // uzun kenar sınırı (yön ne olursa olsun)
-  const long = Math.max(G.W, G.H);
-  if (long > maxLong) { const k = maxLong / long; G.W = Math.max(320, (G.W * k) & ~1); G.H = Math.max(180, (G.H * k) & ~1); }
-  G.memMB = Math.round(gpuMemEstimate(G.W, G.H));
-  while (G.memMB > budget && G.W > 800) { G.W = (G.W * 0.85) & ~1; G.H = (G.H * 0.85) & ~1; G.memMB = Math.round(gpuMemEstimate(G.W, G.H)); }
-  if (G.canvas) { G.canvas.width = G.W; G.canvas.height = G.H; }
-  console.info('[gpu] çizim ' + G.W + '×' + G.H + ' · tahmini GPU belleği ~' + G.memMB + ' MB' + (G.mobile ? ' (mobil)' : ''));
-}
-
-// Cihaz kaybı: bir kez düşük çözünürlükle yeniden başlat, sonra mesaj göster.
-function gpuLost(info) {
-  const why = (info && info.reason) || 'unknown', msg = (info && info.message) || '';
-  console.error('[gpu] cihaz düştü: ' + why + ' ' + msg);
-  G.lastErr = 'GPU cihazı düştü (' + why + ')';
-  if (GAME.lostHandled) return;
-  GAME.lostHandled = true;
-  try {
-    // Bir sonraki açılışta daha düşük çözünürlükle başla: uyarlanabilir
-    // ölçek kaydedilir, cihaz kaybının tekrarlanması engellenir.
-    if (G.mobile) resScaleSet(Math.max(0.5, (G.resScale || 1) * 0.7));
-    if (GAME.ready && !GAME.relaunched) { GAME.relaunched = true; location.replace(withParam('res', '960x432')); return; }
-  } catch (e) { /* yok say */ }
-  const el = document.getElementById('msg');
-  if (el) { el.textContent = 'Grafik kartı oyunu durdurdu.\nSayfayı yenileyin; sürerse "res=960x432" adresiyle açın.'; el.style.whiteSpace = 'pre-wrap'; }
-}
-function withParam(k, v) {
-  const q = new URLSearchParams(location.search); q.set(k, v); return location.pathname + '?' + q.toString() + location.hash;
 }
 
 const TU = { RT: 0x10, TB: 0x04, CS: 0x01, CD: 0x02, ST: 0x08 };
@@ -244,7 +141,7 @@ function genMips(tex, format, layers) {
   if (!_mipPipe[format]) _mipPipe[format] = mkFsPipe('blit', {}, [format]);
   const pipe = _mipPipe[format];
   const samp = dev.createSampler({ minFilter: 'linear', magFilter: 'linear' });
-  const enc = apiEncoder();
+  const enc = dev.createCommandEncoder();
   for (let L = 0; L < (layers || 1); L++) for (let m = 1; m < tex.mipLevelCount; m++) {
     const srcV = tex.createView({ dimension: '2d', baseMipLevel: m - 1, mipLevelCount: 1, baseArrayLayer: L, arrayLayerCount: 1 });
     const dstV = tex.createView({ dimension: '2d', baseMipLevel: m, mipLevelCount: 1, baseArrayLayer: L, arrayLayerCount: 1 });

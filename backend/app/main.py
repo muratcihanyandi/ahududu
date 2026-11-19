@@ -16,7 +16,6 @@ from backend.app.routes import (
     auth, letters, chat, gallery, notes, location, interactions, media,
     snaps, diary, pets, cinema, cinema_calendar, garden,
 )
-from backend.app.routes import cinema as cinema_room_module
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ahududu")
@@ -107,6 +106,8 @@ async def lifespan(app: FastAPI):
         with suppress(asyncio.CancelledError):
             await watcher
             await calendar_watcher
+        with suppress(Exception):
+            await cinema.close_http_client()
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -186,12 +187,17 @@ async def relay_game_packet(partner_id: str, sender_id: str, data: dict,
 # Real-time WebSocket connection
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    if user_id not in settings.USER_IDS:
+        await websocket.close(code=1008)
+        return
     await ws_manager.connect(websocket, user_id)
     try:
         while True:
             data_text = await websocket.receive_text()
             try:
                 data = json.loads(data_text)
+                if not isinstance(data, dict):
+                    continue
                 msg_type = data.get("type")
                 partner_id = settings.partner_of(user_id)
                 
@@ -226,7 +232,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     })
                     # "Sinemada" durumu + giriş bildirimi
                     try:
-                        await cinema_room_module.set_cinema_presence(user_id, is_watching, title)
+                        await cinema.set_cinema_presence(user_id, is_watching, title)
                     except Exception as exc:  # noqa: BLE001
                         logger.debug("cinema_presence kaydı başarısız: %s", exc)
                     if is_watching:
@@ -243,7 +249,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     position = data.get("position")
                     if room_id is not None and position is not None:
                         try:
-                            cinema_room_module.resolve_position(int(room_id), float(position), user_id=user_id)
+                            cinema.resolve_position(int(room_id), float(position), user_id=user_id)
                         except Exception as e:  # noqa: BLE001
                             logger.debug("cinema_position_reply işlenemedi: %s", e)
                 elif msg_type == "cinema_heartbeat":
@@ -258,7 +264,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         "position": data.get("position"),
                         "is_playing": bool(data.get("is_playing")),
                     })
-                elif msg_type.startswith("game_"):
+                elif isinstance(msg_type, str) and msg_type.startswith("game_"):
                     # ---- Oyunlar (çok oyunculu) ----
                     # "game_car" (araba konumu, 20 Hz), "game_cam_frame" (canlı
                     # kamera karesi), "game_hello", "game_cam_status", "game_mic".
@@ -308,7 +314,9 @@ def render_index_html():
 
 
 if os.path.exists(static_path):
-    app.mount("/assets", StaticFiles(directory=os.path.join(static_path, "assets")), name="assets")
+    assets_dir = os.path.join(static_path, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):

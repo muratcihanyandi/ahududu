@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, Loader2, Film,
   Clapperboard, ExternalLink, Maximize, Minimize,
 } from 'lucide-react';
-import { CinemaRoom } from '../types';
+import { CinemaRoom, UserId } from '../types';
 import { api, mediaUrl, cinemaProxyUrl, cinemaHlsUrl } from '../services/api';
 import { playHaptic } from '../services/haptics';
 import {
@@ -11,7 +11,6 @@ import {
   PlayerAdapter,
   clampPosition,
   formatTime,
-  isFilmFinished,
 } from '../services/cinemaSync';
 import {
   AdapterEvents,
@@ -51,6 +50,8 @@ export interface CinemaStageProps {
   onUserPlayPause: (shouldPlay: boolean, atPosition: number) => void;
   /** Kullanıcı sardı. */
   onUserSeek: (position: number) => void;
+  /** Film oynatıcısı sonuna ulaştı. */
+  onEnded?: () => void;
   /** Oynatıcının kendi ilerleme bildirimi (yalnızca ilerleme çubuğu için). */
   onProgress?: (position: number, duration: number) => void;
   /** Kullanıcının sahneye aldığı yeni video: salon kaydı güncellendiğinde. */
@@ -67,6 +68,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   onReady,
   onUserPlayPause,
   onUserSeek,
+  onEnded,
   onProgress,
   onRoomChanged,
 }) => {
@@ -82,11 +84,13 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     [room.video_url, room.embed_url, room.stream_url, room.source, room.kind]
   );
 
-  /** Film sitesinden çözülen akış, sunucu proxy'sinden geçirilir. */
-  const hlsSrc = useMemo(
-    () => (room.stream_url ? cinemaHlsUrl(room.stream_url, room.stream_referer) : ''),
-    [room.stream_url, room.stream_referer]
-  );
+  /** Film sitesinden çözülen akış veya doğrudan HLS bağlantısı, sunucu proxy'sinden geçirilir. */
+  const hlsSrc = useMemo(() => {
+    const raw = room.stream_url || (source === 'hls' ? room.video_url : '');
+    if (!raw) return '';
+    if (raw.startsWith('/uploads/') || raw.startsWith('/api/')) return mediaUrl(raw);
+    return cinemaHlsUrl(raw, room.stream_referer);
+  }, [room.stream_url, room.stream_referer, room.video_url, source]);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const embedHostRef = useRef<HTMLDivElement | null>(null);
@@ -140,10 +144,12 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     playHaptic(20);
     try {
       const resolved = await api.resolveCinemaLink(text);
+      const createdBy: UserId =
+        room.created_by === 'selin' || room.created_by === 'murat' ? room.created_by : 'murat';
       const room2 = await api.createCinemaRoom({
         title: room.title,
         video_url: resolved.video_url || text,
-        created_by: room.created_by,
+        created_by: createdBy,
         kind: resolved.kind,
         embed_url: resolved.embed_url || undefined,
         stream_url: resolved.stream_url || undefined,
@@ -173,20 +179,62 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   /* ---------------------------------------------------------------- */
   /* Oynatıcı olayları                                                */
   /* ---------------------------------------------------------------- */
+  const appliedRef = useRef<{ isPlaying: boolean; position: number; anchorMs?: number }>({
+    isPlaying: false,
+    position: -1,
+  });
+
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
+  const onUserPlayPauseRef = useRef(onUserPlayPause);
+  onUserPlayPauseRef.current = onUserPlayPause;
+  const onUserSeekRef = useRef(onUserSeek);
+  onUserSeekRef.current = onUserSeek;
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
+  const onProgressRef = useRef(onProgress);
+  onProgressRef.current = onProgress;
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   const events: AdapterEvents = useMemo(
     () => ({
       onReady: (dur) => {
         setReady(true);
         if (dur > 0) setDuration(dur);
-        onReady?.(dur);
+        onReadyRef.current?.(dur);
       },
       onDuration: (dur) => {
         if (dur > 0) setDuration(dur);
       },
+      onUserPlay: () => {
+        const adapter = adapterRef.current;
+        const at = adapter ? adapter.getTime() : stateRef.current.position;
+        setBlockedAutoplay(false);
+        onUserPlayPauseRef.current(true, at);
+      },
+      onUserPause: () => {
+        const adapter = adapterRef.current;
+        const at = adapter ? adapter.getTime() : stateRef.current.position;
+        onUserPlayPauseRef.current(false, at);
+      },
+      onUserSeek: (pos) => {
+        if (isCalendarRoom) return;
+        setCurrentTime(pos);
+        appliedRef.current = {
+          isPlaying: stateRef.current.isPlaying,
+          position: pos,
+          anchorMs: stateRef.current.anchorMs,
+        };
+        onUserSeekRef.current(pos);
+      },
+      onEnded: () => {
+        onEndedRef.current?.();
+      },
       onAutoplayBlocked: () => setBlockedAutoplay(true),
       onError: (message) => setError(message),
     }),
-    [onReady]
+    [isCalendarRoom]
   );
 
   /* ---------------------------------------------------------------- */
@@ -195,6 +243,10 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   useEffect(() => {
     let adapter: PlayerAdapter | null = null;
     let destroyed = false;
+
+    appliedRef.current = { isPlaying: false, position: -1 };
+    setCurrentTime(0);
+    setDuration(room.duration || 0);
 
     const attach = (created: PlayerAdapter) => {
       if (destroyed) {
@@ -239,13 +291,14 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
         (window as any).__ahududuCinemaPlayer = null;
       }
       if (adapterRef.current === adapter) adapterRef.current = null;
+      appliedRef.current = { isPlaying: false, position: -1 };
       setReady(false);
       setError(null);
       setBlockedAutoplay(false);
       setFrameLoaded(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, room.id, hlsSrc]);
+  }, [source, room.id, room.video_url, room.embed_url, hlsSrc, events]);
 
   /* iframe kaynakları: yükleme takılı kalmasın */
   useEffect(() => {
@@ -262,14 +315,9 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   // SADE MODEL: Sunucu yalnızca ÜÇ olayda komut yayınlar (play/pause/seek).
   // Oynarken hiçbir komut gelmez; oynatıcıya dokunulmaz.
   // Komut, `state.position` + `state.isPlaying` olarak gelir.
-  const appliedRef = useRef<{ isPlaying: boolean; position: number }>({
-    isPlaying: false,
-    position: -1,
-  });
-
   useEffect(() => {
     const adapter = adapterRef.current;
-    if (!adapter) return;
+    if (!adapter || (!ready && !adapter.isReady())) return;
 
     const wantPlaying = Boolean(state.isPlaying);
     const target = clampPosition(state.position, state.duration || duration || undefined);
@@ -277,9 +325,15 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     // Aynı komut tekrar geldiyse (render döngüsü) dokunma.
     const prev = appliedRef.current;
     const sameCommand =
-      prev.isPlaying === wantPlaying && Math.abs(prev.position - target) < 0.5;
+      prev.anchorMs === state.anchorMs &&
+      prev.isPlaying === wantPlaying &&
+      Math.abs(prev.position - target) < 0.5;
     if (sameCommand) return;
-    appliedRef.current = { isPlaying: wantPlaying, position: target };
+    appliedRef.current = {
+      isPlaying: wantPlaying,
+      position: target,
+      anchorMs: state.anchorMs,
+    };
 
     if (wantPlaying) {
       // Konumu yalnızca oynatma başlarken veya sarma anında hizala.
@@ -290,13 +344,19 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       }
       if (adapter.isPaused() && !adapter.isEnded()) adapter.play();
     } else {
-      // Duraklatma (pause): Asla konumu geriye veya ileriye sarma! Olduğu yerde durdur.
+      // Duraklatma (pause): Olduğu yerde durdur; ancak sarma veya ilk katılımda konumu hizala.
+      if (state.lastAction === 'seek' || state.lastAction === 'join_sync') {
+        const threshold = adapter.kind === 'youtube' ? 0.8 : 0.5;
+        if (Math.abs(adapter.getTime() - target) > threshold) {
+          adapter.setTime(target);
+        }
+      }
       if (!adapter.isPaused()) {
         adapter.pause();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.isPlaying, state.position, state.anchorMs]);
+  }, [state.isPlaying, state.position, state.anchorMs, state.lastAction, state.duration, ready, duration]);
 
   /* ---------------------------------------------------------------- */
   /* Periyodik okuma — YALNIZCA ilerleme çubuğu için                   */
@@ -310,11 +370,13 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       const t = adapter.getTime();
       setCurrentTime(t);
       const dur = adapter.getDuration();
-      if (dur > 0 && Math.abs(dur - duration) > 0.5) setDuration(dur);
-      onProgress?.(t, dur);
+      if (dur > 0) {
+        setDuration((prev) => (Math.abs(dur - prev) > 0.5 ? dur : prev));
+      }
+      onProgressRef.current?.(t, dur);
     }, TICK_MS);
     return () => window.clearInterval(timer);
-  }, [duration, onProgress]);
+  }, []);
 
   /* ---------------------------------------------------------------- */
   /* Tam ekran                                                        */
@@ -323,9 +385,11 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     playHaptic(15);
     const video = videoRef.current;
     const box = containerRef.current;
-    const current = document.fullscreenElement;
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
+    const current = document.fullscreenElement || doc.webkitFullscreenElement;
+    const preferredTarget = video || box;
 
-    if (current && video && current === video) {
+    if (current && (current === video || current === box)) {
       try {
         await document.exitFullscreen();
       } catch {
@@ -334,8 +398,8 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       return;
     }
 
-    // Sayfa tam ekrandaysa önce ondan çık, sonra videoyu tam ekran yap.
-    if (current && current !== video) {
+    // Sayfa tam ekrandaysa önce ondan çık, sonra videoyu/perdeyi tam ekran yap.
+    if (current && current !== preferredTarget) {
       try {
         await document.exitFullscreen();
         await new Promise((r) => window.setTimeout(r, 120));
@@ -344,7 +408,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       }
     }
 
-    const target = (video || box) as (HTMLElement & {
+    const target = preferredTarget as (HTMLElement & {
       webkitRequestFullscreen?: () => Promise<void>;
       webkitEnterFullscreen?: () => void;
     }) | null;
@@ -368,8 +432,12 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   };
 
   useEffect(() => {
+    const doc = document as Document & { webkitFullscreenElement?: Element | null };
     const onChange = () => {
-      setIsFullscreen(Boolean(videoRef.current && document.fullscreenElement === videoRef.current));
+      const fsEl = document.fullscreenElement || doc.webkitFullscreenElement;
+      setIsFullscreen(
+        Boolean(fsEl && (fsEl === videoRef.current || fsEl === containerRef.current))
+      );
     };
     document.addEventListener('fullscreenchange', onChange);
     document.addEventListener('webkitfullscreenchange', onChange);
@@ -406,7 +474,11 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     const target = clampPosition(next, duration || state.duration);
     adapterNow()?.setTime(target);
     setCurrentTime(target);
-    appliedRef.current = { isPlaying: state.isPlaying, position: target };
+    appliedRef.current = {
+      isPlaying: state.isPlaying,
+      position: target,
+      anchorMs: state.anchorMs,
+    };
     onUserSeek(target);
   };
 
@@ -446,6 +518,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
   const scrubRectRef = useRef<DOMRect | null>(null);
   const scrubMovedRef = useRef(false);
   const scrubTargetRef = useRef(0);
+  const lastPointerSeekMsRef = useRef(0);
 
   const ratioFromEvent = (e: React.PointerEvent, rect: DOMRect): number => {
     const x = e.clientX - rect.left;
@@ -482,7 +555,9 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
     const ratio = ratioFromEvent(e, rect);
     const target = scrubMovedRef.current ? scrubTargetRef.current : ratio * totalDuration;
     scrubRectRef.current = null;
+    scrubMovedRef.current = false;
     setScrubPreview(null);
+    lastPointerSeekMsRef.current = Date.now();
     seekTo(target);
   };
 
@@ -671,11 +746,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
       )}
 
       {/* Sinema alt barı */}
-      <div
-        className={`absolute inset-x-0 bottom-0 z-20 px-4 pb-3 pt-10 bg-gradient-to-t from-black/90 via-black/50 to-transparent ${
-          source === 'youtube' ? 'hidden' : ''
-        }`}
-      >
+      <div className="absolute inset-x-0 bottom-0 z-20 px-4 pb-3 pt-10 bg-gradient-to-t from-black/90 via-black/50 to-transparent">
         <div className="flex items-center gap-3 max-w-3xl mx-auto">
           {!isCalendarRoom && (
             <button
@@ -722,6 +793,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
           <button
             onClick={(e) => {
               if (isCalendarRoom) return;
+              if (Date.now() - lastPointerSeekMsRef.current < 350) return;
               const el = e.currentTarget as HTMLElement;
               const rect = el.getBoundingClientRect();
               const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
@@ -764,7 +836,7 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
               step="0.05"
               value={muted ? 0 : volume}
               onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-              className="w-14 sm:w-16 h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-amber-400 touch-none"
+              className="hidden sm:block w-16 h-1 bg-white/20 rounded-lg appearance-none cursor-pointer accent-amber-400 touch-none"
               title="Kişisel ses seviyesi (yalnızca senin cihazın)"
             />
           </div>
@@ -780,16 +852,14 @@ export const CinemaStage: React.FC<CinemaStageProps> = ({
               <SkipBack className="w-4 h-4" />
             </button>
           )}
-          {source !== 'youtube' && (
-            <button
-              onClick={toggleFullscreen}
-              className="p-2 rounded-full text-white/85 hover:text-white"
-              title={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
-              aria-label={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
-            >
-              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-            </button>
-          )}
+          <button
+            onClick={toggleFullscreen}
+            className="p-2 rounded-full text-white/85 hover:text-white"
+            title={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
+            aria-label={isFullscreen ? 'Tam ekrandan çık' : 'Tam ekran'}
+          >
+            {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+          </button>
         </div>
       </div>
     </div>

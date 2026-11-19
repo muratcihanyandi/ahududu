@@ -28,6 +28,27 @@ fn histCR(uv: vec2f) -> vec3f {
 struct TOut { @location(0) col: vec4f, @location(1) vel: vec4f }
 @fragment fn fs(in: FsV) -> TOut {
   let p = vec2i(in.pos.xy); let dim = vec2i(F.screen.xy) - 1;
+#ifdef MOB_FAST
+  let bd = textureLoad(gD, p, 0);
+  var vel = textureLoad(tVel, p, 0).xy;
+  if (bd <= 0.0) {
+    let w = F.invViewProjJ * vec4f(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, 1e-6, 1.0);
+    let dir = normalize(w.xyz / w.w - F.camPos.xyz);
+    let pc = F.prevViewProj * vec4f(dir, 0.0); let cc = F.viewProj * vec4f(dir, 0.0);
+    vel = (cc.xy / cc.w - pc.xy / pc.w) * vec2f(0.5, -0.5);
+  }
+  let cC = toY(tm(textureLoad(tCur, p, 0).rgb));
+  let cL = toY(tm(textureLoad(tCur, clamp(p + vec2i(-1, 0), vec2i(0), dim), 0).rgb));
+  let cR = toY(tm(textureLoad(tCur, clamp(p + vec2i(1, 0), vec2i(0), dim), 0).rgb));
+  let cU = toY(tm(textureLoad(tCur, clamp(p + vec2i(0, -1), vec2i(0), dim), 0).rgb));
+  let cD = toY(tm(textureLoad(tCur, clamp(p + vec2i(0, 1), vec2i(0), dim), 0).rgb));
+  let cmin = min(cC, min(min(cL, cR), min(cU, cD)));
+  let cmax = max(cC, max(max(cL, cR), max(cU, cD)));
+  let mu = (cC + cL + cR + cU + cD) * 0.2;
+  let m2 = (cC * cC + cL * cL + cR * cR + cU * cU + cD * cD) * 0.2;
+  let sg = sqrt(max(m2 - mu * mu, vec3f(0.0)));
+  let curF = cC;
+#else
   // velocidade do pixel mais próximo da câmera na vizinhança 3x3 (dilata as bordas dos objetos em movimento)
   var best = p; var bd = -1.0;
   for (var y = -1; y <= 1; y++) { for (var x = -1; x <= 1; x++) { let q = clamp(p + vec2i(x, y), vec2i(0), dim); let d = textureLoad(gD, q, 0); if (d > bd) { bd = d; best = q; } } }
@@ -52,11 +73,16 @@ struct TOut { @location(0) col: vec4f, @location(1) vel: vec4f }
   } }
   curF /= wsum;
   let mu = m1 / 9.0; let sg = sqrt(max(m2 / 9.0 - mu * mu, vec3f(0.0)));
+#endif
   let huv = in.uv - vel;
   var o: TOut; o.vel = vec4f(vel, 0.0, 0.0);
   if (F.misc.w > 0.5) { o.vel = vec4f(0.0); o.col = vec4f(itm(fromY(curF)), 1.0); return o; }   // corte de câmera: sem histórico e sem borrão
   if (huv.x < 0.0 || huv.y < 0.0 || huv.x > 1.0 || huv.y > 1.0) { o.col = vec4f(itm(fromY(curF)), 1.0); return o; }
+#ifdef MOB_FAST
+  var h = toY(tm(textureSampleLevel(tHist, sClamp, huv, 0.0).rgb));
+#else
   var h = toY(histCR(huv));
+#endif
   // recorte por variância (caixa mu ± g*sigma), limitado ao min/max da vizinhança
   let vpx = length(vel * F.screen.xy);
   let g = mix(1.25, 0.9, sat(vpx / 20.0));

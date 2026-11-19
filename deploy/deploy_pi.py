@@ -386,6 +386,7 @@ def update_static_only():
         container = config.container_name()
         run_ssh_command(
             ssh,
+            f"docker exec {container} rm -rf /app/backend/static/games && "
             f"docker cp /DATA/AppData/ahududu/src/backend/static/. {container}:/app/backend/static/",
             check=True,
         )

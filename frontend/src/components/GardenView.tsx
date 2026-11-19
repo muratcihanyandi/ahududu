@@ -1,12 +1,31 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Flower2, Lock, Unlock, Music, CalendarHeart, Sun, CloudRain, Moon, Cloud,
   Plus, X, Trash2, Sparkles, Send, Loader2, Heart, Clock, Play, AlertCircle,
 } from 'lucide-react';
-import { UserId, USERS, partnerOf, nameOf } from '../types';
+import { UserId, partnerOf, nameOf, emojiOf } from '../types';
 import { api, mediaUrl } from '../services/api';
 import { wsClient } from '../services/websocket';
 import { playHaptic, soundEngine } from '../services/haptics';
+import { registerBackHandler } from '../services/backButton';
+
+const safeExternalUrl = (raw?: string | null): string | null => {
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw.trim());
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.toString();
+    }
+  } catch {
+    /* geçersiz URL */
+  }
+  return null;
+};
+
+const localDateIso = (d: Date): string => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
 
 interface GardenViewProps {
   currentUserId: UserId;
@@ -37,11 +56,44 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
   const [capsuleComposer, setCapsuleComposer] = useState(false);
   const [songComposer, setSongComposer] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
   const showToast = useCallback((text: string) => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
     setToast(text);
-    window.setTimeout(() => setToast(null), 2800);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(null);
+    }, 2800);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (songComposer) {
+        setSongComposer(false);
+        return true;
+      }
+      if (capsuleComposer) {
+        setCapsuleComposer(false);
+        return true;
+      }
+      if (openCapsule) {
+        setOpenCapsule(null);
+        return true;
+      }
+      return false;
+    });
+  }, [songComposer, capsuleComposer, openCapsule]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -205,13 +257,13 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
               <div className="mt-3 space-y-2">
                 <AnswerBubble
                   who={nameOf(currentUserId)}
-                  emoji={USERS[currentUserId].emoji}
+                  emoji={emojiOf(currentUserId)}
                   text={question.my_answer}
                   mine
                 />
                 <AnswerBubble
                   who={nameOf(partnerId)}
-                  emoji={USERS[partnerId].emoji}
+                  emoji={emojiOf(partnerId)}
                   text={question.partner_answer}
                 />
               </div>
@@ -352,10 +404,16 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
                   <button
                     onClick={async () => {
                       if (!window.confirm('Kapsülü silmek istiyor musun?')) return;
-                      await api.deleteCapsule(c.id, currentUserId);
-                      loadAll();
+                      try {
+                        await api.deleteCapsule(c.id, currentUserId);
+                        await loadAll();
+                        showToast('Kapsül silindi');
+                      } catch {
+                        showToast('Kapsül silinemedi');
+                      }
                     }}
                     className="p-1.5 text-stone-400 hover:text-rose-500"
+                    aria-label="Kapsülü sil"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -393,33 +451,45 @@ export const GardenView: React.FC<GardenViewProps> = ({ currentUserId }) => {
           </p>
         ) : (
           <div className="space-y-2">
-            {songs.map((s) => (
-              <div
-                key={s.id}
-                className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-fuchsia-50/60 border border-fuchsia-100"
-              >
-                <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-fuchsia-400 to-purple-500 flex items-center justify-center shrink-0">
-                  <Music className="w-4 h-4 text-white" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-bold text-berry-950 truncate">{s.title}</p>
-                  <p className="text-[10px] text-stone-500 truncate">
-                    {s.artist ? `${s.artist} · ` : ''}
-                    {USERS[s.added_by as UserId]?.emoji} {nameOf(s.added_by)}
-                  </p>
-                  {s.note && <p className="text-[10px] text-fuchsia-700 italic truncate">“{s.note}”</p>}
-                </div>
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="p-1.5 rounded-full bg-white text-fuchsia-600 shadow-xs shrink-0"
-                  aria-label="Şarkıyı aç"
+            {songs.map((s) => {
+              const safeUrl = safeExternalUrl(s.url);
+              return (
+                <div
+                  key={s.id}
+                  className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-fuchsia-50/60 border border-fuchsia-100"
                 >
-                  <Play className="w-3.5 h-3.5" />
-                </a>
-              </div>
-            ))}
+                  <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-fuchsia-400 to-purple-500 flex items-center justify-center shrink-0">
+                    <Music className="w-4 h-4 text-white" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-berry-950 truncate">{s.title}</p>
+                    <p className="text-[10px] text-stone-500 truncate">
+                      {s.artist ? `${s.artist} · ` : ''}
+                      {emojiOf(s.added_by)} {nameOf(s.added_by)}
+                    </p>
+                    {s.note && <p className="text-[10px] text-fuchsia-700 italic truncate">“{s.note}”</p>}
+                  </div>
+                  {safeUrl ? (
+                    <a
+                      href={safeUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-1.5 rounded-full bg-white text-fuchsia-600 shadow-xs shrink-0"
+                      aria-label="Şarkıyı aç"
+                    >
+                      <Play className="w-3.5 h-3.5" />
+                    </a>
+                  ) : (
+                    <span
+                      className="p-1.5 rounded-full bg-stone-100 text-stone-400 shrink-0"
+                      title="Geçersiz bağlantı"
+                    >
+                      <AlertCircle className="w-3.5 h-3.5" />
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -541,7 +611,7 @@ const CapsuleReader: React.FC<{ capsule: any; onClose: () => void }> = ({ capsul
       <div className="p-5">
         <h3 className="font-serif text-xl font-bold text-berry-900 mb-1">{capsule.title}</h3>
         <p className="text-[10px] text-stone-400 mb-3">
-          {USERS[capsule.sender as UserId]?.emoji} {nameOf(capsule.sender)} ·
+          {emojiOf(capsule.sender)} {nameOf(capsule.sender)} ·
           {' '}{new Date(capsule.open_date).toLocaleDateString('tr-TR')}
         </p>
         <p className="font-handwriting text-xl leading-relaxed text-stone-700 whitespace-pre-wrap">
@@ -563,13 +633,15 @@ const CapsuleComposer: React.FC<{
   const [openDate, setOpenDate] = useState(() => {
     const d = new Date();
     d.setFullYear(d.getFullYear() + 1);
-    return d.toISOString().slice(0, 10);
+    return localDateIso(d);
   });
   const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSave = async () => {
     if (!title.trim() || !content.trim()) return;
     setIsSaving(true);
+    setError(null);
     playHaptic(30);
     try {
       await api.createCapsule({
@@ -580,8 +652,9 @@ const CapsuleComposer: React.FC<{
       });
       soundEngine.playLoveChime();
       onSaved();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setError(e?.message || 'Kapsül kaydedilemedi, tekrar dener misin?');
     } finally {
       setIsSaving(false);
     }
@@ -619,7 +692,7 @@ const CapsuleComposer: React.FC<{
             <input
               type="date"
               value={openDate}
-              min={new Date().toISOString().slice(0, 10)}
+              min={localDateIso(new Date())}
               onChange={(e) => setOpenDate(e.target.value)}
               className="w-full px-3 py-2 mt-1 rounded-xl border border-amber-200 text-xs focus:outline-none focus:ring-2 focus:ring-amber-400"
             />
@@ -628,6 +701,7 @@ const CapsuleComposer: React.FC<{
             <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             O tarih gelene kadar ne sen ne de o okuyabilir.
           </p>
+          {error && <p className="text-xs text-rose-600 font-medium">{error}</p>}
           <button
             onClick={handleSave}
             disabled={isSaving || !title.trim() || !content.trim()}
@@ -652,23 +726,31 @@ const SongComposer: React.FC<{
   const [url, setUrl] = useState('');
   const [note, setNote] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSave = async () => {
     if (!title.trim() || !url.trim()) return;
+    const validUrl = safeExternalUrl(url);
+    if (!validUrl) {
+      setError('Lütfen geçerli bir http/https bağlantısı gir 🎵');
+      return;
+    }
     setIsSaving(true);
+    setError(null);
     playHaptic(30);
     try {
       await api.addSong({
         added_by: currentUserId,
         title: title.trim(),
         artist: artist.trim() || undefined,
-        url: url.trim(),
+        url: validUrl,
         note: note.trim() || undefined,
       });
       soundEngine.playLoveChime();
       onSaved();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setError(e?.message || 'Şarkı eklenemedi, tekrar dener misin?');
     } finally {
       setIsSaving(false);
     }
@@ -715,6 +797,7 @@ const SongComposer: React.FC<{
             placeholder="Bu şarkının sizin için anlamı ne?"
             className="w-full px-3 py-2 rounded-xl border border-fuchsia-200 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-fuchsia-400"
           />
+          {error && <p className="text-xs text-rose-600 font-medium">{error}</p>}
           <button
             onClick={handleSave}
             disabled={isSaving || !title.trim() || !url.trim()}

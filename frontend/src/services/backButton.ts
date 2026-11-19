@@ -95,9 +95,13 @@ export function installBackNavigation(onResetToHome: () => boolean): () => void 
   const isNative = Boolean(win.Capacitor?.isNativePlatform?.());
   let popHandler: (() => void) | null = null;
   if (!isNative) {
-    window.history.pushState({ ahududu: true }, '');
+    if (!window.history.state?.ahududu) {
+      window.history.pushState({ ahududu: true }, '');
+    }
     popHandler = () => {
-      onResetToHome();
+      if (!runBackHandlers()) {
+        onResetToHome();
+      }
       window.history.pushState({ ahududu: true }, '');
     };
     window.addEventListener('popstate', popHandler);

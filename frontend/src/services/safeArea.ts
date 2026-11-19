@@ -1,33 +1,9 @@
 /**
- * Safe-area support for the edge-to-edge (Capacitor) WebView.
- *
- * The Android WebView here reports `env(safe-area-inset-*)` as 0 even though
- * the window is genuinely inset (screen.height - innerHeight > 0), so the
- * header ends up drawn underneath the translucent status bar.
- *
- * Strategy:
- *   1. Prefer `env()` when it reports a real value.
- *   2. Otherwise derive the inset from the difference between the physical
- *      screen height and the WebView viewport height, which is exactly the
- *      status bar height on a non-fullscreen-window device.
- *
- * Values are written to CSS custom properties so the layout stays in CSS.
+ * Safe-area support for the WebView / browser viewport.
+ * Reads CSS `env(safe-area-inset-*)` and writes `--safe-*` custom properties.
+ * (Capacitor Android runs with `overlaysWebView: false`, so status bar insets
+ * are intentionally 0 without synthesizing artificial padding.)
  */
-
-/** Physical screen and viewport height differ only by the system bars. */
-function derivedTopInset(): number {
-  const screenH = window.screen?.height ?? 0;
-  const viewportH = window.innerHeight;
-  if (!screenH || !viewportH) return 0;
-
-  const diff = screenH - viewportH;
-  // A plausible status bar is a small positive slice of the screen. Anything
-  // larger means the viewport is measured differently (desktop, zoom, etc.).
-  if (diff > 0 && diff < screenH * 0.12) {
-    return Math.round(diff);
-  }
-  return 0;
-}
 
 function envInsetPx(name: string): number {
   const probe = document.createElement('div');
@@ -43,7 +19,7 @@ function setVar(name: string, px: number) {
 }
 
 export function applySafeAreaInsets() {
-  const top = envInsetPx('safe-area-inset-top') || derivedTopInset();
+  const top = envInsetPx('safe-area-inset-top');
   const bottom = envInsetPx('safe-area-inset-bottom');
   const left = envInsetPx('safe-area-inset-left');
   const right = envInsetPx('safe-area-inset-right');
@@ -52,10 +28,6 @@ export function applySafeAreaInsets() {
   setVar('--safe-bottom', bottom);
   setVar('--safe-left', left);
   setVar('--safe-right', right);
-
-  // The status bar is translucent, so the page background must extend behind
-  // it. Reserve the inset as padding while letting the background paint.
-  document.documentElement.style.setProperty('--safe-top', `${top}px`);
 }
 
 /** Re-measure on rotation and whenever the viewport geometry changes. */

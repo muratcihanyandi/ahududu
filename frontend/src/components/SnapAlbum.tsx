@@ -7,6 +7,7 @@ import { SnapStory, SnapFeed, UserId, USERS, partnerOf, nameOf } from '../types'
 import { api, mediaUrl } from '../services/api';
 import { wsClient } from '../services/websocket';
 import { playHaptic, soundEngine, HAPTIC_PATTERNS } from '../services/haptics';
+import { registerBackHandler } from '../services/backButton';
 
 interface SnapAlbumProps {
   currentUserId: UserId;
@@ -57,17 +58,48 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
   const [feed, setFeed] = useState<SnapFeed | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showComposer, setShowComposer] = useState(false);
-  const [viewerList, setViewerList] = useState<SnapStory[] | null>(null);
+  const [viewerState, setViewerState] = useState<{ snaps: SnapStory[]; initialIndex: number } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [reactionBurst, setReactionBurst] = useState<{ key: number; emoji: string } | null>(null);
+  const [reactionBurst, setReactionBurst] = useState<{
+    key: number;
+    emoji: string;
+    lefts: number[];
+  } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const reactionTimerRef = useRef<number | null>(null);
   const [isQuickPosting, setIsQuickPosting] = useState(false);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
 
   const showToast = useCallback((text: string) => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     setToast(text);
-    window.setTimeout(() => setToast(null), 2600);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(null);
+    }, 2600);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+      if (reactionTimerRef.current !== null) window.clearTimeout(reactionTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (viewerState) {
+        setViewerState(null);
+        return true;
+      }
+      if (showComposer) {
+        setShowComposer(false);
+        return true;
+      }
+      return false;
+    });
+  }, [viewerState, showComposer]);
 
   /** Kameradan/galeriden gelen anı beklemeden, doğrudan paylaş. */
   const quickShare = useCallback(
@@ -155,13 +187,27 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
       }
     });
 
-    const unsubSeen = wsClient.on('snap_seen', () => {
+    const unsubSeen = wsClient.on('snap_seen', (d: any) => {
+      if (d?.snap_id) {
+        setSnaps((prev) =>
+          prev.map((s) => (s.id === d.snap_id ? { ...s, is_seen: true } : s))
+        );
+      }
       api.getSnapFeed(currentUserId).then(setFeed).catch(() => {});
     });
 
     const unsubReaction = wsClient.on('snap_reaction', (data: any) => {
       if (data?.reaction) {
-        setReactionBurst({ key: Date.now(), emoji: data.reaction });
+        if (reactionTimerRef.current !== null) window.clearTimeout(reactionTimerRef.current);
+        setReactionBurst({
+          key: Date.now(),
+          emoji: data.reaction,
+          lefts: Array.from({ length: 14 }, () => 8 + Math.random() * 84),
+        });
+        reactionTimerRef.current = window.setTimeout(() => {
+          reactionTimerRef.current = null;
+          setReactionBurst(null);
+        }, 2400);
         playHaptic(HAPTIC_PATTERNS.butterfly);
         showToast(`${nameOf(partnerId)} anına ${data.reaction} bıraktı!`);
       }
@@ -169,6 +215,7 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
 
     const unsubDeleted = wsClient.on('snap_deleted', (data: any) => {
       setSnaps((prev) => prev.filter((s) => s.id !== data?.snap_id));
+      api.getSnapFeed(currentUserId).then(setFeed).catch(() => {});
     });
 
     // 24 saatlik anları temiz tut: dakikada bir yeniden çek
@@ -183,13 +230,13 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
       unsubDeleted();
       window.clearInterval(timer);
     };
-  }, [currentUserId, partnerId, showToast]);
+  }, [currentUserId, partnerId, loadAll, showToast]);
 
   const mySnaps = snaps.filter((s) => s.sender === currentUserId);
   const partnerSnaps = snaps.filter((s) => s.sender === partnerId);
   const partnerUnseen = partnerSnaps.filter((s) => !s.is_seen).length;
 
-  const openViewer = (list: SnapStory[]) => {
+  const openViewer = (list: SnapStory[], startSnapId?: number) => {
     if (!list.length) return;
     playHaptic(20);
     // Önce görülmemişler, sonra yeniden eskiye
@@ -197,7 +244,10 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
       if (a.is_seen !== b.is_seen) return a.is_seen ? 1 : -1;
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
-    setViewerList(ordered);
+    const idx = startSnapId
+      ? Math.max(0, ordered.findIndex((s) => s.id === startSnapId))
+      : 0;
+    setViewerState({ snaps: ordered, initialIndex: idx });
   };
 
   const handleDelete = async (snap: SnapStory) => {
@@ -360,7 +410,7 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
               return (
                 <div
                   key={snap.id}
-                  onClick={() => openViewer(snaps.filter((s) => s.sender === snap.sender))}
+                  onClick={() => openViewer(snaps.filter((s) => s.sender === snap.sender), snap.id)}
                   className={`group relative aspect-[3/4] rounded-2xl overflow-hidden border shadow-xs cursor-pointer transition-all active:scale-95 ${
                     snap.is_seen ? 'border-rose-100 opacity-80' : 'border-amber-300 ring-2 ring-amber-300/60'
                   }`}
@@ -417,7 +467,7 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
                         e.stopPropagation();
                         handleDelete(snap);
                       }}
-                      className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/50 text-white opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                       title="Anı sil"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -438,12 +488,12 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
 
       {reactionBurst && (
         <div key={reactionBurst.key} className="pointer-events-none fixed inset-0 z-[80] overflow-hidden">
-          {Array.from({ length: 14 }).map((_, i) => (
+          {reactionBurst.lefts.map((left, i) => (
             <span
               key={i}
               className="absolute text-3xl animate-[floatUp_2.2s_ease-out_forwards]"
               style={{
-                left: `${8 + Math.random() * 84}%`,
+                left: `${left}%`,
                 bottom: '8%',
                 animationDelay: `${i * 90}ms`,
               }}
@@ -467,12 +517,13 @@ export const SnapAlbum: React.FC<SnapAlbumProps> = ({ currentUserId }) => {
         />
       )}
 
-      {viewerList && (
+      {viewerState && (
         <SnapViewer
-          snaps={viewerList}
+          snaps={viewerState.snaps}
+          initialIndex={viewerState.initialIndex}
           currentUserId={currentUserId}
           onClose={() => {
-            setViewerList(null);
+            setViewerState(null);
             api.getSnapFeed(currentUserId).then(setFeed).catch(() => {});
           }}
           onSeen={(id) =>
@@ -820,33 +871,56 @@ const SnapComposer: React.FC<{
 
 const SnapViewer: React.FC<{
   snaps: SnapStory[];
+  initialIndex?: number;
   currentUserId: UserId;
   onClose: () => void;
   onSeen: (id: number) => void;
-}> = ({ snaps, currentUserId, onClose, onSeen }) => {
-  const [index, setIndex] = useState(0);
+}> = ({ snaps, initialIndex = 0, currentUserId, onClose, onSeen }) => {
+  const [index, setIndex] = useState(initialIndex);
   const [progress, setProgress] = useState(0);
   const [paused, setPaused] = useState(false);
   const [reacted, setReacted] = useState<Record<number, string>>({});
+  const elapsedRef = useRef(0);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const current = snaps[index];
   const isMine = current?.sender === currentUserId;
-  const DURATION = 6000;
+  const DURATION = (current?.duration || 6) * 1000;
 
   // Görüldü işaretle
   useEffect(() => {
     if (!current || isMine) return;
     if (!current.is_seen) {
-      api.markSnapSeen(current.id).then(() => onSeen(current.id)).catch(() => {});
+      api.markSnapSeen(current.id, currentUserId).then(() => onSeen(current.id)).catch(() => {});
     }
-  }, [current?.id, isMine]);
+  }, [current?.id, isMine, currentUserId]);
 
-  // İlerleme çubuğu
   useEffect(() => {
+    elapsedRef.current = 0;
     setProgress(0);
+  }, [index]);
+
+  // Video duraklat / devam et
+  useEffect(() => {
+    if (current?.media_type !== 'video') return;
+    const vid = videoRef.current;
+    if (!vid) return;
+    if (paused) {
+      vid.pause();
+    } else {
+      vid.play().catch(() => {});
+    }
+  }, [paused, current?.id, current?.media_type]);
+
+  // Fotoğraf ilerleme çubuğu (duraklatınca geçen süreyi korur)
+  useEffect(() => {
+    if (!current || current.media_type === 'video') return;
     if (paused) return;
-    const started = Date.now();
+    let last = Date.now();
     const timer = window.setInterval(() => {
-      const pct = Math.min(100, ((Date.now() - started) / DURATION) * 100);
+      const now = Date.now();
+      elapsedRef.current += now - last;
+      last = now;
+      const pct = Math.min(100, (elapsedRef.current / DURATION) * 100);
       setProgress(pct);
       if (pct >= 100) {
         window.clearInterval(timer);
@@ -855,13 +929,17 @@ const SnapViewer: React.FC<{
       }
     }, 50);
     return () => window.clearInterval(timer);
-  }, [index, paused]);
+  }, [index, paused, DURATION, current?.id, current?.media_type, snaps.length, onClose]);
 
   const goNext = () => {
+    elapsedRef.current = 0;
     if (index < snaps.length - 1) setIndex((i) => i + 1);
     else onClose();
   };
-  const goPrev = () => setIndex((i) => Math.max(0, i - 1));
+  const goPrev = () => {
+    elapsedRef.current = 0;
+    setIndex((i) => Math.max(0, i - 1));
+  };
 
   const handleReact = async (emoji: string) => {
     if (!current) return;
@@ -875,6 +953,7 @@ const SnapViewer: React.FC<{
   };
 
   if (!current) return null;
+  const ago = timeAgo(current.created_at);
 
   return (
     <div className="fixed inset-0 z-[70] bg-black flex flex-col safe-area-all">
@@ -899,7 +978,7 @@ const SnapViewer: React.FC<{
           <div>
             <p className="text-white text-sm font-bold leading-tight">{nameOf(current.sender)}</p>
             <p className="text-white/60 text-[10px]">
-              {timeAgo(current.created_at)} önce · {remainingHours(current.expires_at)} sa kaldı
+              {ago === 'az önce' ? 'az önce' : `${ago} önce`} · {remainingHours(current.expires_at)} sa kaldı
             </p>
           </div>
         </div>
@@ -913,6 +992,7 @@ const SnapViewer: React.FC<{
         className="relative flex-1 min-h-0 flex items-center justify-center"
         onPointerDown={() => setPaused(true)}
         onPointerUp={() => setPaused(false)}
+        onPointerCancel={() => setPaused(false)}
         onPointerLeave={() => setPaused(false)}
       >
         <button
@@ -925,12 +1005,19 @@ const SnapViewer: React.FC<{
 
         {current.media_type === 'video' ? (
           <video
+            ref={videoRef}
             key={current.id}
             src={mediaUrl(current.media_url)}
             autoPlay
-            loop
             playsInline
             muted={false}
+            onTimeUpdate={(e) => {
+              const v = e.currentTarget;
+              if (v.duration > 0) {
+                setProgress(Math.min(100, (v.currentTime / v.duration) * 100));
+              }
+            }}
+            onEnded={goNext}
             className="max-h-full max-w-full object-contain"
             style={{ filter: filterCss(current.filter_name) }}
           />

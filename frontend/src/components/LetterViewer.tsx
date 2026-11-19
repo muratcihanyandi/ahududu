@@ -1,26 +1,43 @@
-import React, { useState } from 'react';
-import { X, Stamp, Heart, Calendar, User, Eye } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { X, Stamp, Heart, Calendar, User } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { LoveLetter, USERS, nameOf } from '../types';
-import { api } from '../services/api';
+import { LoveLetter, UserId, nameOf, emojiOf } from '../types';
+import { api, mediaUrl } from '../services/api';
 import { playHaptic, soundEngine, HAPTIC_PATTERNS } from '../services/haptics';
 
 interface LetterViewerProps {
   letter: LoveLetter;
+  currentUserId: UserId;
   onClose: () => void;
   onLetterOpened: (letter: LoveLetter) => void;
 }
 
 export const LetterViewer: React.FC<LetterViewerProps> = ({
   letter,
+  currentUserId,
   onClose,
   onLetterOpened,
 }) => {
+  const isSenderPreview = letter.sender === currentUserId;
   const [isOpening, setIsOpening] = useState(false);
-  const [opened, setOpened] = useState(letter.is_opened);
+  const [opened, setOpened] = useState(Boolean(letter.is_opened || isSenderPreview));
+  const openTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    setOpened(Boolean(letter.is_opened || letter.sender === currentUserId));
+    return () => {
+      mountedRef.current = false;
+      if (openTimerRef.current !== null) {
+        window.clearTimeout(openTimerRef.current);
+        openTimerRef.current = null;
+      }
+    };
+  }, [letter.id, letter.is_opened, letter.sender, currentUserId]);
 
   const handleBreakSeal = async () => {
-    if (opened) return;
+    if (opened || isSenderPreview) return;
     setIsOpening(true);
     playHaptic(HAPTIC_PATTERNS.attention);
     soundEngine.playLoveChime();
@@ -34,16 +51,20 @@ export const LetterViewer: React.FC<LetterViewerProps> = ({
     });
 
     try {
-      const updated = await api.openLetter(letter.id);
-      setTimeout(() => {
+      const updated = await api.openLetter(letter.id, currentUserId);
+      openTimerRef.current = window.setTimeout(() => {
+        openTimerRef.current = null;
+        if (!mountedRef.current) return;
         setOpened(true);
         setIsOpening(false);
         onLetterOpened(updated);
       }, 700);
     } catch (e) {
       console.error(e);
-      setOpened(true);
-      setIsOpening(false);
+      if (mountedRef.current) {
+        setOpened(true);
+        setIsOpening(false);
+      }
     }
   };
 
@@ -115,7 +136,7 @@ export const LetterViewer: React.FC<LetterViewerProps> = ({
             {/* Header info */}
             <div className="px-6 py-4 bg-rose-50/70 border-b border-rose-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-xl">{USERS[letter.sender].emoji}</span>
+                <span className="text-xl">{emojiOf(letter.sender)}</span>
                 <div>
                   <h3 className="font-serif text-base font-bold text-berry-950">
                     {letter.title}
@@ -155,7 +176,7 @@ export const LetterViewer: React.FC<LetterViewerProps> = ({
                       El Yazısı & Kalp Çizimi:
                     </p>
                     <img
-                      src={letter.canvas_image_url}
+                      src={mediaUrl(letter.canvas_image_url)}
                       alt="Mektuba eklenen çizim"
                       className="w-full max-h-[400px] object-contain rounded-xl bg-white/40 border border-current/20"
                     />

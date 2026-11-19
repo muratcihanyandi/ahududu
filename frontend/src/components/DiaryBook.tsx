@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   BookOpen, Plus, X, Lock, Unlock, Trash2, Feather, Calendar,
   Flame, Heart, ChevronLeft, ChevronRight, Send, Star, CloudSun, Pencil,
 } from 'lucide-react';
-import { DiaryEntry, DiaryStats, UserId, USERS, partnerOf, nameOf } from '../types';
+import { DiaryEntry, DiaryStats, UserId, USERS, partnerOf, nameOf, emojiOf } from '../types';
 import { api, mediaUrl } from '../services/api';
 import { wsClient } from '../services/websocket';
 import { playHaptic, soundEngine } from '../services/haptics';
+import { registerBackHandler } from '../services/backButton';
 
 interface DiaryBookProps {
   currentUserId: UserId;
@@ -70,11 +71,41 @@ export const DiaryBook: React.FC<DiaryBookProps> = ({ currentUserId }) => {
   const [editing, setEditing] = useState<DiaryEntry | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
   const showToast = useCallback((text: string) => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
     setToast(text);
-    window.setTimeout(() => setToast(null), 2600);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(null);
+    }, 2600);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return registerBackHandler(() => {
+      if (composerOpen) {
+        setComposerOpen(false);
+        setEditing(null);
+        return true;
+      }
+      if (selected) {
+        setSelected(null);
+        return true;
+      }
+      return false;
+    });
+  }, [composerOpen, selected]);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -96,8 +127,12 @@ export const DiaryBook: React.FC<DiaryBookProps> = ({ currentUserId }) => {
     load();
 
     const unsubNew = wsClient.on('new_diary_entry', (data: any) => {
-      const entry: DiaryEntry | undefined = data?.entry;
-      if (entry) {
+      const rawEntry: DiaryEntry | undefined = data?.entry;
+      if (rawEntry) {
+        const isMasked = Boolean(rawEntry.is_locked && rawEntry.author !== currentUserId);
+        const entry: DiaryEntry = isMasked
+          ? { ...rawEntry, content: '', photo_url: undefined }
+          : rawEntry;
         setEntries((prev) => [entry, ...prev.filter((e) => e.id !== entry.id)]);
         if (entry.author !== currentUserId) {
           soundEngine.playLoveChime();
@@ -139,16 +174,17 @@ export const DiaryBook: React.FC<DiaryBookProps> = ({ currentUserId }) => {
     return Array.from(map.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1));
   }, [visible]);
 
-  const handleDelete = async (entry: DiaryEntry, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleDelete = async (entry: DiaryEntry, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     if (!window.confirm('Bu günlük sayfasını silmek istediğine emin misin?')) return;
     try {
-      await api.deleteDiaryEntry(entry.id);
+      await api.deleteDiaryEntry(entry.id, currentUserId);
       setEntries((prev) => prev.filter((x) => x.id !== entry.id));
       if (selected?.id === entry.id) setSelected(null);
       playHaptic(35);
     } catch (err) {
       console.error(err);
+      showToast('Sayfa silinemedi 🔒');
     }
   };
 
@@ -247,6 +283,7 @@ export const DiaryBook: React.FC<DiaryBookProps> = ({ currentUserId }) => {
               <div className="space-y-2">
                 {dayEntries.map((entry) => {
                   const isMine = entry.author === currentUserId;
+                  const canEdit = isMine || entry.author === 'ortak';
                   const mood = moodOf(entry.mood);
                   return (
                     <div
@@ -266,9 +303,9 @@ export const DiaryBook: React.FC<DiaryBookProps> = ({ currentUserId }) => {
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5 mb-1">
-                            <span className="text-sm">{USERS[entry.author as UserId]?.emoji || '💞'}</span>
+                            <span className="text-sm">{entry.author === 'ortak' ? '💞' : emojiOf(entry.author)}</span>
                             <span className="text-[10px] font-bold text-berry-700">
-                              {entry.author === 'ortak' ? 'Biz' : nameOf(entry.author as UserId)}
+                              {entry.author === 'ortak' ? 'Biz' : nameOf(entry.author)}
                             </span>
                             {mood && (
                               <span className={`text-[9px] px-1.5 py-0.5 rounded-full bg-gradient-to-r ${mood.color} text-stone-800 font-semibold`}>
@@ -320,8 +357,8 @@ export const DiaryBook: React.FC<DiaryBookProps> = ({ currentUserId }) => {
                         </div>
                       ) : null}
 
-                      {isMine && (
-                        <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {canEdit && (
+                        <div className="absolute top-2 right-2 flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -329,12 +366,14 @@ export const DiaryBook: React.FC<DiaryBookProps> = ({ currentUserId }) => {
                               setComposerOpen(true);
                             }}
                             className="p-1.5 rounded-lg bg-white/90 border border-rose-100 text-stone-500"
+                            aria-label="Düzenle"
                           >
                             <Pencil className="w-3 h-3" />
                           </button>
                           <button
                             onClick={(e) => handleDelete(entry, e)}
                             className="p-1.5 rounded-lg bg-white/90 border border-rose-100 text-rose-500"
+                            aria-label="Sil"
                           >
                             <Trash2 className="w-3 h-3" />
                           </button>
@@ -365,6 +404,7 @@ export const DiaryBook: React.FC<DiaryBookProps> = ({ currentUserId }) => {
             setSelected(null);
             setComposerOpen(true);
           }}
+          onDelete={() => void handleDelete(selected)}
         />
       )}
 
@@ -400,9 +440,10 @@ const DiaryPageView: React.FC<{
   currentUserId: UserId;
   onClose: () => void;
   onEdit: () => void;
-}> = ({ entry, currentUserId, onClose, onEdit }) => {
+  onDelete: () => void;
+}> = ({ entry, currentUserId, onClose, onEdit, onDelete }) => {
   const mood = moodOf(entry.mood);
-  const isMine = entry.author === currentUserId;
+  const canEdit = entry.author === currentUserId || entry.author === 'ortak';
 
   return (
     <div className="fixed inset-0 z-[60] bg-stone-900/80 backdrop-blur-md flex items-center justify-center p-3 safe-area-all">
@@ -418,10 +459,15 @@ const DiaryPageView: React.FC<{
             <span className="text-[11px] font-bold text-berry-900">{formatDate(entry.entry_date)}</span>
           </div>
           <div className="flex items-center gap-1">
-            {isMine && (
-              <button onClick={onEdit} className="p-1.5 rounded-full hover:bg-amber-100 text-stone-500">
-                <Pencil className="w-4 h-4" />
-              </button>
+            {canEdit && (
+              <>
+                <button onClick={onEdit} className="p-1.5 rounded-full hover:bg-amber-100 text-stone-500" aria-label="Düzenle">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button onClick={onDelete} className="p-1.5 rounded-full hover:bg-rose-50 text-rose-500" aria-label="Sil">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </>
             )}
             <button onClick={onClose} className="p-1.5 rounded-full hover:bg-amber-100 text-stone-500">
               <X className="w-5 h-5" />
@@ -431,10 +477,10 @@ const DiaryPageView: React.FC<{
 
         <div className="px-6 py-5 diary-margin">
           <div className="flex items-center gap-2 mb-3">
-            <span className="text-xl">{USERS[entry.author as UserId]?.emoji || '💞'}</span>
+            <span className="text-xl">{entry.author === 'ortak' ? '💞' : emojiOf(entry.author)}</span>
             <div>
               <p className="text-xs font-bold text-berry-800">
-                {entry.author === 'ortak' ? 'Biz' : nameOf(entry.author as UserId)}
+                {entry.author === 'ortak' ? 'Biz' : nameOf(entry.author)}
               </p>
               <p className="text-[10px] text-stone-400 capitalize">{dayName(entry.entry_date)}</p>
             </div>
@@ -519,14 +565,29 @@ const DiaryComposer: React.FC<{
   const [photoPreview, setPhotoPreview] = useState<string | null>(() =>
     editing?.photo_url ? mediaUrl(editing.photo_url) : null
   );
+  const [photoRemoved, setPhotoRemoved] = useState(false);
+  const blobUrlRef = useRef<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+    };
+  }, []);
 
   const handlePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
+    if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+    const nextBlob = URL.createObjectURL(f);
+    blobUrlRef.current = nextBlob;
     setPhotoFile(f);
-    setPhotoPreview(URL.createObjectURL(f));
+    setPhotoPreview(nextBlob);
+    setPhotoRemoved(false);
     e.target.value = '';
   };
 
@@ -538,6 +599,8 @@ const DiaryComposer: React.FC<{
     playHaptic(12);
   };
 
+  const isOrtakEntry = author === 'ortak' || editing?.author === 'ortak';
+
   const handleSave = async () => {
     if (!title.trim()) {
       setError('Sayfana bir başlık ver 🌸');
@@ -548,7 +611,10 @@ const DiaryComposer: React.FC<{
     playHaptic(30);
 
     try {
-      let photoUrl = editing?.photo_url || undefined;
+      let photoUrl: string | undefined = editing?.photo_url || undefined;
+      if (photoRemoved && !photoFile) {
+        photoUrl = '';
+      }
       if (photoFile) {
         const upload = await api.uploadMedia(photoFile, 'diary');
         photoUrl = upload.url;
@@ -556,17 +622,17 @@ const DiaryComposer: React.FC<{
 
       const payload = {
         title: title.trim(),
-        content: content.trim() || undefined,
+        content: content.trim(),
         mood,
         mood_score: moodScore,
         weather,
         entry_date: entryDate,
         photo_url: photoUrl,
-        is_locked: isLocked,
+        is_locked: isOrtakEntry ? false : isLocked,
       };
 
       const saved = editing
-        ? await api.updateDiaryEntry(editing.id, payload as Partial<DiaryEntry>)
+        ? await api.updateDiaryEntry(editing.id, payload as Partial<DiaryEntry>, currentUserId)
         : await api.createDiaryEntry({
             author: author === 'ortak' ? 'ortak' : currentUserId,
             ...payload,
@@ -626,7 +692,10 @@ const DiaryComposer: React.FC<{
                 {USERS[currentUserId].emoji} Ben yazdım
               </button>
               <button
-                onClick={() => setAuthor('ortak')}
+                onClick={() => {
+                  setAuthor('ortak');
+                  setIsLocked(false);
+                }}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-bold transition-all ${
                   author === 'ortak'
                     ? 'bg-berry-500 text-white shadow-xs'
@@ -722,8 +791,13 @@ const DiaryComposer: React.FC<{
                 <img src={mediaUrl(photoPreview)} alt="Önizleme" className="w-12 h-12 rounded-xl object-cover border border-white shadow-xs" />
                 <button
                   onClick={() => {
+                    if (blobUrlRef.current) {
+                      URL.revokeObjectURL(blobUrlRef.current);
+                      blobUrlRef.current = null;
+                    }
                     setPhotoFile(null);
                     setPhotoPreview(null);
+                    setPhotoRemoved(true);
                   }}
                   className="absolute -top-1.5 -right-1.5 p-0.5 rounded-full bg-rose-500 text-white"
                 >
@@ -734,20 +808,27 @@ const DiaryComposer: React.FC<{
           </div>
 
           {/* Kilit */}
-          <button
-            onClick={() => setIsLocked((v) => !v)}
-            className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border text-xs font-semibold transition-all ${
-              isLocked
-                ? 'bg-stone-800 text-white border-stone-800'
-                : 'bg-white text-stone-600 border-amber-200'
-            }`}
-          >
-            <span className="flex items-center gap-2">
-              {isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-              {isLocked ? 'Kilitli — sadece yazan görebilir' : 'Ortak defterde herkese açık'}
-            </span>
-            <span className="text-[10px] opacity-70">değiştir</span>
-          </button>
+          {isOrtakEntry ? (
+            <div className="w-full flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-amber-200 bg-amber-50/50 text-xs font-semibold text-stone-600">
+              <Unlock className="w-4 h-4 text-berry-500" />
+              <span>Ortak sayfa — her zaman ikinize açık</span>
+            </div>
+          ) : (
+            <button
+              onClick={() => setIsLocked((v) => !v)}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border text-xs font-semibold transition-all ${
+                isLocked
+                  ? 'bg-stone-800 text-white border-stone-800'
+                  : 'bg-white text-stone-600 border-amber-200'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                {isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                {isLocked ? 'Kilitli — sadece yazan görebilir' : 'Ortak defterde herkese açık'}
+              </span>
+              <span className="text-[10px] opacity-70">değiştir</span>
+            </button>
+          )}
 
           {error && <p className="text-xs text-rose-600 font-medium">{error}</p>}
 

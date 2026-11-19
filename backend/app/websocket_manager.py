@@ -1,6 +1,7 @@
+import asyncio
 import json
 import logging
-from typing import Dict, List, Set
+from typing import Dict, List
 from fastapi import WebSocket
 from backend.app.config import settings
 
@@ -12,6 +13,7 @@ class ConnectionManager:
         self.active_connections: Dict[str, List[WebSocket]] = {
             user_id: [] for user_id in settings.USER_IDS
         }
+        self._tasks: set[asyncio.Task] = set()
 
     async def connect(self, websocket: WebSocket, user_id: str):
         await websocket.accept()
@@ -20,8 +22,18 @@ class ConnectionManager:
         self.active_connections[user_id].append(websocket)
         logger.info(f"User '{user_id}' connected. Total for user: {len(self.active_connections[user_id])}")
         
-        # Broadcast online status to partner
         partner_id = settings.partner_of(user_id)
+        # Immediately inform the newly connected client of the partner's current status
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "partner_status",
+                "user_id": partner_id,
+                "is_online": bool(self.active_connections.get(partner_id)),
+            }, ensure_ascii=False))
+        except Exception as e:
+            logger.warning(f"Error sending initial partner_status to {user_id}: {e}")
+
+        # Broadcast online status to partner
         await self.send_to_user(partner_id, {
             "type": "partner_status",
             "user_id": user_id,
@@ -37,8 +49,9 @@ class ConnectionManager:
         # If no more connections for this user, notify partner
         if not self.active_connections.get(user_id):
             partner_id = settings.partner_of(user_id)
-            import asyncio
-            asyncio.create_task(self._announce_offline(user_id, partner_id))
+            task = asyncio.create_task(self._announce_offline(user_id, partner_id))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
     async def _announce_offline(self, user_id: str, partner_id: str):
         """Bağlantı kapandı: son görülme zamanını kaydet ve partner'e bildir.
@@ -48,6 +61,9 @@ class ConnectionManager:
         bağlantı düştüğünde de zamanı yazıyoruz ve aynı bildirimde gönderiyoruz;
         partner'in ekranı ek bir istek yapmadan doğru saati gösterir.
         """
+        if self.active_connections.get(user_id):
+            return
+
         last_seen_iso = None
         try:
             from backend.app.database import AsyncSessionLocal
@@ -62,6 +78,18 @@ class ConnectionManager:
         except Exception as e:  # noqa: BLE001 - durum bildirimi asla düşmesin
             logger.warning(f"Could not persist last_seen for '{user_id}': {e}")
 
+        # Clear stale cinema presence if the user disconnected without leaving cleanly
+        if not self.active_connections.get(user_id):
+            try:
+                from backend.app.routes.cinema import set_cinema_presence
+                await set_cinema_presence(user_id, False)
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Abort offline notification if user reconnected while DB work was in flight
+        if self.active_connections.get(user_id):
+            return
+
         await self.send_to_user(partner_id, {
             "type": "partner_status",
             "user_id": user_id,
@@ -70,10 +98,12 @@ class ConnectionManager:
         })
 
     async def send_to_user(self, user_id: str, message: dict):
-        connections = self.active_connections.get(user_id, [])
+        connections = self.active_connections.get(user_id)
+        if not connections:
+            return
         dead_connections = []
         payload = json.dumps(message, ensure_ascii=False)
-        for ws in connections:
+        for ws in list(connections):
             try:
                 await ws.send_text(payload)
             except Exception as e:
@@ -86,12 +116,12 @@ class ConnectionManager:
 
     async def broadcast(self, message: dict):
         payload = json.dumps(message, ensure_ascii=False)
-        for user_id, connections in self.active_connections.items():
+        for user_id, connections in list(self.active_connections.items()):
             dead_connections = []
-            for ws in connections:
+            for ws in list(connections):
                 try:
                     await ws.send_text(payload)
-                except Exception as e:
+                except Exception:
                     dead_connections.append(ws)
             for dead in dead_connections:
                 if dead in connections:

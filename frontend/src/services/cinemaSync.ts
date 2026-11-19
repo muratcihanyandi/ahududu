@@ -25,6 +25,7 @@ export interface PlaybackState {
   /** Pozisyonun geçerli olduğu yerel zaman (ms). */
   anchorMs?: number;
   updatedBy?: string;
+  lastAction?: 'play' | 'pause' | 'seek' | 'join_sync' | 'init' | string;
 }
 
 /** WebSocket `cinema_sync` mesajı (backend ile birebir aynı alanlar). */

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { CheckSquare, Square, Plus, Pin, Trash2, Heart, Film, MapPin, Gift, BookOpen } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { CheckSquare, Square, Plus, Trash2, Heart, Film, MapPin, Gift, BookOpen, ShoppingBag } from 'lucide-react';
 import { SharedNote, UserId } from '../types';
 import { api } from '../services/api';
 import { wsClient } from '../services/websocket';
@@ -14,6 +14,7 @@ const CATEGORIES = [
   { id: 'movies', name: 'İzlenecekler', icon: Film },
   { id: 'places', name: 'Gezilecek Yerler', icon: MapPin },
   { id: 'wishlist', name: 'İstek Listemiz', icon: Gift },
+  { id: 'shopping', name: 'Alışveriş', icon: ShoppingBag },
   { id: 'note', name: 'Özel Notlar', icon: Heart },
 ];
 
@@ -24,6 +25,17 @@ export const SharedNotes: React.FC<SharedNotesProps> = ({ currentUserId }) => {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [category, setCategory] = useState('note');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const loadNotes = useCallback(async () => {
+    try {
+      const cat = activeCategory === 'all' ? undefined : activeCategory;
+      const data = await api.listNotes(cat);
+      setNotes(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error(e);
+    }
+  }, [activeCategory]);
 
   useEffect(() => {
     loadNotes();
@@ -37,21 +49,12 @@ export const SharedNotes: React.FC<SharedNotesProps> = ({ currentUserId }) => {
       unsubUpdate();
       unsubDelete();
     };
-  }, [activeCategory]);
-
-  const loadNotes = async () => {
-    try {
-      const cat = activeCategory === 'all' ? undefined : activeCategory;
-      const data = await api.listNotes(cat);
-      setNotes(data);
-    } catch (e) {
-      console.error(e);
-    }
-  };
+  }, [loadNotes]);
 
   const handleCreateNote = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || isSaving) return;
+    setIsSaving(true);
     playHaptic(25);
 
     try {
@@ -61,12 +64,16 @@ export const SharedNotes: React.FC<SharedNotesProps> = ({ currentUserId }) => {
         content: content.trim() || undefined,
         category,
       });
-      setNotes((prev) => [created, ...prev]);
+      if (activeCategory === 'all' || activeCategory === created.category) {
+        setNotes((prev) => [created, ...prev.filter((n) => n.id !== created.id)]);
+      }
       setTitle('');
       setContent('');
       setShowAddForm(false);
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -171,9 +178,10 @@ export const SharedNotes: React.FC<SharedNotesProps> = ({ currentUserId }) => {
               </button>
               <button
                 type="submit"
-                className="px-4 py-1.5 bg-berry-500 hover:bg-berry-600 text-white rounded-xl text-xs font-semibold shadow-xs"
+                disabled={isSaving}
+                className="px-4 py-1.5 bg-berry-500 hover:bg-berry-600 text-white rounded-xl text-xs font-semibold shadow-xs disabled:opacity-60"
               >
-                Kaydet
+                {isSaving ? 'Kaydediliyor...' : 'Kaydet'}
               </button>
             </div>
           </div>

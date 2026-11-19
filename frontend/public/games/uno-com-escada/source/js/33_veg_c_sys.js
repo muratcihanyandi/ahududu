@@ -132,13 +132,8 @@ function vegPlace() {
 }
 
 function vegBakeImpostors(cpu) {
-  // İmpostor atlası: 2 × 512² × 48 katman + mip'ler ~128 MB GPU belleği.
-  // Telefonda bu, siyah ekran sınırına en çok yaklaştıran doku. Mobilde
-  // 256² ve daha az mip ile aynı görünüm korunur (ekranda her ağaç birkaç
-  // düzine piksel), bellek 1/4'e iner.
-  const MOBETA = typeof G !== 'undefined' && G.mobile;
-  const dev = G.dev, S = MOBETA ? 256 : 512, layers = VEG_NT * 8, V = VEG;
-  const mips = MOBETA ? 7 : 8;
+  const dev = G.dev, S = G.mobile ? 256 : 512, layers = VEG_NT * 8, V = VEG;
+  const mips = G.mobile ? 7 : 8;
   V.texA = dev.createTexture({ size: [S, S, layers], format: 'rgba8unorm-srgb', usage: TU.RT | TU.TB, mipLevelCount: mips });
   V.texN = dev.createTexture({ size: [S, S, layers], format: 'rgba8unorm', usage: TU.RT | TU.TB, mipLevelCount: mips });
   const msA = dev.createTexture({ size: [S, S], format: 'rgba8unorm-srgb', usage: TU.RT, sampleCount: 4 }), msN = dev.createTexture({ size: [S, S], format: 'rgba8unorm', usage: TU.RT, sampleCount: 4 });
@@ -162,7 +157,7 @@ function vegBakeImpostors(cpu) {
   }
   const ubuf = mkBuf(ub.byteLength, BU.U, ub);
   const bg = dev.createBindGroup({ layout: bgls[0], entries: [{ binding: 0, resource: { buffer: ubuf, size: 64 } }, { binding: 1, resource: V.leafView }, { binding: 2, resource: V.sLeaf }, { binding: 3, resource: R.view.noise }] });
-  const enc = apiEncoder();
+  const enc = dev.createCommandEncoder();
   for (let a = 0; a < VEG_NT; a++) for (let k = 0; k < 8; k++) {
     const L = a * 8 + k, lv = t => t.createView({ dimension: '2d', baseArrayLayer: L, arrayLayerCount: 1, baseMipLevel: 0, mipLevelCount: 1 });
     const p = enc.beginRenderPass({
@@ -185,12 +180,10 @@ const vegDrawable = {
     if (kind === KIND.GBUF) { st.meshDraws = 0; st.impDraws = 0; st.meshInst = 0; st.meshTris = 0; st.leafDraws = 0; st.leafInst = 0; st.leafTris = 0; }
     // LOD por tamanho na tela: com lente longa (câmera de TV) as distâncias de troca crescem na mesma proporção do zoom
     let zoom = Math.tan(R.cam.fovy * 0.5) * 2; zoom = zoom < 0.3 ? 0.3 : zoom > 1.25 ? 1.25 : zoom; V.zoom = zoom;
-    // MOBİL: ağaç örneklerinin çizim yarıçapı küçülür (grafiksel olarak fark
-    // edilmez, çok sayıda çizim çağrısı ve köşe gölgelendiricisi işi azalır).
-    const MR = V.mobileS ? V.mobileS : 1;
+    const MR = G.mobile ? 0.65 : 1;
     // --- malhas (perto) ---
     const pm = V.famTree.pipe[kind];
-    if (pm && V.onMesh && (kind === KIND.GBUF || (shadow && ctx.cascade < 2))) {
+    if (pm && V.onMesh && (kind === KIND.GBUF || (shadow && ctx.cascade < (G.mobile ? 1 : 2)))) {
       pass.setPipeline(pm); pass.setBindGroup(3, V.bgTree); pass.setVertexBuffer(1, V.instBuf);
       const ccx = Math.floor((camx - V.x0) / CELL), ccz = Math.floor((camz - V.z0) / CELL);
       // nas sombras só importam os lançadores perto da cascata: alcance menor (menos vértices processados)
@@ -214,7 +207,7 @@ const vegDrawable = {
     const pl = V.famLeaf.pipe[kind];
     if (pl && V.onMesh && V.onLeaf && kind === KIND.GBUF) {
       pass.setPipeline(pl); pass.setVertexBuffer(1, V.instBuf);
-      let rl = 62 / zoom * MR; if (rl > 230) rl = 230; const S16 = 16, rs = ((rl / S16) | 0) + 1, scx = Math.floor((camx - V.x0) / S16), scz = Math.floor((camz - V.z0) / S16), n16 = NC * 4;
+      let rl = 62 / zoom; if (rl > 230) rl = 230; const S16 = 16, rs = ((rl / S16) | 0) + 1, scx = Math.floor((camx - V.x0) / S16), scz = Math.floor((camz - V.z0) / S16), n16 = NC * 4;
       for (let a = 0; a < VEG_NT; a++) {
         const m = V.leafMeshes[a]; if (!m) continue; let set = false;
         for (let dz = -rs; dz <= rs; dz++) for (let dx = -rs; dx <= rs; dx++) {
@@ -236,6 +229,7 @@ const vegDrawable = {
     const pi = V.famImp.pipe[kind]; if (!pi || !V.onImp) return;
     pass.setPipeline(pi); pass.setBindGroup(3, V.bgImp);
     if (shadow) {
+      if (G.mobile && ctx.cascade !== 3) return;
       pass.setVertexBuffer(0, V.instSunBuf); const NS = V.NS, SUP = V.SUP, stat = ctx.cascade === 3;
       for (let q = 0; q < NS * NS; q++) {
         const s = V.sunOrder[q], cnt = V.sunCount[s]; if (!cnt) continue;
@@ -279,10 +273,7 @@ queueMicrotask(() => BUILD.push(async () => {
   V.bgTree = dev.createBindGroup({ layout: V.famTree.bgl3, entries: [{ binding: 0, resource: V.leafView }, { binding: 1, resource: V.sLeaf }] });
   V.bgImp = dev.createBindGroup({ layout: V.famImp.bgl3, entries: [{ binding: 0, resource: V.viewA }, { binding: 1, resource: V.viewN }, { binding: 2, resource: V.sImp }, { binding: 3, resource: { buffer: V.dimBuf } }] });
   vegPlace();
-  // MOBİL: ağaç/çalı çizim yarıçapları %20 kısılır. Bu yalnızca GPU işini
-  // (%35 daha az örnek) azaltır; ufuktaki ağaçlar impostor olarak kalır.
-  // Tek tek yaprak çizimi mobilde kapalıdır (kendi vertex+5 doku örneği).
-  if (typeof G !== 'undefined' && G.mobile && !(typeof Q !== 'undefined' && Q.has('detay'))) { V.mobileS = 0.8; V.onLeaf = false; }
+  if (G.mobile) { V.onLeaf = false; V.onCube = false; }
   R.drawables.push(vegDrawable); R.veg = V;
   if (typeof grassBuild === 'function') grassBuild();
 }));

@@ -301,11 +301,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
       return;
     }
     setAttachRaised(false);
+    let innerFrame = 0;
     const frame = window.requestAnimationFrame(() => {
       // İki kare: tarayıcı başlangıç konumunu boyadıktan sonra hedefe geç.
-      window.requestAnimationFrame(() => setAttachRaised(true));
+      innerFrame = window.requestAnimationFrame(() => setAttachRaised(true));
     });
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (innerFrame) window.cancelAnimationFrame(innerFrame);
+    };
   }, [isAttachMounted]);
 
   /**
@@ -333,6 +337,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
         window.clearTimeout(attachUnmountTimerRef.current);
         attachUnmountTimerRef.current = null;
       }
+      if (pickResetTimerRef.current !== null) {
+        window.clearTimeout(pickResetTimerRef.current);
+        pickResetTimerRef.current = null;
+      }
+      gestureCleanupRef.current?.();
+      gestureCleanupRef.current = null;
     },
     []
   );
@@ -572,6 +582,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
     };
   }, [hasMoreOlder]);
 
+  const maybeNotify = useCallback(async (msg: ChatMessage) => {
+    try {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') return;
+      if (msg.sender === currentUserId) return;
+      const body =
+        msg.message_type === 'text'
+          ? msg.content || ''
+          : msg.message_type === 'image'
+            ? '📷 Fotoğraf gönderdi'
+            : msg.message_type === 'video'
+              ? '🎬 Video gönderdi'
+              : msg.message_type === 'konum'
+                ? `📍 Konum gönderdi${msg.place_name ? `: ${msg.place_name}` : ''}`
+                : msg.message_type === 'belge'
+                  ? `📄 Belge gönderdi${msg.content ? `: ${msg.content}` : ''}`
+                  : msg.message_type === 'kisi'
+                    ? '👤 Kişi gönderdi'
+                    : msg.message_type === 'anket'
+                      ? `📊 Anket: ${(msg.content || '').split('\n')[0]}`
+                      : msg.message_type === 'etkinlik'
+                        ? `📅 Etkinlik: ${(msg.content || '').split('\n')[0]}`
+                        : '🎙️ Sesli mesaj gönderdi';
+      await notifyMessage({
+        title: partnerName,
+        body: body.slice(0, 120),
+        groupKey: 'chat-' + msg.sender,
+      });
+    } catch {
+      /* yok say */
+    }
+  }, [currentUserId, partnerName]);
+
   useEffect(() => {
     loadMessages();
 
@@ -614,55 +656,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
       unsub();
       unsubVote();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadMessages, scrollToBottom]);
+  }, [loadMessages, scrollToBottom, maybeNotify, currentUserId]);
 
-  /** Mesaj listesi değiştiğinde (yeni mesaj, sesli mesaj, görsel) dipte kal. */
+  const lastMessageId = messages[messages.length - 1]?.id ?? null;
+
+  /** Yalnızca en son mesaj kimliği değiştiğinde (yeni mesaj / ilk yükleme) dipte kal. */
   useEffect(() => {
-    if (!messages.length) return;
+    if (lastMessageId === null) return;
     const frame = window.requestAnimationFrame(() => scrollToBottom());
     const timer = window.setTimeout(() => scrollToBottom(), 160);
     return () => {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timer);
     };
-  }, [messages.length, scrollToBottom]);
-
-  /**
-   * Yalnızca uygulama GÖRÜNÜR DEĞİLKEN bildirim göster; kullanıcı sohbete
-   * bakıyorsa gereksiz bildirim çıkmasın.
-   */
-  const maybeNotify = async (msg: ChatMessage) => {
-    try {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') return;
-      if (msg.sender === currentUserId) return;
-      const body =
-        msg.message_type === 'text'
-          ? msg.content || ''
-          : msg.message_type === 'image'
-            ? '📷 Fotoğraf gönderdi'
-            : msg.message_type === 'video'
-              ? '🎬 Video gönderdi'
-              : msg.message_type === 'konum'
-                ? `📍 Konum gönderdi${msg.place_name ? `: ${msg.place_name}` : ''}`
-                : msg.message_type === 'belge'
-                  ? `📄 Belge gönderdi${msg.content ? `: ${msg.content}` : ''}`
-                  : msg.message_type === 'kisi'
-                    ? '👤 Kişi gönderdi'
-                    : msg.message_type === 'anket'
-                      ? `📊 Anket: ${(msg.content || '').split('\n')[0]}`
-                      : msg.message_type === 'etkinlik'
-                        ? `📅 Etkinlik: ${(msg.content || '').split('\n')[0]}`
-                        : '🎙️ Sesli mesaj gönderdi';
-      await notifyMessage({
-        title: partnerName,
-        body: body.slice(0, 120),
-        groupKey: 'chat-' + msg.sender,
-      });
-    } catch {
-      /* yok say */
-    }
-  };
+  }, [lastMessageId, scrollToBottom]);
 
   const handleSendMessage = async () => {
     const textToSend = inputText.trim();
@@ -676,10 +683,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
         message_type: 'text',
         content: textToSend,
       });
-      setMessages((prev) => [...prev, newMsg]);
+      setMessages((prev) => (prev.some((m) => m.id === newMsg.id) ? prev : [...prev, newMsg]));
       scrollToBottom('smooth');
     } catch (e) {
       console.error(e);
+      setInputText((prev) => (prev ? prev : textToSend));
       showToast('Mesaj gitmedi, bir daha dener misin? 💌');
     }
   };
@@ -953,7 +961,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
     pressRef.current = null;
   }, []);
 
+  const recordSessionRef = useRef(0);
+  const startingRecordingRef = useRef(false);
+  const finishTimerRef = useRef<number | null>(null);
+  const chatMountedRef = useRef(true);
+
+  useEffect(() => {
+    chatMountedRef.current = true;
+    return () => {
+      chatMountedRef.current = false;
+      if (finishTimerRef.current !== null) {
+        window.clearTimeout(finishTimerRef.current);
+        finishTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const cancelRecording = useCallback(() => {
+    recordSessionRef.current += 1;
+    startingRecordingRef.current = false;
+    pendingReleaseRef.current = null;
+    if (finishTimerRef.current !== null) {
+      window.clearTimeout(finishTimerRef.current);
+      finishTimerRef.current = null;
+    }
     recordCancelledRef.current = true;
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== 'inactive') {
@@ -976,7 +1007,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Sayfa arka plana giderse kayıt sessizce bitsin (mikrofon açık kalmasın).
   useEffect(() => {
     const onHidden = () => {
-      if (document.visibilityState === 'hidden' && recorderRef.current) {
+      if (document.visibilityState === 'hidden' && (recorderRef.current || startingRecordingRef.current)) {
         cancelRecording();
       }
     };
@@ -1000,22 +1031,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
         media_url: upload.url,
         duration: Math.max(1, Math.round(seconds)),
       });
-      setMessages((prev) => [...prev, newMsg]);
+      setMessages((prev) => (prev.some((m) => m.id === newMsg.id) ? prev : [...prev, newMsg]));
       scrollToBottom('smooth');
     } catch (e) {
       console.error('Sesli mesaj gönderilemedi', e);
       showToast('Sesli mesaj gitmedi, bir daha dener misin?');
     } finally {
-      setIsUploading(false);
+      if (chatMountedRef.current) setIsUploading(false);
     }
   };
 
   const startRecording = async () => {
-    if (isRecording || isUploading) return;
+    if (startingRecordingRef.current || isRecording || isUploading) return;
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
       showToast('Bu cihazda ses kaydı olmuyor.');
       return;
     }
+
+    startingRecordingRef.current = true;
+    const sessionId = ++recordSessionRef.current;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -1025,6 +1059,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
           autoGainControl: true,
         },
       });
+      startingRecordingRef.current = false;
+
+      if (sessionId !== recordSessionRef.current || !chatMountedRef.current) {
+        stream.getTracks().forEach((track) => {
+          try {
+            track.stop();
+          } catch {
+            /* yok say */
+          }
+        });
+        return;
+      }
+
       const mimeType = pickAudioMimeType();
       const recorder = mimeType
         ? new MediaRecorder(stream, { mimeType })
@@ -1093,6 +1140,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         }
       }
     } catch (e) {
+      startingRecordingRef.current = false;
       console.error('Mikrofon açılamadı', e);
       pendingReleaseRef.current = null;
       releaseStream();
@@ -1129,8 +1177,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     recordCancelledRef.current = false;
     const elapsed = (Date.now() - recordStartedAtRef.current) / 1000;
     if (elapsed < MIN_VOICE_SECONDS) {
+      if (finishTimerRef.current !== null) window.clearTimeout(finishTimerRef.current);
       // Mikrofon açılması çağrıyı hafifçe geciktirmiş olabilir.
-      window.setTimeout(() => {
+      finishTimerRef.current = window.setTimeout(() => {
+        finishTimerRef.current = null;
         const still = recorderRef.current;
         if (still && still.state !== 'inactive') {
           try {
@@ -1293,7 +1343,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
       const audio = new Audio(mediaUrl(url));
       audioPlayerRef.current = audio;
       audio.onended = () => setPlayingAudioId(null);
-      audio.play().catch(console.warn);
+      audio.onerror = () => {
+        setPlayingAudioId(null);
+        showToast('Sesli mesaj oynatılamadı');
+      };
+      audio.play().catch((err) => {
+        console.warn(err);
+        setPlayingAudioId(null);
+      });
       setPlayingAudioId(id);
     }
   };
