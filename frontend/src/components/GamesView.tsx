@@ -18,7 +18,7 @@ export interface GameEntry {
   id: string;
   /** Klasör adı: frontend/public/games/<folder>/index.html */
   folder: string;
-  /** Sunucu alt yolu (örn. /ext/aetheria/) varsa doğrudan bu adres açılır. */
+  /** Sunucu alt yolu (örn. /ext/<oyun>/) varsa doğrudan bu adres açılır. */
   externalPath?: string;
   title: string;
   subtitle: string;

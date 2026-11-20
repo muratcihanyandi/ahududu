@@ -68,3 +68,13 @@ frontend/android/build/
 frontend/android/captures/
 frontend/android/local.properties
 *.apk
+
+# Firebase config and service account secrets (public repo)
+.secrets/
+frontend/android/app/google-services.json
+*firebase-adminsdk*.json
+firebase-service-account.json
+
+# Codebase-memory local index (keep strictly local)
+.codebase-memory/
+
