@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "rootDir": "src",
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false
+  },
+  "include": ["src"],
+  "exclude": ["src/__tests__/**", "src/**/*.test.ts"]
+}

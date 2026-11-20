@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm version comes from `packageManager` in package.json (pnpm@10.32.1).
+      # Don't specify `version:` here — having both is a fatal conflict in v4.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Prepare test environment
+        env:
+          DATABASE_URL: "file:./prisma/test.db"
+          JWT_SECRET: "ci-test-secret-not-used-in-prod-x9k2p1"
+        run: |
+          cd packages/server
+          echo "DATABASE_URL=$DATABASE_URL" > .env
+          echo "JWT_SECRET=$JWT_SECRET" >> .env
+          pnpm exec prisma generate
+          pnpm exec prisma db push --skip-generate
+
+      - name: Build shared (emit .d.ts for downstream typecheck)
+        run: pnpm --filter @game/shared build
+
+      - name: Type-check shared
+        run: cd packages/shared && pnpm exec tsc --noEmit
+
+      - name: Type-check server
+        run: cd packages/server && pnpm exec tsc --noEmit
+
+      - name: Type-check client
+        run: cd packages/client && pnpm exec tsc --noEmit
+
+      - name: Test server
+        env:
+          DATABASE_URL: "file:./prisma/test.db"
+          JWT_SECRET: "ci-test-secret-not-used-in-prod-x9k2p1"
+        run: cd packages/server && pnpm test
+
+      - name: Test shared
+        run: cd packages/shared && pnpm test
+
+      - name: Build client
+        run: cd packages/client && pnpm exec vite build

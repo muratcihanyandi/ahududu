@@ -1,0 +1,164 @@
+generator client {
+  provider      = "prisma-client-js"
+  // Alpine (musl) needs an explicit binary target so the query engine
+  // resolves correctly inside the Docker image.
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String       @id @default(cuid())
+  username     String       @unique
+  passwordHash String
+  createdAt    DateTime     @default(now())
+  characters   Character[]
+  // Security questions for account recovery
+  securityQuestion1 String?
+  securityAnswer1   String?
+  securityQuestion2 String?
+  securityAnswer2   String?
+}
+
+model AuctionListing {
+  id          String   @id @default(cuid())
+  sellerName  String
+  itemId      String
+  qty         Int      @default(1)
+  pricePer    Int                              // zeny per unit
+  createdAt   DateTime @default(now())
+
+  @@index([itemId])
+  @@index([sellerName])
+}
+
+model Guild {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  leaderName  String
+  tag         String   @default("")        // 3-4 letter prefix shown next to names
+  description String   @default("")
+  membersJson String   @default("[]")      // ["char1", "char2", ...]
+  createdAt   DateTime @default(now())
+}
+
+model Mail {
+  id          String   @id @default(cuid())
+  toName      String
+  fromName    String
+  subject     String
+  body        String
+  zeny        Int      @default(0)
+  itemId      String   @default("")
+  itemQty     Int      @default(0)
+  read        Int      @default(0)
+  claimed     Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([toName, read])
+}
+
+model World {
+  id             String   @id @default(cuid())
+  name           String   @default("My World")
+  hostId         String
+  hostName       String
+  template       String   @default("forest")  // forest | desert | mountain | island
+  mode           String   @default("adventure") // adventure | co-op | pvp
+  privacy        String   @default("public")   // public | friends | private
+  maxPlayers     Int      @default(8)
+  currentPlayers Int      @default(0)
+  seed           Int      @default(0)
+  status         String   @default("open")     // open | playing | closed
+  inviteCode     String   @default("")
+  roomId         String   @default("")         // Colyseus room id (set after room creation)
+  createdAt      DateTime @default(now())
+
+  @@index([status, privacy])
+  @@index([inviteCode])
+}
+
+model Character {
+  id      String  @id @default(cuid())
+  userId  String
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name    String  @unique
+  job     String  @default("novice")
+  level   Int     @default(1)
+  exp     Int     @default(0)
+  hp      Int     @default(100)
+  maxHp   Int     @default(100)
+  mp      Int     @default(20)
+  maxMp   Int     @default(20)
+  atk     Int     @default(10)
+  def     Int     @default(0)
+  weapon  String  @default("")
+  armor   String  @default("")
+  mapId   String  @default("field")
+  posX    Float   @default(0)
+  posY    Float   @default(0)
+  posZ    Float   @default(0)
+  inventoryJson String @default("[]")
+  str     Int     @default(1)
+  agi     Int     @default(1)
+  vit     Int     @default(1)
+  intel   Int     @default(1)
+  dex     Int     @default(1)
+  luk     Int     @default(1)
+  statPoints Int  @default(0)
+  zeny    Int     @default(500)
+  questsJson String @default("{\"active\":{},\"completed\":[]}")
+  appearance String @default("{}")
+  hunger    Float  @default(100)
+  thirst    Float  @default(100)
+  stamina   Float  @default(100)
+  maxStamina Float @default(100)
+  houseSlot Int    @default(-1)
+  petKind   String @default("")
+  mounted   Int    @default(0)
+  achievementsJson String @default("{}")
+  title     String @default("")
+  lastLoginDate String @default("")  // YYYY-MM-DD
+  loginStreak   Int    @default(0)
+  petsJson      String @default("[]")
+  petRare       Int    @default(0)
+  decorationsJson String @default("[]")
+  friendsJson   String @default("[]")
+  guildId       String @default("")
+  pvpFlag       Int    @default(0)
+  dailyJson     String @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  action      String
+  userId      String?
+  characterId String?
+  targetId    String?
+  metadata    String?  // JSON string
+  ip          String?
+}
+
+// Weekly leaderboard — one row per (weekStart, characterName).
+// weekStart is the ms timestamp of the Monday 00:00 the score belongs to.
+// Old weeks are kept for history; getTop() filters by current week.
+model LeaderboardEntry {
+  id        String   @id @default(cuid())
+  weekStart BigInt
+  name      String
+  score     Int      @default(0)
+  kills     Int      @default(0)
+  level     Int      @default(1)
+  updatedAt DateTime @updatedAt
+
+  @@unique([weekStart, name])
+  @@index([weekStart, score])
+}

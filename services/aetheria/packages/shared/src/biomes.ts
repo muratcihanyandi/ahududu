@@ -1,0 +1,91 @@
+// Biome regions for the open-world field map.
+// Determines visual palette + which mobs/resources spawn where.
+
+export type BiomeId = "plains" | "forest" | "mountains" | "lake" | "swamp" | "village" | "wilderness" | "desert" | "snow" | "cave";
+
+/** Walkable cave zones inside the field map — no portal, no map change.
+ *  Each cave is a circle around (x, z) with a darker ambience + tougher mobs. */
+export type CaveDef = {
+  id: string;
+  name: string;
+  x: number;
+  z: number;
+  r: number;
+  /** Visual theme — drives tint, crystal colors, decoration. */
+  theme: "shadow" | "frost" | "desert" | "swamp" | "forest" | "wilderness";
+};
+
+export const CAVES: CaveDef[] = [
+  { id: "shadow_cave",     name: "Gölge Mağarası (Kuzey Dağları)",     x: -80, z: -60, r: 22, theme: "shadow" },
+  { id: "frost_cave",      name: "Buz Mağarası (Kar)",        x: -75, z: -80, r: 18, theme: "frost" },
+  { id: "desert_cave",     name: "Çöl Mağarası",             x: -55, z: -85, r: 18, theme: "desert" },
+  { id: "swamp_cave",      name: "Bataklık Mağarası",                x:   0, z:  85, r: 16, theme: "swamp" },
+  { id: "forest_cave",     name: "Derin Orman Mağarası",                x:  78, z: -60, r: 20, theme: "forest" },
+  { id: "wilderness_cave", name: "Muhafız Mağarası (Dark Lord)", x:   0, z: -90, r: 24, theme: "wilderness" },
+];
+
+export type BiomeDef = {
+  id: BiomeId;
+  name: string;
+  // 3-color palette: ground (base), accent (patches), trim (rim)
+  ground: string;
+  accent: string;
+  trim: string;
+};
+
+export const BIOMES: Record<BiomeId, BiomeDef> = {
+  plains:     { id: "plains",     name: "Çiçekli Ova",   ground: "#86d96d", accent: "#a3e635", trim: "#65a30d" },
+  forest:     { id: "forest",     name: "Büyülü Orman", ground: "#4ade80", accent: "#86efac", trim: "#22c55e" },
+  mountains:  { id: "mountains",  name: "Kayalık Dağlar",     ground: "#a8a29e", accent: "#d6d3d1", trim: "#78716c" },
+  lake:       { id: "lake",       name: "Berrak Göl",   ground: "#7dd3fc", accent: "#bae6fd", trim: "#38bdf8" },
+  swamp:      { id: "swamp",      name: "Bataklık",       ground: "#a3a833", accent: "#bef264", trim: "#65803a" },
+  village:    { id: "village",    name: "Köy",     ground: "#fbbf24", accent: "#fcd34d", trim: "#b45309" },
+  wilderness: { id: "wilderness", name: "Gizem Diyarı",    ground: "#7c3aed", accent: "#a855f7", trim: "#581c87" },
+  desert:     { id: "desert",     name: "Çöl",     ground: "#fde68a", accent: "#fcd34d", trim: "#d97706" },
+  snow:       { id: "snow",       name: "Kar Diyarı",   ground: "#f0f9ff", accent: "#dbeafe", trim: "#bfdbfe" },
+  cave:       { id: "cave",       name: "Derin Mağara",       ground: "#1f1410", accent: "#2a1a14", trim: "#3a2a20" },
+};
+
+/** Returns the cave id at (x,z) if inside one, else null. */
+export function caveAt(x: number, z: number): string | null {
+  for (const c of CAVES) {
+    if (Math.hypot(x - c.x, z - c.z) < c.r) return c.id;
+  }
+  return null;
+}
+
+/**
+ * Pure-function biome lookup. Same (x,z) always returns the same biome.
+ * Layout for the field map (half-size H, world spans [-H, H] on both axes):
+ *
+ *   wilderness (rim, r > 0.85 * H)
+ *   ┌──────────────────────────────────────┐
+ *   │  mountains (NW)        forest (NE)   │
+ *   │       ─────────────────────          │
+ *   │                                      │
+ *   │       lake (small SE quadrant)       │
+ *   │  plains (SW)           swamp (S-rim) │
+ *   └──────────────────────────────────────┘
+ *   village at center: r < 10 from (0,0)
+ */
+export function biomeAt(x: number, z: number, halfSize: number): BiomeId {
+  if (caveAt(x, z)) return "cave"; // cave volume overrides surface biome
+  const r = Math.hypot(x, z);
+  if (r < 10) return "village";
+  if (r > halfSize * 0.92) return "wilderness";
+
+  // Lake: a roughly circular patch around (40, 35), radius 18
+  if (Math.hypot(x - halfSize * 0.4, z - halfSize * 0.35) < halfSize * 0.18) return "lake";
+  // Desert: a roughly circular patch around (-halfSize*0.5, -halfSize*0.65), radius 20
+  if (Math.hypot(x - -halfSize * 0.5, z - -halfSize * 0.65) < halfSize * 0.22) return "desert";
+  // Snow: top-left far corner
+  if (Math.hypot(x - -halfSize * 0.75, z - -halfSize * 0.3) < halfSize * 0.18) return "snow";
+  // Swamp: south-rim band (z > halfSize * 0.6, x in [-30..30])
+  if (z > halfSize * 0.6 && Math.abs(x) < halfSize * 0.35) return "swamp";
+
+  // Quadrants by sign
+  if (x < 0 && z < 0) return "mountains";
+  if (x > 0 && z < 0) return "forest";
+  if (x < 0 && z > 0) return "plains";
+  return "plains"; // SE plains-ish
+}
