@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # Storage
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads"))
     STATIC_DIR: str = os.getenv("STATIC_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "static"))
+    FIREBASE_CREDENTIALS_PATH: str = os.getenv(
+        "FIREBASE_CREDENTIALS_PATH",
+        "/data/secrets/firebase-service-account.json",
+    )
     
     # Server
     HOST: str = os.getenv("HOST", "0.0.0.0")

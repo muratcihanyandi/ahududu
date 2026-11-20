@@ -14,8 +14,9 @@ from backend.app.database import init_db
 from backend.app.websocket_manager import ws_manager
 from backend.app.routes import (
     auth, letters, chat, gallery, notes, location, interactions, media,
-    snaps, diary, pets, cinema, cinema_calendar, garden,
+    snaps, diary, pets, cinema, cinema_calendar, garden, devices,
 )
+from backend.app.services.push_notifications import push_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ahududu")
@@ -108,6 +109,8 @@ async def lifespan(app: FastAPI):
             await calendar_watcher
         with suppress(Exception):
             await cinema.close_http_client()
+        with suppress(Exception):
+            await push_service.close_http_client()
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -139,6 +142,7 @@ app.include_router(pets.router)
 app.include_router(cinema.router)
 app.include_router(cinema_calendar.router)
 app.include_router(garden.router)
+app.include_router(devices.router)
 
 # Version check endpoint for zero-reinstall instant updates
 @app.get("/api/system/version")
@@ -153,9 +157,16 @@ async def get_system_version():
             "couple_radar",
             "remote_vibrate", "shared_gallery", "shared_notes", "auto_update",
             "snap_stories", "shared_diary", "pet_album", "cinema_salonu",
-            "letter_archive", "dark_cinema_calendar", "voice_messages"
+            "letter_archive", "dark_cinema_calendar", "voice_messages",
+            "fcm_push"
         ]
     }
+
+
+@app.get("/api/games/presence")
+async def get_games_presence():
+    """Return active game presence for both users."""
+    return {uid: ws_manager.get_active_game(uid) for uid in settings.USER_IDS}
 
 # ---- Çok oyunculu oyun rölesi ----
 # Oyun (ör. Uno merdivenli) kendi oyun-içi arayüzünü bu soket üzerinden açık
@@ -265,11 +276,53 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         "is_playing": bool(data.get("is_playing")),
                     })
                 elif isinstance(msg_type, str) and msg_type.startswith("game_"):
-                    # ---- Oyunlar (çok oyunculu) ----
-                    # "game_car" (araba konumu, 20 Hz), "game_cam_frame" (canlı
-                    # kamera karesi), "game_hello", "game_cam_status", "game_mic".
-                    # Paket olduğu gibi partnere aktarılır; sunucuda işlenmez.
-                    if msg_type == "game_car":
+                    # ---- Oyunlar (cok oyunculu) ----
+                    if msg_type == "game_presence":
+                        raw_game = data.get("game")
+                        game_id = raw_game.strip() if isinstance(raw_game, str) else None
+                        game_id = game_id or None
+                        ws_manager.set_active_game(
+                            user_id, game_id, data.get("title"), data.get("emoji")
+                        )
+                        await ws_manager.send_to_user(partner_id, {
+                            "type": "game_presence",
+                            "user_id": user_id,
+                            "from": user_id,
+                            "game": game_id,
+                            "title": data.get("title"),
+                            "emoji": data.get("emoji"),
+                        })
+                    elif msg_type == "game_hello":
+                        raw_game = data.get("game")
+                        game_id = raw_game.strip() if isinstance(raw_game, str) else None
+                        if game_id:
+                            cur = ws_manager.get_active_game(user_id)
+                            if not cur or cur.get("game") != game_id:
+                                ws_manager.set_active_game(
+                                    user_id, game_id, data.get("title"), data.get("emoji")
+                                )
+                                await ws_manager.send_to_user(partner_id, {
+                                    "type": "game_presence",
+                                    "user_id": user_id,
+                                    "from": user_id,
+                                    "game": game_id,
+                                    "title": data.get("title"),
+                                    "emoji": data.get("emoji"),
+                                })
+                        await relay_game_packet(partner_id, user_id, data)
+                    elif msg_type == "game_bye":
+                        prev = ws_manager.get_active_game(user_id)
+                        bye_game = data.get("game")
+                        if prev and (not bye_game or prev.get("game") == bye_game):
+                            ws_manager.set_active_game(user_id, None)
+                            await ws_manager.send_to_user(partner_id, {
+                                "type": "game_presence",
+                                "user_id": user_id,
+                                "from": user_id,
+                                "game": None,
+                            })
+                        await relay_game_packet(partner_id, user_id, data)
+                    elif msg_type == "game_car":
                         await relay_game_packet(partner_id, user_id, data, SUMMARY_ONLY=True)
                     else:
                         await relay_game_packet(partner_id, user_id, data)

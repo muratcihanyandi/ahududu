@@ -13,8 +13,10 @@ services:
       UPLOAD_DIR: /data/uploads
       STATIC_DIR: /app/backend/static
       PORT: "33470"
+      FIREBASE_CREDENTIALS_PATH: /data/secrets/firebase-service-account.json
     volumes:
       - /DATA/AppData/ahududu/uploads:/data/uploads
+      - /DATA/AppData/ahududu/secrets:/data/secrets:ro
     labels:
       icon: "https://raw.githubusercontent.com/muratcihanyandi/ahududu/main/logo/ahududu_logo.png"
 

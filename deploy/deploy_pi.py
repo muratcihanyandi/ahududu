@@ -272,7 +272,7 @@ def deploy_to_pi():
     print("SSH bağlantısı kuruldu (%s)." % ("parola" if used_password else "SSH anahtarı"))
 
     try:
-        run_ssh_command(ssh, "mkdir -p /DATA/AppData/ahududu/uploads /DATA/AppData/ahududu/src", sudo=True)
+        run_ssh_command(ssh, "mkdir -p /DATA/AppData/ahududu/uploads /DATA/AppData/ahududu/src /DATA/AppData/ahududu/secrets", sudo=True)
         run_ssh_command(ssh, "mkdir -p /var/lib/casaos/apps/ahududu", sudo=True)
         run_ssh_command(ssh, "chown -R murat:murat /DATA/AppData/ahududu /var/lib/casaos/apps/ahududu", sudo=True)
 
